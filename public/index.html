@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>The Rabbit Hole</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topChrome">
+        <p class="systemTag">OLLAMA - LOCAL - TIDAL - ROON MATCHING: STRICT</p>
+        <div class="brandMark">
+          <span></span>
+          <h1>The Rabbit Hole</h1>
+          <span></span>
+        </div>
+        <div class="statusStack">
+          <p id="connection" class="statusPill">Waiting for Roon...</p>
+          <p class="statusPill">Local model</p>
+        </div>
+      </section>
+
+      <section class="topbar">
+        <nav class="viewTabs" aria-label="App views">
+          <button type="button" class="active" data-view="player">Now Playing</button>
+          <button type="button" data-view="history">History Report</button>
+        </nav>
+        <div class="topControls">
+          <p id="phoneAccess" class="phoneAccess"></p>
+          <label class="zonePicker">
+            <span>Roon Output Zone</span>
+            <select id="zoneSelect" aria-label="Roon output zone"></select>
+          </label>
+        </div>
+      </section>
+
+      <section id="playerView" class="view isActive">
+        <section class="layout">
+          <div class="panel player">
+            <button type="button" id="togglePlayerMax" class="playerMaxToggle" aria-pressed="false">Maximize Player</button>
+            <div class="now">
+              <div class="artStack">
+                <div class="cover" id="cover"></div>
+              </div>
+              <div>
+                <p class="eyebrow">Now Playing</p>
+                <h2 id="nowTitle">No active zone</h2>
+                <p id="nowSubtitle"></p>
+              </div>
+            </div>
+            <div id="nowDiscoveryTools" class="nowDiscoveryTools" hidden>
+              <div id="nowFeedback" class="feedbackButtons nowFeedback" aria-label="Now playing feedback"></div>
+              <div id="nowDiscoveryBadge" class="nowDiscoveryBadge"></div>
+              <div class="nowDiscoveryActions">
+                <button type="button" id="jumpToNowTrack">Jump to track</button>
+                <button type="button" id="saveNowCandidate">Add candidate</button>
+                <button type="button" id="openRabbitHole">Open Rabbit Hole</button>
+              </div>
+            </div>
+            <div id="rabbitHolePanel" class="rabbitHolePanel" hidden>
+              <div id="rabbitHoleContent" class="rabbitHoleContent"></div>
+            </div>
+            <div class="controls">
+              <button data-control="previous" title="Previous">Prev</button>
+              <button data-control="playpause" title="Play or pause">Play/Pause</button>
+              <button data-control="stop" title="Stop">Stop</button>
+              <button data-control="next" title="Next">Next</button>
+            </div>
+            <div class="seekBlock">
+              <div class="playerMeta">
+                <span id="playState">Stopped</span>
+                <span id="queueInfo"></span>
+              </div>
+              <input id="seekSlider" type="range" min="0" max="0" value="0" disabled aria-label="Seek position">
+              <div class="seekTimes">
+                <span id="seekPosition">0:00</span>
+                <span id="seekLength">0:00</span>
+              </div>
+            </div>
+            <div id="liveQueue" class="liveQueue" hidden></div>
+            <div id="outputs" class="outputs"></div>
+          </div>
+
+          <form id="playlistForm" class="panel composer">
+            <div class="formHead">
+              <div>
+                <p class="eyebrow">Playlist Builder</p>
+                <h2>Start the Rabbit Hole Journey</h2>
+              </div>
+              <button type="submit">Generate</button>
+            </div>
+            <textarea id="request" name="request" placeholder="Make me 8 tracks like what is playing now, but deeper and less obvious"></textarea>
+            <div class="quickActions">
+              <button type="button" data-preset="now">Use current Roon track</button>
+              <button type="button" data-preset="artist">Discover from artist</button>
+              <button type="button" data-preset="long">Any-length progressive</button>
+            </div>
+            <div class="playlistSeed">
+              <label>Roon playlist
+                <select id="playlistSelect" aria-label="Roon playlist">
+                  <option value="">Load Roon playlists...</option>
+                </select>
+              </label>
+              <div class="playlistButtons">
+                <button type="button" id="refreshPlaylists">Refresh</button>
+                <button type="button" id="usePlaylistSeed">Use as seed</button>
+              </div>
+              <p id="playlistStatus" class="muted"></p>
+            </div>
+            <details class="advanced">
+              <summary>Advanced</summary>
+              <textarea id="reference" name="reference" class="reference" placeholder="Optional seed tracks, playlist notes, or a TIDAL playlist export. A URL alone is not enough for the local model to read the playlist yet."></textarea>
+              <div class="grid">
+                <label>Genres <input name="genres" placeholder="progressive house"></label>
+                <label>Years <input name="years" placeholder="2018-2026"></label>
+                <label>Mood <input name="mood" placeholder="hypnotic, driving"></label>
+                <label>Language <input name="language" placeholder="any"></label>
+                <label>Tracks <input name="count" type="number" min="1" max="40" value="8"></label>
+                <label class="wideField">Minimum match
+                  <select name="minScore" id="minScore">
+                    <option value="0">Long shot+ / all verified</option>
+                    <option value="60">Experimental+ (60+)</option>
+                    <option value="70">Worth checking+ (70+)</option>
+                    <option value="80">Strong+ (80+)</option>
+                    <option value="90">Excellent only (90+)</option>
+                  </select>
+                </label>
+              </div>
+            </details>
+          </form>
+        </section>
+
+        <section class="panel results">
+          <div class="formHead">
+            <div>
+              <p class="eyebrow">Current Rabbit Hole</p>
+              <h2 id="resultTitle">No rabbit hole yet</h2>
+            </div>
+            <div class="resultActions">
+              <span id="busy"></span>
+              <button type="button" id="queueAll" disabled>Add all to queue</button>
+              <button type="button" id="copyList" disabled>Copy list</button>
+              <button type="button" id="exportCsv" disabled>Export CSV</button>
+            </div>
+          </div>
+          <div id="queueReport" class="queueReport" hidden></div>
+          <div id="tracks" class="tracks"></div>
+        </section>
+
+        <section class="panel saved">
+          <div class="formHead">
+            <div>
+              <p class="eyebrow">Playlist Candidates</p>
+              <h2 id="savedTitle">0 playlist candidates</h2>
+            </div>
+            <div class="resultActions">
+              <button type="button" id="queueSaved" disabled>Add candidates to queue</button>
+              <button type="button" id="copySaved" disabled>Copy candidates</button>
+              <button type="button" id="exportSaved" disabled>Export candidates</button>
+              <button type="button" id="purgeMemory">Purge memory</button>
+            </div>
+          </div>
+          <p id="memoryStatus" class="muted memoryStatus">Track memory loading...</p>
+          <div id="savedTracks" class="tracks"></div>
+        </section>
+      </section>
+
+      <section id="historyView" class="view">
+        <section class="panel reportHero">
+          <div>
+            <p class="eyebrow">History Report</p>
+            <h2>Current music taste</h2>
+            <p id="tasteNarrative" class="tasteNarrative">Listening history will appear after Roon starts playing.</p>
+          </div>
+          <div class="resultActions">
+            <button type="button" id="refreshHistory">Refresh report</button>
+            <button type="button" id="tastePrompt">Use taste as prompt</button>
+          </div>
+        </section>
+
+        <section id="historyMetrics" class="historyMetrics"></section>
+
+        <section class="historyGrid">
+          <div class="panel historyPanel">
+            <p class="eyebrow">Top Artists</p>
+            <div id="topArtists" class="reportList"></div>
+          </div>
+          <div class="panel historyPanel">
+            <p class="eyebrow">Top Tracks</p>
+            <div id="topTracks" class="reportList"></div>
+          </div>
+          <div class="panel historyPanel">
+            <p class="eyebrow">Taste Signals</p>
+            <div id="tasteSignals" class="signalGrid"></div>
+          </div>
+          <div class="panel historyPanel">
+            <p class="eyebrow">Recent Plays</p>
+            <div id="recentPlays" class="reportList"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+    <button type="button" id="jumpTop" class="jumpTop" hidden>Now Playing</button>
+    <script src="/app.js"></script>
+  </body>
+</html>

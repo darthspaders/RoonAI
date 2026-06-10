@@ -1,0 +1,31 @@
+# Dependencies and package-manager cache
+node_modules/
+.npm-cache/
+
+# Local secrets and machine-specific runtime state
+.env
+.env.*
+!.env.example
+config.json
+
+# Roon/LLM/user history caches
+data/
+
+# Local logs and process output
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Ollama/model download leftovers
+blobs/
+manifests/
+
+# Codex local attachment cache
+.codex-remote-attachments/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
