@@ -4,6 +4,8 @@ const { execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
+const MIN_HQPLAYER_POLL_MS = 10_000;
+
 function splitCommand(command) {
   const parts = [];
   let current = "";
@@ -168,8 +170,12 @@ class HQPlayerStatus {
     this.signalPathPrefix = options.signalPathPrefix || "";
     this.staticSignalPath = options.staticSignalPath || "";
     this.ptyWorkerPath = options.ptyWorkerPath || defaultPtyWorker();
-    this.pollMs = Math.max(2000, Number(options.pollMs || 60000));
+    this.pollMs = Math.max(MIN_HQPLAYER_POLL_MS, Number(options.pollMs || 60000));
     this.timeoutMs = Math.max(1000, Math.min(10000, Math.floor(this.pollMs * 0.8)));
+    this.onChange = typeof options.onChange === "function" ? options.onChange : null;
+    this.activePlaybackProvider = typeof options.activePlaybackProvider === "function"
+      ? options.activePlaybackProvider
+      : null;
     this.timer = null;
     this.inFlight = false;
     this.filterNames = new Map();
@@ -194,6 +200,7 @@ class HQPlayerStatus {
 
   async poll() {
     if (this.inFlight || !this.rateCommand) return;
+    if (this.isPlaybackActive()) return;
     this.inFlight = true;
 
     try {
@@ -201,15 +208,34 @@ class HQPlayerStatus {
       const state = parseStateOutput(output);
       if (!state) {
         const rate = parseTransportRateKhz(output);
-        if (rate) this.status = this.statusFromState({ outputRateKhz: rate });
+        if (rate) this.setStatus(this.statusFromState({ outputRateKhz: rate }));
         return;
       }
 
       await this.refreshNames(state);
-      this.status = this.statusFromState(state);
+      this.setStatus(this.statusFromState(state));
     } finally {
       this.inFlight = false;
     }
+  }
+
+  isPlaybackActive() {
+    try {
+      return Boolean(this.activePlaybackProvider?.());
+    } catch {
+      return false;
+    }
+  }
+
+  setStatus(nextStatus) {
+    const next = nextStatus || {};
+    const currentSignature = JSON.stringify(this.status || {});
+    const nextSignature = JSON.stringify(next);
+    if (currentSignature === nextSignature) return false;
+
+    this.status = next;
+    this.onChange?.(this.getStatus());
+    return true;
   }
 
   async refreshNames(state) {

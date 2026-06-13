@@ -68,6 +68,7 @@ function compactTrack(track = {}) {
     album: cleanText(track.album),
     label: cleanText(track.label || track.tidal?.label),
     year: track.year || null,
+    releaseDate: track.releaseDate || track.tidal?.releaseDate || "",
     durationMs: track.durationMs || null,
     score: track.score || null,
     scoreBreakdown: track.scoreBreakdown || null,

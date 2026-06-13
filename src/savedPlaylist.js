@@ -59,6 +59,7 @@ class SavedPlaylist {
       title: cleanText(track.title),
       album: cleanText(track.album),
       year: track.year || null,
+      releaseDate: track.releaseDate || track.tidal?.releaseDate || "",
       durationMs: track.durationMs || null,
       score: track.score || null,
       reason: cleanText(track.reason),

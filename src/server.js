@@ -8,10 +8,14 @@ const { URL } = require("url");
 const config = require("./config");
 const {
   candidateIdentityKeys,
+  buildDiscoveryProfile,
   discoverTracks,
   discoveryStatusFor,
+  effectiveDiscoveryCount,
   minimumScoreFor,
   minimumScoreLabel,
+  nearYearFallbackOptions,
+  normalizeScoringMode,
   parseRequestedCount,
   reasonFor,
   rejectReason,
@@ -20,7 +24,7 @@ const {
 } = require("./discoveryEngine");
 const { DiscoveryHistory } = require("./discoveryHistory");
 const { ListeningHistory } = require("./listeningHistory");
-const { generatePlaylist } = require("./llmClient");
+const { generateSearchPlan, scoreCandidateBatch } = require("./llmClient");
 const { HQPlayerStatus } = require("./hqplayerStatus");
 const { RoonClient } = require("./roonClient");
 const { RabbitHoleGraph } = require("./rabbitHoleGraph");
@@ -59,15 +63,27 @@ const radioMetadataResolver = new RadioMetadataResolver({
   spotifyClientSecret: config.radioMetadata.spotifyClientSecret,
   logger: console
 });
-const hqplayerStatus = new HQPlayerStatus(config.hqplayer);
+const hqplayerStatus = new HQPlayerStatus({
+  ...config.hqplayer,
+  activePlaybackProvider: () => roon.hasActivePlayback(),
+  onChange: () => scheduleBroadcast()
+});
 const clients = new Set();
 const radioEnrichmentCache = new Map();
+const STATE_UPDATE_DEBOUNCE_MS = 1000;
+const OPENAI_COMPATIBLE_PROVIDERS = new Set(["openai-compatible", "openai_compatible", "lmstudio", "llamacpp"]);
+let broadcastTimer = null;
+let lastBroadcastData = "";
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml"
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp"
 };
 
 const lastSession = sessionStore.read();
@@ -92,6 +108,107 @@ function sendJson(res, status, body) {
   const payload = body === undefined ? { ok: true } : body;
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload));
+}
+
+function normalizeBaseUrl(baseUrl = "") {
+  return String(baseUrl || "").replace(/\/+$/, "");
+}
+
+function llmSnapshot() {
+  const openAiCompatible = OPENAI_COMPATIBLE_PROVIDERS.has(config.llmProvider);
+  const model = openAiCompatible
+    ? config.openAiCompatibleModel
+    : (config.llmProvider === "openrouter" ? config.openRouterModel : config.ollamaModel);
+  const label = openAiCompatible
+    ? "LM STUDIO"
+    : (config.llmProvider === "openrouter" ? "OPENROUTER" : "OLLAMA");
+  const baseUrl = openAiCompatible
+    ? config.openAiCompatibleBaseUrl
+    : (config.llmProvider === "openrouter" ? "https://openrouter.ai/api/v1" : config.ollamaBaseUrl);
+  return {
+    provider: config.llmProvider,
+    label,
+    model,
+    baseUrl
+  };
+}
+
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 2500) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const text = await response.text();
+    let body = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch {
+      body = text;
+    }
+    return { response, body };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function llmHealth() {
+  const snapshot = llmSnapshot();
+  const headers = {};
+  if (config.openAiCompatibleApiKey) headers.authorization = `Bearer ${config.openAiCompatibleApiKey}`;
+  if (config.openRouterApiKey) headers.authorization = `Bearer ${config.openRouterApiKey}`;
+
+  try {
+    if (OPENAI_COMPATIBLE_PROVIDERS.has(config.llmProvider)) {
+      const baseUrl = normalizeBaseUrl(config.openAiCompatibleBaseUrl);
+      const { response, body } = await fetchJsonWithTimeout(`${baseUrl}/models`, { headers }, 2500);
+      const models = Array.isArray(body?.data) ? body.data.map((model) => model.id).filter(Boolean) : [];
+      const loaded = !snapshot.model || models.includes(snapshot.model);
+      return {
+        ...snapshot,
+        online: response.ok && loaded,
+        reachable: response.ok,
+        loaded,
+        models,
+        message: response.ok
+          ? (loaded ? "Local model ready" : "LM Studio reachable, configured model not loaded")
+          : `LM Studio returned HTTP ${response.status}`
+      };
+    }
+
+    if (config.llmProvider === "openrouter") {
+      return {
+        ...snapshot,
+        online: Boolean(config.openRouterApiKey),
+        reachable: Boolean(config.openRouterApiKey),
+        loaded: Boolean(config.openRouterApiKey),
+        message: config.openRouterApiKey ? "OpenRouter key configured" : "OPENROUTER_API_KEY is missing"
+      };
+    }
+
+    const baseUrl = normalizeBaseUrl(config.ollamaBaseUrl);
+    const { response, body } = await fetchJsonWithTimeout(`${baseUrl}/api/tags`, {}, 2500);
+    const models = Array.isArray(body?.models) ? body.models.map((model) => model.name).filter(Boolean) : [];
+    const loaded = !snapshot.model || models.includes(snapshot.model);
+    return {
+      ...snapshot,
+      online: response.ok && loaded,
+      reachable: response.ok,
+      loaded,
+      models,
+      message: response.ok
+        ? (loaded ? "Ollama model ready" : "Ollama reachable, configured model not loaded")
+        : `Ollama returned HTTP ${response.status}`
+    };
+  } catch (error) {
+    return {
+      ...snapshot,
+      online: false,
+      reachable: false,
+      loaded: false,
+      models: [],
+      message: error?.name === "AbortError" ? "Local model check timed out" : (error.message || "Local model is offline")
+    };
+  }
 }
 
 function withHqplayerStatus(state) {
@@ -288,8 +405,8 @@ function radioMetadataToEnrichment(lookup = {}, metadata = {}, tidalResult = nul
 
   return {
     ...(exactTidalResult || {}),
-    title: cleanRadioText(exactTidalResult?.title || metadata?.title || lookup.title),
-    artist: cleanRadioText(exactTidalResult?.artist || metadata?.artist || lookup.artist),
+    title: cleanRadioText(metadata?.title || lookup.title || exactTidalResult?.title),
+    artist: cleanRadioText(metadata?.artist || lookup.artist || exactTidalResult?.artist),
     album,
     durationMs,
     tidalUrl,
@@ -350,7 +467,7 @@ function scheduleRadioEnrichment(state = {}) {
           updatedAt: Date.now()
         });
         trimRadioEnrichmentCache();
-        if (result) broadcast();
+        if (result) scheduleBroadcast();
       })
       .catch((error) => {
         radioEnrichmentCache.set(key, {
@@ -430,6 +547,12 @@ function mergeTrackLists(...lists) {
   return merged;
 }
 
+function clampScore(value, min = 1, max = 100) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return min;
+  return Math.max(min, Math.min(max, Math.round(number)));
+}
+
 function normalizeMatchText(value) {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -439,6 +562,156 @@ function normalizeMatchText(value) {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+function llmScoreKey(track = {}) {
+  const direct = track.tidal?.id || track.tidalId || track.id || track.trackId || track.tidal?.tidalUrl || track.tidalUrl;
+  if (direct) return String(direct).trim();
+  const keys = candidateIdentityKeys(track);
+  return keys[0] || `${normalizeMatchText(track.artist)}|${normalizeMatchText(track.title)}`;
+}
+
+function scoreLabelForPercent(percent) {
+  const score = Number(percent || 0);
+  if (score >= 90) return "Excellent";
+  if (score >= 80) return "Strong";
+  if (score >= 70) return "Good";
+  if (score >= 55) return "Loose";
+  return "Weak";
+}
+
+function hardModelReject(score = {}) {
+  if (!score.rejected) return false;
+  const reason = normalizeMatchText(score.rejectionReason);
+  if (!reason) return false;
+  if (Number(score.finalScore || 0) >= 65 && Number(score.scores?.genreConfidence || 0) >= 55) return false;
+  return /\b(?:playlist|compilation|seo|chart|karaoke|cover|tribute|live|remaster|reissue|anniversary|deluxe|archive|background|catalogue|filler|spam)\b/.test(reason);
+}
+
+function mergeWhy(existing = [], additions = []) {
+  const seen = new Set();
+  const merged = [];
+  for (const item of [...additions, ...existing]) {
+    const text = String(item || "").replace(/\s+/g, " ").trim();
+    const key = normalizeMatchText(text);
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(text);
+    if (merged.length >= 8) break;
+  }
+  return merged;
+}
+
+function applyModelReview(track = {}, score = {}) {
+  if (!score || !score.trackId) return track;
+  const modelScores = score.scores || {};
+  const existingBreakdown = track.scoreBreakdown || {};
+  const promptPercent = clampScore(modelScores.promptMatch, 0, 100);
+  const tastePercent = clampScore(modelScores.tasteMatch, 0, 100);
+  const finalScore = clampScore(score.finalScore, 0, 100);
+  const currentScore = Number(track.score || existingBreakdown.total || 0) || finalScore;
+  const genreConfidence = clampScore(modelScores.genreConfidence, 0, 100);
+  const scorePenalty = genreConfidence && genreConfidence < 50 ? 6 : 0;
+  const blendedScore = clampScore((currentScore * 0.78) + (finalScore * 0.22) - scorePenalty);
+  const modelWhy = mergeWhy(score.why || [], score.rejectionReason ? [`Model warning: ${score.rejectionReason}`] : []);
+  const matchWhy = mergeWhy(existingBreakdown.matchWhy || track.matchWhy || [], modelWhy);
+  const scoreBreakdown = {
+    ...existingBreakdown,
+    total: blendedScore,
+    promptMatch: {
+      ...(existingBreakdown.promptMatch || {}),
+      percent: promptPercent,
+      label: scoreLabelForPercent(promptPercent)
+    },
+    tasteMatch: {
+      ...(existingBreakdown.tasteMatch || {}),
+      percent: tastePercent,
+      label: scoreLabelForPercent(tastePercent)
+    },
+    matchGenre: score.genre || existingBreakdown.matchGenre || track.matchGenre || "",
+    matchWhy,
+    llmReview: {
+      finalScore,
+      freshness: modelScores.freshness,
+      artistLabelMatch: modelScores.artistLabelMatch,
+      lengthPreference: modelScores.lengthPreference,
+      genreConfidence,
+      rejected: score.rejected,
+      rejectionReason: score.rejectionReason
+    }
+  };
+  return {
+    ...track,
+    score: blendedScore,
+    scoreBreakdown,
+    promptMatch: scoreBreakdown.promptMatch,
+    tasteMatch: scoreBreakdown.tasteMatch,
+    matchGenre: scoreBreakdown.matchGenre,
+    matchWhy,
+    why: mergeWhy(track.why || [], modelWhy),
+    reason: track.reason ? `${track.reason}; model-reviewed` : "model-reviewed",
+    llmReview: scoreBreakdown.llmReview
+  };
+}
+
+async function applyModelCandidateReview(discovered = {}, options = {}) {
+  const combined = mergeTrackLists(discovered.tracks, discovered.alternates).slice(0, 50);
+  if (!combined.length) return {
+    result: discovered,
+    review: { enabled: false, scored: 0, rejected: 0, error: "No candidates to review." }
+  };
+
+  const review = await scoreCandidateBatch(config, {
+    tracks: combined,
+    options,
+    tasteProfile: tasteProfile.read(),
+    timeoutMs: 30_000
+  });
+  const scoreMap = new Map();
+  for (const score of review.scores || []) {
+    if (score.trackId) scoreMap.set(score.trackId, score);
+  }
+
+  let rejected = 0;
+  const discarded = [...(discovered.discarded || [])];
+  function applyList(list = []) {
+    const next = [];
+    for (const track of list) {
+      const key = llmScoreKey(track);
+      const score = scoreMap.get(key);
+      if (!score) {
+        next.push(track);
+        continue;
+      }
+      if (hardModelReject(score)) {
+        rejected += 1;
+        discarded.push({
+          ...track,
+          llmReview: score,
+          reason: `Model rejected candidate: ${score.rejectionReason || "low-confidence catalogue result"}`
+        });
+        continue;
+      }
+      next.push(applyModelReview(track, score));
+    }
+    return next;
+  }
+
+  return {
+    result: {
+      ...discovered,
+      tracks: applyList(discovered.tracks),
+      alternates: applyList(discovered.alternates),
+      discarded
+    },
+    review: {
+      enabled: true,
+      scored: scoreMap.size,
+      rejected,
+      rawCount: review.rawCount || 0,
+      error: ""
+    }
+  };
 }
 
 function baseTitleForMatch(value) {
@@ -518,6 +791,7 @@ async function enrichRoonTrackWithTidal(track) {
       album: verified.album || track.album || "",
       label: verified.label || track.label || "",
       year: verified.year || track.year || null,
+      releaseDate: verified.releaseDate || track.releaseDate || "",
       durationMs: verified.durationMs || track.durationMs || null,
       tidal: verified,
       verificationSource: "roon+tidal"
@@ -604,9 +878,11 @@ function diversifyCandidates(candidates = [], requestedCount = 10, options = {})
 }
 
 async function decorateRoonFirstResult(roonResult, options = {}) {
-  const yearRange = yearRangeUtil.parseYearRange(options.years || options.request || "");
+  const yearRange = yearRangeUtil.parseYearRange(options);
   const scoringOptions = yearRange ? { ...options, years: yearRange.label } : options;
+  const discoveryProfile = buildDiscoveryProfile(scoringOptions);
   const requestedCount = parseRequestedCount(options);
+  const originalRequestedCount = Number(options.originalRequestedCount || 0) || requestedCount;
   const minScore = minimumScoreFor(scoringOptions);
   const strictFilteredRequest = Boolean(yearRange || minScore);
   const sourcePoolLimit = strictFilteredRequest
@@ -638,30 +914,57 @@ async function decorateRoonFirstResult(roonResult, options = {}) {
   const previousDecorated = [];
   const scoreFiltered = [];
   let previouslySuggestedHeldBack = 0;
+  const relaxedYearOptions = nearYearFallbackOptions(scoringOptions, yearRange);
+  const relaxedYearProfile = relaxedYearOptions ? buildDiscoveryProfile(relaxedYearOptions) : null;
+  let nearYearFallbackUsed = false;
 
   for (const track of enriched) {
-    const scoringTrack = {
+    let candidateTrack = track;
+    let scoringTrack = {
       ...track,
       ...(track.tidal || {}),
       query: track.query || track.roon?.sourceQuery || "",
       roon: track.roon
     };
+    let scoringOptionsForTrack = scoringOptions;
+    let profileForTrack = discoveryProfile;
     const historyEntry = discoveryHistory.entryFor(scoringTrack);
-    const rejection = (yearRange || track.tidal?.tidalUrl) ? rejectReason(scoringTrack, scoringOptions) : "";
+    let rejection = (yearRange || track.tidal?.tidalUrl) ? rejectReason(scoringTrack, scoringOptionsForTrack, profileForTrack) : "";
+
+    if (rejection && relaxedYearOptions) {
+      const relaxedTrack = {
+        ...scoringTrack,
+        discoveryLane: "recent",
+        discoverySource: "Roon recent-year fallback"
+      };
+      const relaxedRejection = rejectReason(relaxedTrack, relaxedYearOptions, relaxedYearProfile);
+      if (!relaxedRejection) {
+        candidateTrack = {
+          ...track,
+          discoveryLane: "recent",
+          discoverySource: "Roon recent-year fallback"
+        };
+        scoringTrack = relaxedTrack;
+        scoringOptionsForTrack = relaxedYearOptions;
+        profileForTrack = relaxedYearProfile;
+        rejection = "";
+        nearYearFallbackUsed = true;
+      }
+    }
 
     if (rejection) {
       discarded.push({
-        ...track,
+        ...candidateTrack,
         reason: rejection
       });
       continue;
     }
 
-    const rawBreakdown = scoreBreakdownFor(scoringTrack, scoringOptions, tasteProfile);
-    const scoreBreakdown = scoreWithRoonFloor(rawBreakdown, track);
+    const rawBreakdown = scoreBreakdownFor(scoringTrack, scoringOptionsForTrack, tasteProfile, profileForTrack);
+    const scoreBreakdown = scoreWithRoonFloor(rawBreakdown, candidateTrack);
     if (minScore && scoreBreakdown.total < minScore) {
       const filtered = {
-        ...track,
+        ...candidateTrack,
         score: scoreBreakdown.total,
         scoreBreakdown,
         reason: `Discovery score ${scoreBreakdown.total} is below minimum ${minScoreLabel}.`
@@ -672,17 +975,17 @@ async function decorateRoonFirstResult(roonResult, options = {}) {
     }
 
     const candidate = {
-      ...track,
-      reason: reasonFor(scoringTrack, scoringOptions, scoreBreakdown),
-      why: whyBulletsFor(scoringTrack, scoringOptions, scoreBreakdown, historyEntry),
-      discoverySource: track.discoverySource || "Roon search",
+      ...candidateTrack,
+      reason: reasonFor(scoringTrack, scoringOptionsForTrack, scoreBreakdown, profileForTrack),
+      why: whyBulletsFor(scoringTrack, scoringOptionsForTrack, scoreBreakdown, historyEntry, profileForTrack),
+      discoverySource: candidateTrack.discoverySource || "Roon search",
       score: scoreBreakdown.total,
       scoreBreakdown,
       statusChecks: queueableStatusChecks({
-        ...track,
+        ...candidateTrack,
         statusChecks: discoveryStatusFor(scoringTrack, historyEntry, discoveryHistory.isRecent(scoringTrack))
       }),
-      verificationSource: track.verificationSource || "roon"
+      verificationSource: candidateTrack.verificationSource || "roon"
     };
     candidate.feedback = tasteProfile.getFeedbackFor(candidate);
     if (historyEntry && !allowPreviousSuggestions) {
@@ -720,6 +1023,8 @@ async function decorateRoonFirstResult(roonResult, options = {}) {
     verification: {
       ...(roonResult.verification || {}),
       requested: requestedCount,
+      originalRequested: originalRequestedCount,
+      countExpanded: requestedCount !== originalRequestedCount,
       kept: selected.length,
       discarded: discarded.length,
       minScore,
@@ -727,6 +1032,8 @@ async function decorateRoonFirstResult(roonResult, options = {}) {
       yearRange: yearRange?.label || "",
       scoreFiltered: scoreFiltered.length,
       strategy: "roon-search-first",
+      nearYearFallback: nearYearFallbackUsed,
+      nearYearFallbackRange: nearYearFallbackUsed ? relaxedYearOptions?.years || "" : "",
       tidalEnriched: [...freshDecorated, ...previousDecorated].filter((track) => track.tidal?.tidalUrl).length,
       novelty: !allowPreviousSuggestions,
       previouslySuggestedAllowed: allowPreviousSuggestions,
@@ -738,7 +1045,9 @@ async function decorateRoonFirstResult(roonResult, options = {}) {
         artistSpread: diversity.artistSpread,
         albumSpread: diversity.albumSpread,
         artistClusterAllowed: requestAllowsArtistCluster(scoringOptions)
-      }
+      },
+      intent: discoveryProfile.intent,
+      scoringMode: discoveryProfile.scoringMode
     }
   };
 }
@@ -753,7 +1062,8 @@ function appSnapshot() {
     saved,
     taste: tasteProfile.summary(taste),
     feedback: taste.feedback || {},
-    memory: trackMemory.summary()
+    memory: trackMemory.summary(),
+    llm: llmSnapshot()
   };
 }
 
@@ -770,7 +1080,13 @@ function eventPayload() {
 }
 
 function broadcast() {
+  if (broadcastTimer) {
+    clearTimeout(broadcastTimer);
+    broadcastTimer = null;
+  }
   const data = `data: ${JSON.stringify(eventPayload())}\n\n`;
+  if (data === lastBroadcastData) return;
+  lastBroadcastData = data;
   for (const client of clients) {
     try {
       client.write(data);
@@ -778,6 +1094,14 @@ function broadcast() {
       clients.delete(client);
     }
   }
+}
+
+function scheduleBroadcast() {
+  if (broadcastTimer) return;
+  broadcastTimer = setTimeout(() => {
+    broadcastTimer = null;
+    broadcast();
+  }, STATE_UPDATE_DEBOUNCE_MS);
 }
 
 function serveStatic(req, res, pathname) {
@@ -793,26 +1117,6 @@ function serveStatic(req, res, pathname) {
     });
     res.end(data);
   });
-}
-
-function parseYearRange(years) {
-  const text = String(years || "").trim();
-  if (!text) return null;
-
-  const range = text.match(/\b(19\d{2}|20\d{2})\s*[-–]\s*(19\d{2}|20\d{2})\b/);
-  if (range) {
-    const min = Math.min(Number(range[1]), Number(range[2]));
-    const max = Math.max(Number(range[1]), Number(range[2]));
-    return { min, max, label: `${min}-${max}` };
-  }
-
-  const single = text.match(/\b(19\d{2}|20\d{2})\b/);
-  if (single) {
-    const year = Number(single[1]);
-    return { min: year, max: year, label: String(year) };
-  }
-
-  return null;
 }
 
 function yearFitsRange(year, range) {
@@ -851,7 +1155,7 @@ async function verifyPlaylistWithRoon(playlist, zoneId, options = {}) {
   const targetCount = Number(playlist.requestedCount || options.count || playlist.tracks.length);
   const useTidal = tidal.isConfigured();
   const tidalErrors = [];
-  const yearRange = yearRangeUtil.parseYearRange(options.years || options.request || "");
+  const yearRange = yearRangeUtil.parseYearRange(options);
 
   for (const track of playlist.tracks) {
     if (verified.length >= targetCount) break;
@@ -894,7 +1198,16 @@ async function verifyPlaylistWithRoon(playlist, zoneId, options = {}) {
           continue;
         }
 
-        if (yearRange && !tidalResult.year) {
+        if (yearRange?.dateSpecific && !tidalResult.releaseDate) {
+          discarded.push({
+            ...track,
+            reason: `TIDAL verified the track but did not expose a release date for ${yearRange.label}.`,
+            tidal: tidalResult
+          });
+          continue;
+        }
+
+        if (yearRange && !yearRange.dateSpecific && !tidalResult.year) {
           discarded.push({
             ...track,
             reason: `TIDAL verified the track but did not expose a release year for ${yearRange.label}.`,
@@ -903,10 +1216,10 @@ async function verifyPlaylistWithRoon(playlist, zoneId, options = {}) {
           continue;
         }
 
-        if (yearRange && !yearRangeUtil.yearFits(tidalResult.year, yearRange)) {
+        if (yearRange && !yearRangeUtil.yearFits(tidalResult.year, yearRange, tidalResult.releaseDate)) {
           discarded.push({
             ...track,
-            reason: `TIDAL release year ${tidalResult.year} is outside ${yearRange.label}.`,
+            reason: `TIDAL release ${tidalResult.releaseDate || tidalResult.year || "unknown"} is outside ${yearRange.label}.`,
             tidal: tidalResult
           });
           continue;
@@ -917,6 +1230,7 @@ async function verifyPlaylistWithRoon(playlist, zoneId, options = {}) {
           artist: tidalResult.artist || track.artist,
           title: tidalResult.title || track.title,
           year: tidalResult.year || null,
+          releaseDate: tidalResult.releaseDate || "",
           tidal: tidalResult,
           verificationSource: "tidal"
         });
@@ -994,7 +1308,7 @@ function queueableStatusChecks(track = {}) {
 }
 
 function withNormalizedYearFilter(options = {}) {
-  const parsed = yearRangeUtil.parseYearRange(options.years || options.request || "");
+  const parsed = yearRangeUtil.parseYearRange(options);
   if (!parsed) return options;
   return {
     ...options,
@@ -1003,20 +1317,20 @@ function withNormalizedYearFilter(options = {}) {
 }
 
 function shouldSkipModelForCatalogSearch(options = {}) {
-  const parsed = yearRangeUtil.parseYearRange(options.years || options.request || "");
+  const parsed = yearRangeUtil.parseYearRange(options);
   if (!parsed) return false;
   const text = normalizeMatchText(`${options.request || ""} ${options.genres || ""} ${options.mood || ""}`);
   return /\b(?:progressive|house|trance|melodic|deep|organic|techno|ambient|disco|synth|new wave|rock|jazz|metal|country|pop|funk|soul|r b|hip hop)\b/.test(text);
 }
 
 function strictSearchBudgets(options = {}, requestedCount = 8) {
-  const yearRange = yearRangeUtil.parseYearRange(options.years || options.request || "");
+  const yearRange = yearRangeUtil.parseYearRange(options);
   const minScore = minimumScoreFor(options);
   const strict = Boolean(yearRange || minScore);
   if (!strict) {
     return {
       roonFirstTimeoutMs: 10_000,
-      modelTimeoutMs: 8_000,
+      modelTimeoutMs: 30_000,
       discoveryTimeoutMs: 12_000,
       roonQueueTimeoutMs: 10_000
     };
@@ -1025,7 +1339,7 @@ function strictSearchBudgets(options = {}, requestedCount = 8) {
   const catalogMode = shouldSkipModelForCatalogSearch(options);
   return {
     roonFirstTimeoutMs: Math.min(35_000, Math.max(16_000, requestedCount * 1_600)),
-    modelTimeoutMs: catalogMode ? 0 : Math.min(18_000, Math.max(10_000, requestedCount * 1_000)),
+    modelTimeoutMs: Math.min(45_000, Math.max(catalogMode ? 30_000 : 25_000, requestedCount * 1_500)),
     discoveryTimeoutMs: catalogMode
       ? Math.min(300_000, Math.max(220_000, requestedCount * 8_500))
       : Math.min(120_000, Math.max(60_000, requestedCount * 5_000)),
@@ -1054,7 +1368,7 @@ async function filterForRoonQueueable(result, zoneId, options = {}) {
     return result;
   }
 
-  const yearRange = yearRangeUtil.parseYearRange(options.years || result.verification?.yearRange || "");
+  const yearRange = yearRangeUtil.parseYearRange({ ...options, years: options.years || result.verification?.yearRange || "" });
   const scoringOptions = yearRange ? { ...options, years: yearRange.label } : options;
   const targetCount = Number(result.requestedCount || result.verification?.requested || result.tracks.length);
   const minScore = minimumScoreFor(scoringOptions);
@@ -1083,13 +1397,19 @@ async function filterForRoonQueueable(result, zoneId, options = {}) {
     if (checked >= maxChecks) break;
 
     if (yearRange) {
+      const candidateRange = track.discoveryLane === "recent" && result.verification?.nearYearFallbackRange
+        ? yearRangeUtil.parseYearRange({ ...options, years: result.verification.nearYearFallbackRange })
+        : yearRange;
+      const candidateScoringOptions = candidateRange
+        ? { ...options, years: candidateRange.label }
+        : scoringOptions;
       const scoringTrack = {
         ...track,
         ...(track.tidal || {}),
         query: track.query || track.roon?.sourceQuery || "",
         roon: track.roon
       };
-      const rejection = rejectReason(scoringTrack, scoringOptions);
+      const rejection = rejectReason(scoringTrack, candidateScoringOptions);
       if (rejection) {
         rejected.push({
           ...track,
@@ -1179,12 +1499,18 @@ async function handleApi(req, res, url) {
     const imageKey = decodeURIComponent(pathname.slice("/api/roon/image/".length));
     const width = Math.max(64, Math.min(1200, Number(url.searchParams.get("width") || 320)));
     const height = Math.max(64, Math.min(1200, Number(url.searchParams.get("height") || width)));
-    const image = await roon.getImage(imageKey, {
-      width,
-      height,
-      scale: url.searchParams.get("scale") || "fill",
-      format: "image/jpeg"
-    });
+    let image;
+    try {
+      image = await roon.getImage(imageKey, {
+        width,
+        height,
+        scale: url.searchParams.get("scale") || "fill",
+        format: "image/jpeg"
+      });
+    } catch (error) {
+      const status = /HTTP 404\b/.test(error.message || "") ? 404 : 502;
+      return sendJson(res, status, { error: error.message || "Roon image unavailable" });
+    }
 
     res.writeHead(200, {
       "content-type": image.contentType,
@@ -1198,6 +1524,10 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, {
       ...eventPayload()
     });
+  }
+
+  if (req.method === "GET" && pathname === "/api/llm-status") {
+    return sendJson(res, 200, await llmHealth());
   }
 
   if (req.method === "GET" && pathname === "/api/history-report") {
@@ -1235,12 +1565,12 @@ async function handleApi(req, res, url) {
   let body = await readJson(req);
   if (pathname === "/api/control") {
     const result = await roon.control(body.zoneId, body.control);
-    broadcast();
+    scheduleBroadcast();
     return sendJson(res, 200, { ok: true, result: result || null });
   }
   if (pathname === "/api/seek") {
     const result = await roon.seek(body.zoneId, body.seconds);
-    broadcast();
+    scheduleBroadcast();
     return sendJson(res, 200, { ok: true, result: result || null });
   }
   if (pathname === "/api/settings") {
@@ -1251,85 +1581,51 @@ async function handleApi(req, res, url) {
   }
   if (pathname === "/api/ai/playlist") {
     body = withNormalizedYearFilter(body);
-    const requestedCount = parseRequestedCount(body);
-    const yearRange = yearRangeUtil.parseYearRange(body.years || body.request || "");
-    const strictFilteredRequest = Boolean(yearRange || minimumScoreFor(body));
-    const catalogSearchMode = shouldSkipModelForCatalogSearch(body);
-    const budgets = strictSearchBudgets(body, requestedCount);
-    let roonFirst = { tracks: [], alternates: [], discarded: [], verification: {} };
+    body.scoringMode = normalizeScoringMode(body);
+    const originalRequestedCount = parseRequestedCount(body);
+    const requestedCount = effectiveDiscoveryCount(body, buildDiscoveryProfile(body));
+    const effectiveBody = {
+      ...body,
+      effectiveCount: requestedCount,
+      originalRequestedCount
+    };
+    const yearRange = yearRangeUtil.parseYearRange(effectiveBody);
+    const strictFilteredRequest = Boolean(yearRange || minimumScoreFor(effectiveBody));
+    const catalogSearchMode = shouldSkipModelForCatalogSearch(effectiveBody);
+    const budgets = strictSearchBudgets(effectiveBody, requestedCount);
+    const roonFirst = { tracks: [], alternates: [], discarded: [], verification: {} };
     let roonFirstError = "";
-
-    const runRoonFirstSearch = /^(1|true|yes)$/i.test(String(body.requireRoonQueueable || "")) && body.zoneId && !catalogSearchMode;
-    if (!runRoonFirstSearch && catalogSearchMode) {
-      roonFirstError = "Skipped broad Roon-first search for year-filtered catalogue mode.";
-    }
-
-    if (runRoonFirstSearch) {
-      try {
-        const rawRoonFirst = await withTimeout(roon.discoverQueueableTracks(body, body.zoneId, {
-          targetCount: strictFilteredRequest
-            ? Math.min(40, Math.max(Math.ceil(requestedCount * 1.45), requestedCount + 8))
-            : Math.min(20, Math.max(Math.ceil(requestedCount * 1.15), requestedCount + 4)),
-          candidateLimit: strictFilteredRequest
-            ? Math.min(220, Math.max(requestedCount + 70, requestedCount * 12))
-            : Math.min(70, Math.max(requestedCount + 22, requestedCount * 3)),
-          searchLimit: strictFilteredRequest ? (requestedCount >= 25 ? 100 : 80) : (requestedCount >= 25 ? 55 : 30),
-          maxQueries: strictFilteredRequest
-            ? Math.min(36, Math.max(14, requestedCount * 2))
-            : (requestedCount >= 25 ? 14 : (requestedCount >= 10 ? 8 : 4)),
-          queueCheckLimit: strictFilteredRequest
-            ? Math.min(120, Math.max(requestedCount + 42, requestedCount * 6))
-            : Math.min(45, Math.max(requestedCount + 12, requestedCount * 2))
-        }), budgets.roonFirstTimeoutMs, "Roon search-first discovery took too long.");
-        roonFirst = await decorateRoonFirstResult(rawRoonFirst, body);
-      } catch (error) {
-        roonFirstError = error.message;
-      }
-    }
-
-    const usefulRoonFirstCount = requestedCount <= 5
-      ? requestedCount
-      : Math.max(3, Math.ceil(requestedCount * 0.55));
-    if (roonFirst.tracks.length >= requestedCount || roonFirst.tracks.length >= usefulRoonFirstCount) {
-      roonFirst.verification = {
-        ...(roonFirst.verification || {}),
-        modelCandidateCount: 0,
-        modelError: "",
-        roonFirstError,
-        partialRoonFirstReturn: roonFirst.tracks.length < requestedCount
-      };
-      discoveryHistory.record(roonFirst.tracks || []);
-      trackMemory.record([...(roonFirst.tracks || []), ...(roonFirst.alternates || [])]);
-      sessionStore.save(body, roonFirst);
-      broadcast();
-      return sendJson(res, 200, roonFirst);
-    }
-
     let modelResult = null;
     let modelError = "";
-    if (catalogSearchMode) {
-      modelResult = { tracks: [] };
-    } else {
-      try {
-        modelResult = await withTimeout(
-          generatePlaylist(config, body),
-          budgets.modelTimeoutMs,
-          "The local model took too long to answer."
-        );
-      } catch (error) {
-        modelError = error.message;
-      }
+
+    try {
+      modelResult = await withTimeout(
+        generateSearchPlan(config, effectiveBody),
+        budgets.modelTimeoutMs,
+        "The local model took too long to answer."
+      );
+    } catch (error) {
+      modelError = error.message;
+      modelResult = { plan: null };
     }
+
+    const searchBody = {
+      ...effectiveBody,
+      llmSearchPlan: modelResult?.plan || null,
+      llmCandidates: []
+    };
+    const searchProfile = buildDiscoveryProfile(searchBody);
+
+    roonFirstError = body.zoneId
+      ? "Roon-first discovery disabled. TIDAL generates candidates; Roon verifies queueability after scoring."
+      : "No Roon output zone selected. Roon verification requires a zone.";
 
     let discovered = null;
     try {
       discovered = await withTimeout(
         discoverTracks({
           tidal,
-          options: {
-            ...body,
-            llmCandidates: modelResult?.tracks || []
-          },
+          options: searchBody,
           history: discoveryHistory,
           tasteProfile
         }),
@@ -1347,7 +1643,9 @@ async function handleApi(req, res, url) {
           generated: (roonFirst.tracks || []).length + (roonFirst.discarded || []).length,
           kept: 0,
           discarded: (roonFirst.discarded || []).length,
-          discoveryError: error.message
+          discoveryError: error.message,
+          intent: searchProfile.intent,
+          scoringMode: searchProfile.scoringMode
         }
       };
     }
@@ -1356,16 +1654,48 @@ async function handleApi(req, res, url) {
     discovered.discarded = [...(roonFirst.discarded || []), ...(discovered.discarded || [])];
     discovered.verification = {
       ...(discovered.verification || {}),
-      modelCandidateCount: modelResult?.tracks?.length || 0,
+      modelCandidateCount: 0,
+      modelPlanQueryCount: modelResult?.plan?.searchQueries?.length || 0,
+      modelPlan: modelResult?.plan || null,
       modelError,
-      modelSkipped: catalogSearchMode ? "Skipped local model for year-filtered catalogue search." : "",
+      modelProvider: config.llmProvider,
+      modelName: config.llmProvider === "openrouter"
+        ? config.openRouterModel
+        : (OPENAI_COMPATIBLE_PROVIDERS.has(config.llmProvider)
+          ? config.openAiCompatibleModel
+          : config.ollamaModel),
+      modelSkipped: "",
       roonFirstKept: roonFirst.tracks.length,
-      roonFirstError
+      roonFirstError,
+      roonFirstSearches: roonFirst.verification?.searches || 0,
+      roonFirstCandidates: roonFirst.verification?.candidates || 0,
+      roonFirstSearchSummaries: roonFirst.verification?.searchSummaries || [],
+      roonFirstDiscarded: roonFirst.discarded?.length || 0,
+      roonFirstDefault: false,
+      tidalDirectFallback: false,
+      strategy: "tidal-catalog-first-roon-verified"
+    };
+    let modelCandidateReview = { enabled: false, scored: 0, rejected: 0, error: "" };
+    try {
+      const reviewed = await applyModelCandidateReview(discovered, searchBody);
+      discovered = reviewed.result;
+      modelCandidateReview = reviewed.review;
+    } catch (error) {
+      modelCandidateReview = {
+        enabled: false,
+        scored: 0,
+        rejected: 0,
+        error: error.message
+      };
+    }
+    discovered.verification = {
+      ...(discovered.verification || {}),
+      modelCandidateReview
     };
     let result = null;
     try {
       result = await withTimeout(
-        filterForRoonQueueable(discovered, body.zoneId, body),
+        filterForRoonQueueable(discovered, body.zoneId, searchBody),
         budgets.roonQueueTimeoutMs,
         "Roon queue verification took too long."
       );
@@ -1387,7 +1717,7 @@ async function handleApi(req, res, url) {
     discoveryHistory.record(result.tracks || []);
     trackMemory.record([...(result.tracks || []), ...(result.alternates || [])]);
     sessionStore.save(body, result);
-    broadcast();
+    scheduleBroadcast();
     return sendJson(res, 200, result);
   }
   if (pathname === "/api/rabbit-hole") {
@@ -1409,7 +1739,7 @@ async function handleApi(req, res, url) {
     const result = tasteProfile.record(body.track || {}, rating);
     sessionStore.updateFeedback(body.track || {}, rating);
     trackMemory.updateFeedback(body.track || {}, rating);
-    broadcast();
+    scheduleBroadcast();
     return sendJson(res, 200, result);
   }
   if (pathname === "/api/roon/playlist-tracks") {
@@ -1474,7 +1804,7 @@ async function handleApi(req, res, url) {
       alternates: body.alternates || [],
       targetCount: body.targetCount
     });
-    broadcast();
+    scheduleBroadcast();
     return sendJson(res, 200, result);
   }
   if (pathname === "/api/saved/add") {
@@ -1482,17 +1812,17 @@ async function handleApi(req, res, url) {
     if (result.added && typeof tasteProfile.recordCandidate === "function") {
       result.taste = tasteProfile.recordCandidate(result.track || body.track || {});
     }
-    broadcast();
+    scheduleBroadcast();
     return sendJson(res, 200, result);
   }
   if (pathname === "/api/saved/remove") {
     const result = savedPlaylist.remove(body.key);
-    broadcast();
+    scheduleBroadcast();
     return sendJson(res, 200, result);
   }
   if (pathname === "/api/memory/purge") {
     const result = trackMemory.purge();
-    broadcast();
+    scheduleBroadcast();
     return sendJson(res, 200, result);
   }
 
@@ -1512,8 +1842,10 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-roon.on("zones", broadcast);
-hqplayerStatus.start();
+roon.on("zones", () => {
+  hqplayerStatus.start();
+  scheduleBroadcast();
+});
 roon.start();
 
 server.listen(config.port, config.host, () => {

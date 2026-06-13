@@ -21,10 +21,16 @@ function normalize(value) {
     .trim();
 }
 
+function canonicalArtistName(value) {
+  const text = cleanText(value).replace(/[‐‑‒–—−]/g, "-");
+  if (normalize(text) === "d nox") return "D-Nox";
+  return text;
+}
+
 function splitArtists(value) {
   return cleanText(value)
-    .split(/\s*(?:,|;|\/|&|\+|\band\b|-)\s*/i)
-    .map(cleanText)
+    .split(/\s*(?:,|;|\/|&|\+|\band\b)\s*/i)
+    .map(canonicalArtistName)
     .filter((part) => part && part.length <= 60);
 }
 
@@ -53,14 +59,42 @@ function ratingDelta(value) {
 }
 
 function updateWeightedEntry(map, name, delta) {
-  const key = normalize(name);
+  const displayName = canonicalArtistName(name);
+  const key = normalize(displayName);
   if (!key) return;
-  const current = map[key] || { name: cleanText(name), score: 0, up: 0, down: 0 };
-  current.name = current.name || cleanText(name);
+  const current = map[key] || { name: displayName, score: 0, up: 0, down: 0 };
+  current.name = displayName || current.name;
   current.score += delta;
   if (delta > 0) current.up += 1;
   if (delta < 0) current.down += 1;
   map[key] = current;
+}
+
+function addTrackSignals(profile, track = {}, delta = 0) {
+  for (const artist of splitArtists(track.artist)) {
+    updateWeightedEntry(profile.artists, artist, delta);
+  }
+  const label = labelFor(track);
+  if (label) updateWeightedEntry(profile.labels, label, delta);
+}
+
+function rebuildWeightedSignals(profile = {}) {
+  const rebuilt = {
+    ...profile,
+    feedback: profile.feedback || {},
+    candidates: profile.candidates || {},
+    artists: {},
+    labels: {}
+  };
+
+  for (const entry of Object.values(rebuilt.feedback)) {
+    addTrackSignals(rebuilt, entry, ratingDelta(entry.rating));
+  }
+  for (const entry of Object.values(rebuilt.candidates)) {
+    addTrackSignals(rebuilt, entry, 0.5);
+  }
+
+  return rebuilt;
 }
 
 class TasteProfile {
@@ -71,13 +105,13 @@ class TasteProfile {
   read() {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
-      return {
+      return rebuildWeightedSignals({
         feedback: parsed.feedback || {},
         candidates: parsed.candidates || {},
         artists: parsed.artists || {},
         labels: parsed.labels || {},
         updatedAt: parsed.updatedAt || null
-      };
+      });
     } catch {
       return {
         feedback: {},

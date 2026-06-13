@@ -268,6 +268,17 @@ function yearFromValue(value) {
   return match ? Number(match[1]) : null;
 }
 
+function dateFromValue(value) {
+  const match = cleanText(value).match(/\b((19|20)\d{2})[-/](0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])\b/);
+  if (!match) return "";
+  const year = Number(match[1]);
+  const month = Number(match[3]);
+  const day = Number(match[4]);
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() + 1 !== month || date.getDate() !== day) return "";
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 function getIsrcYear(item = {}) {
   const isrc = cleanText(item.isrc || item.attributes?.isrc).replace(/[^a-z0-9]/gi, "").toUpperCase();
   if (!/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(isrc)) return null;
@@ -281,6 +292,14 @@ function firstYear(values) {
     if (year) return year;
   }
   return null;
+}
+
+function firstDate(values) {
+  for (const value of values) {
+    const date = dateFromValue(value);
+    if (date) return date;
+  }
+  return "";
 }
 
 function getReleaseYear(item = {}, album = {}) {
@@ -317,8 +336,45 @@ function getReleaseYear(item = {}, album = {}) {
   ]);
 }
 
+function getReleaseDate(item = {}, album = {}) {
+  const albumDate = firstDate([
+    album.originalReleaseDate,
+    album.attributes?.originalReleaseDate,
+    album.releaseDate,
+    album.attributes?.releaseDate,
+    album.releaseDateTime,
+    album.attributes?.releaseDateTime
+  ]);
+  const trackReleaseDate = firstDate([
+    item.originalReleaseDate,
+    item.attributes?.originalReleaseDate,
+    item.releaseDate,
+    item.attributes?.releaseDate,
+    item.releaseDateTime,
+    item.attributes?.releaseDateTime
+  ]);
+
+  const canonicalDates = [albumDate, trackReleaseDate].filter(Boolean).sort();
+  if (canonicalDates.length) return canonicalDates[0];
+
+  return firstDate([
+    item.streamStartDate,
+    item.attributes?.streamStartDate,
+    album.streamStartDate,
+    album.attributes?.streamStartDate
+  ]);
+}
+
 function getReleaseEvidence(item = {}, album = {}) {
   return {
+    albumDate: firstDate([
+      album.originalReleaseDate,
+      album.attributes?.originalReleaseDate,
+      album.releaseDate,
+      album.attributes?.releaseDate,
+      album.releaseDateTime,
+      album.attributes?.releaseDateTime
+    ]),
     albumYear: firstYear([
       album.originalReleaseDate,
       album.attributes?.originalReleaseDate,
@@ -328,6 +384,14 @@ function getReleaseEvidence(item = {}, album = {}) {
       album.attributes?.releaseYear,
       album.releaseDateTime,
       album.attributes?.releaseDateTime
+    ]),
+    trackDate: firstDate([
+      item.originalReleaseDate,
+      item.attributes?.originalReleaseDate,
+      item.releaseDate,
+      item.attributes?.releaseDate,
+      item.releaseDateTime,
+      item.attributes?.releaseDateTime
     ]),
     trackYear: firstYear([
       item.originalReleaseDate,
@@ -340,11 +404,23 @@ function getReleaseEvidence(item = {}, album = {}) {
       item.attributes?.releaseDateTime
     ]),
     isrcYear: getIsrcYear(item),
+    streamStartDate: firstDate([
+      item.streamStartDate,
+      item.attributes?.streamStartDate,
+      album.streamStartDate,
+      album.attributes?.streamStartDate
+    ]),
     streamStartYear: firstYear([
       item.streamStartDate,
       item.attributes?.streamStartDate,
       album.streamStartDate,
       album.attributes?.streamStartDate
+    ]),
+    createdDate: firstDate([
+      item.createdAt,
+      item.attributes?.createdAt,
+      album.createdAt,
+      album.attributes?.createdAt
     ]),
     createdYear: firstYear([
       item.createdAt,
@@ -431,8 +507,20 @@ function getDurationMs(item = {}) {
   return null;
 }
 
-function extractYearFromHtml(html) {
+function extractReleaseMetadataFromHtml(html) {
   const text = cleanText(html);
+  const datePatterns = [
+    /"releaseDate"\s*:\s*"((?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2})/i,
+    /"releaseDateTime"\s*:\s*"((?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2})/i,
+    /"datePublished"\s*:\s*"((?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2})/i
+  ];
+
+  for (const pattern of datePatterns) {
+    const match = text.match(pattern);
+    const releaseDate = match ? dateFromValue(match[1]) : "";
+    if (releaseDate) return { releaseDate, year: Number(releaseDate.slice(0, 4)) };
+  }
+
   const patterns = [
     /"releaseDate"\s*:\s*"((?:19|20)\d{2})[-"]/i,
     /"releaseDateTime"\s*:\s*"((?:19|20)\d{2})[-"]/i,
@@ -443,10 +531,10 @@ function extractYearFromHtml(html) {
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
-    if (match) return Number(match[1]);
+    if (match) return { releaseDate: "", year: Number(match[1]) };
   }
 
-  return null;
+  return { releaseDate: "", year: null };
 }
 
 function buildResult(item, searchJson, query) {
@@ -460,6 +548,7 @@ function buildResult(item, searchJson, query) {
     album: cleanText(album.title || album.attributes?.title),
     label: getLabel(item, album),
     year: getReleaseYear(item, album),
+    releaseDate: getReleaseDate(item, album),
     releaseEvidence: getReleaseEvidence(item, album),
     durationMs: getDurationMs(item),
     imageUrl: getImageUrl(item, album),
@@ -602,6 +691,8 @@ class TidalVerifier {
       title: cleanText(album.attributes?.title || album.title),
       label: getLabel({}, album),
       year: getReleaseYear({}, album),
+      releaseDate: getReleaseDate({}, album),
+      releaseEvidence: getReleaseEvidence({}, album),
       artist: artist.name
     })).filter((album) => album.id && album.title);
 
@@ -659,6 +750,8 @@ class TidalVerifier {
       artist: "",
       album: "",
       year: null,
+      releaseDate: "",
+      releaseEvidence: {},
       durationMs: null,
       label: "",
       tidalUrl: `https://tidal.com/browse/track/${id}`,
@@ -671,7 +764,7 @@ class TidalVerifier {
   }
 
   async withPageYear(result) {
-    if (result.year || !result.tidalUrl) return result;
+    if ((result.year && result.releaseDate) || !result.tidalUrl) return result;
 
     try {
       const response = await fetchWithTimeout(result.tidalUrl, {
@@ -682,8 +775,13 @@ class TidalVerifier {
       });
       if (!response.ok) return result;
 
-      const year = extractYearFromHtml(await response.text());
-      return year ? { ...result, year, yearSource: "tidal-web" } : result;
+      const metadata = extractReleaseMetadataFromHtml(await response.text());
+      return metadata.year ? {
+        ...result,
+        year: result.year || metadata.year,
+        releaseDate: result.releaseDate || metadata.releaseDate || "",
+        yearSource: "tidal-web"
+      } : result;
     } catch {
       return result;
     }
@@ -691,7 +789,7 @@ class TidalVerifier {
 
   async withDetailYear(result) {
     const evidence = result.releaseEvidence || {};
-    if (result.year && result.artist && result.album && result.durationMs && (evidence.albumYear || evidence.trackYear || evidence.isrcYear)) {
+    if (result.year && result.releaseDate && result.artist && result.album && result.durationMs && (evidence.albumYear || evidence.trackYear || evidence.isrcYear)) {
       return result;
     }
 
@@ -706,6 +804,7 @@ class TidalVerifier {
       const track = detailJson?.data || {};
       const album = getAlbum(track, detailJson);
       const year = getReleaseYear(track, album);
+      const releaseDate = getReleaseDate(track, album);
       const artist = cleanText(getArtistNames(track, detailJson).join(", "));
 
       return {
@@ -715,6 +814,7 @@ class TidalVerifier {
         album: cleanText(album.title || album.attributes?.title) || result.album,
         label: getLabel(track, album) || result.label || "",
         year: year || result.year,
+        releaseDate: releaseDate || result.releaseDate || "",
         releaseEvidence: getReleaseEvidence(track, album),
         durationMs: getDurationMs(track) || result.durationMs,
         imageUrl: getImageUrl(track, album) || result.imageUrl || "",

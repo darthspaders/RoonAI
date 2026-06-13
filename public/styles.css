@@ -174,11 +174,13 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 14px;
+  gap: clamp(10px, 2vw, 18px);
+  min-width: 0;
 }
 
 .brandMark span {
-  width: 36px;
+  flex: 0 1 44px;
+  width: clamp(24px, 5vw, 54px);
   height: 2px;
   border-radius: 999px;
   background: linear-gradient(90deg, rgba(255, 115, 216, 0), rgba(255, 115, 216, 0.9), rgba(143, 240, 255, 0.8));
@@ -187,6 +189,14 @@ summary:focus-visible {
 
 .brandMark span:last-child {
   background: linear-gradient(90deg, rgba(143, 240, 255, 0.9), rgba(255, 115, 216, 0.8), rgba(255, 115, 216, 0));
+}
+
+.brandBanner {
+  display: block;
+  width: min(620px, 72vw);
+  max-height: 118px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 18px rgba(152, 111, 255, 0.36)) drop-shadow(0 0 28px rgba(255, 115, 216, 0.12));
 }
 
 .statusStack {
@@ -215,6 +225,20 @@ summary:focus-visible {
   border-radius: 50%;
   background: #41ffc5;
   box-shadow: 0 0 14px rgba(65, 255, 197, 0.72);
+}
+
+.statusPill.statusOffline::before {
+  background: #ff6f8f;
+  box-shadow: 0 0 14px rgba(255, 111, 143, 0.62);
+}
+
+.statusPill.statusUnknown::before {
+  background: #ffd479;
+  box-shadow: 0 0 14px rgba(255, 212, 121, 0.52);
+}
+
+.statusPill.statusOffline {
+  color: rgba(255, 210, 224, 0.9);
 }
 
 .topbar {
@@ -485,9 +509,7 @@ select:focus option,
   height: 88px;
   flex: 0 0 auto;
   border-radius: 6px;
-  background:
-    linear-gradient(135deg, rgba(167, 124, 255, 0.36), rgba(16, 8, 28, 0.94) 52%, rgba(255, 115, 216, 0.28)),
-    repeating-linear-gradient(130deg, rgba(238, 213, 255, 0.07) 0 1px, transparent 1px 12px);
+  background-image: url("/assets/rabbit-hole-fallback.jpg");
   background-position: center;
   background-size: cover;
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -1100,6 +1122,76 @@ input {
   gap: 10px;
 }
 
+.intentDebug {
+  margin-bottom: 10px;
+}
+
+.intentDebug[hidden] {
+  display: none;
+}
+
+.intentDebugCard {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background:
+    linear-gradient(145deg, rgba(6, 2, 15, 0.92), rgba(23, 8, 39, 0.78)) padding-box,
+    linear-gradient(135deg, rgba(143, 240, 255, 0.22), rgba(217, 179, 255, 0.22), rgba(255, 115, 216, 0.12)) border-box;
+  box-shadow: var(--inner-light), 0 12px 30px rgba(2, 0, 8, 0.34);
+}
+
+.intentDebugHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.intentDebugHead span {
+  color: var(--iris-text);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.intentDebugHead strong {
+  color: #fff;
+  font-size: 14px;
+}
+
+.intentDebugGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.intentDebugGrid p {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(217, 179, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(6, 2, 13, 0.5);
+}
+
+.intentDebugGrid span {
+  color: rgba(217, 179, 255, 0.7);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.intentDebugGrid b {
+  color: rgba(250, 246, 255, 0.92);
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .emptyState {
   display: grid;
   gap: 12px;
@@ -1304,6 +1396,84 @@ input {
   color: var(--accent);
   font-weight: 700;
   text-align: right;
+}
+
+.matchInsight {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0;
+  padding: 12px;
+  border: 1px solid rgba(184, 112, 255, 0.26);
+  border-radius: 10px;
+  background:
+    linear-gradient(145deg, rgba(8, 2, 18, 0.94), rgba(18, 5, 36, 0.86)) padding-box,
+    linear-gradient(135deg, rgba(124, 224, 255, 0.22), rgba(231, 105, 255, 0.18)) border-box;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 235, 255, 0.08),
+    0 10px 26px rgba(0, 0, 0, 0.24);
+}
+
+.matchMeters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.matchMeter {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 2px 8px;
+  padding: 10px;
+  border: 1px solid rgba(217, 179, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(4, 1, 10, 0.72);
+}
+
+.matchMeter span,
+.matchGenre span,
+.matchWhy span {
+  color: rgba(218, 186, 255, 0.86);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.matchMeter strong {
+  color: #fff;
+  font-size: 18px;
+  font-weight: 850;
+}
+
+.matchMeter em {
+  grid-column: 1 / -1;
+  color: rgba(241, 232, 255, 0.76);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.matchGenre {
+  margin: 0;
+  color: rgba(241, 232, 255, 0.9);
+}
+
+.matchGenre strong {
+  color: #fff;
+}
+
+.matchWhy {
+  display: grid;
+  gap: 5px;
+}
+
+.matchWhy ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: rgba(241, 232, 255, 0.88);
+  line-height: 1.35;
 }
 
 .reasonBlock {
@@ -1715,8 +1885,17 @@ button:disabled:hover {
     font-size: 30px;
   }
 
+  .brandBanner {
+    width: min(560px, 70vw);
+    max-height: 104px;
+  }
+
   .brandMark span {
-    width: 22px;
+    width: clamp(22px, 8vw, 42px);
+  }
+
+  .intentDebugGrid {
+    grid-template-columns: 1fr;
   }
 
   .topControls {
@@ -1795,6 +1974,14 @@ button:disabled:hover {
 
   .scoreGrid {
     font-size: 13px;
+  }
+
+  .matchMeters {
+    grid-template-columns: 1fr;
+  }
+
+  .matchMeter strong {
+    font-size: 16px;
   }
 
   .trackActions {

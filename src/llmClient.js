@@ -1,75 +1,42 @@
 "use strict";
 
-const OLLAMA_TIMEOUT_MS = 20_000;
+const LLM_TIMEOUT_MS = 45_000;
+const OPENAI_COMPATIBLE_PROVIDERS = new Set(["openai-compatible", "openai_compatible", "lmstudio", "llamacpp"]);
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = OLLAMA_TIMEOUT_MS) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = LLM_TIMEOUT_MS) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } catch (error) {
-    if (error?.name === "AbortError") throw new Error(`Ollama request timed out after ${Math.round(timeoutMs / 1000)}s`);
+    if (error?.name === "AbortError") throw new Error(`LLM request timed out after ${Math.round(timeoutMs / 1000)}s`);
     throw error;
   } finally {
     clearTimeout(timeout);
   }
 }
 
-function extractJsonArray(text) {
+function extractJsonObject(text) {
   const trimmed = String(text || "").trim();
   try {
     const parsed = JSON.parse(trimmed);
-    if (Array.isArray(parsed)) return parsed;
-    if (Array.isArray(parsed.tracks)) return parsed.tracks;
-    if (Array.isArray(parsed.playlist)) return parsed.playlist;
-    if (Array.isArray(parsed.songs)) return parsed.songs;
-    if (Array.isArray(parsed.recommendations)) return parsed.recommendations;
-
-    const firstArray = Object.values(parsed).find(Array.isArray);
-    if (firstArray) return firstArray;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch (_) {
-    // Some models ignore format instructions; recover the first JSON array.
+    // Some models wrap JSON in thinking/prose; recover the first object.
   }
 
-  const start = trimmed.indexOf("[");
-  const end = trimmed.lastIndexOf("]");
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
   if (start === -1 || end === -1 || end <= start) {
-    throw new Error("The model did not return a JSON array.");
+    throw new Error("The model did not return a JSON object.");
   }
 
   return JSON.parse(trimmed.slice(start, end + 1));
 }
 
-function normalizeTrack(track) {
-  return {
-    artist: String(track.artist || "").trim(),
-    title: String(track.title || "").trim(),
-    reason: String(track.reason || "").trim(),
-    year: Number(track.year || 0) || null
-  };
-}
-
-function parseYearRange(years) {
-  const text = String(years || "").trim();
-  if (!text) return null;
-
-  const range = text.match(/\b(19\d{2}|20\d{2})\s*[-–]\s*(19\d{2}|20\d{2})\b/);
-  if (range) {
-    const min = Math.min(Number(range[1]), Number(range[2]));
-    const max = Math.max(Number(range[1]), Number(range[2]));
-    return { min, max, label: `${min}-${max}` };
-  }
-
-  const single = text.match(/\b(19\d{2}|20\d{2})\b/);
-  if (single) {
-    const year = Number(single[1]);
-    return { min: year, max: year, label: String(year) };
-  }
-
-  return null;
-}
-
 function inferCount(request, fallback) {
+  const effective = Number(fallback?.effectiveCount || 0);
+  if (effective > 0) return effective;
   const match = String(request || "").match(/\b(\d{1,2})\s*(?:track|song|cut|pick)s?\b/i);
   if (match) return Number(match[1]);
   if (fallback) return Number(fallback);
@@ -77,29 +44,10 @@ function inferCount(request, fallback) {
   return 12;
 }
 
-function inferCandidateCount(targetCount, options = {}) {
-  const hasHardFilters = Boolean(options.years || options.genres || options.mood || options.reference || options.history);
-  const multiplier = hasHardFilters ? 4 : 3;
-  return Math.min(80, Math.max(targetCount + 12, targetCount * multiplier));
-}
-
-function validateTracks(tracks, count) {
-  const seen = new Set();
-  const normalized = [];
-
-  for (const track of tracks.map(normalizeTrack)) {
-    if (!track.artist || !track.title) continue;
-    const key = `${track.artist.toLowerCase()}::${track.title.toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    normalized.push(track);
-    if (normalized.length === count) break;
-  }
-
-  if (!normalized.length) {
-    throw new Error("The model did not return usable tracks.");
-  }
-  return normalized;
+function requestedCountFor(options = {}) {
+  const effective = Number(options.effectiveCount || 0);
+  if (effective > 0) return effective;
+  return inferCount(options.request, options.count);
 }
 
 function buildNowPlayingContext(nowPlaying) {
@@ -113,60 +61,254 @@ function buildNowPlayingContext(nowPlaying) {
   return lines.length ? lines.join("\n") : "";
 }
 
-function buildPlaylistPrompt({ request, genres, years, mood, language, count, exclude, history, nowPlaying, service }) {
-  const excludeLine = exclude ? `Do NOT include any of these already selected tracks: ${exclude}.` : "";
-  const historyLine = history ? `Avoid these frequently used tracks from recent playlists: ${history}.` : "";
-  const referenceLine = history ? `Use these reference tracks or playlist notes as taste DNA, not as a list to copy verbatim: ${history}.` : "";
-  const nowPlayingContext = buildNowPlayingContext(nowPlaying);
-  const advancedLines = [
-    genres && `Explicit genre constraint: ${genres}`,
-    years && `HARD release-year constraint: EVERY track MUST be from ${years}. Do not include tracks outside this year range.`,
-    mood && `Explicit mood/energy constraint: ${mood}`,
-    language && `Explicit language constraint: ${language}`
-  ].filter(Boolean).join("\n");
-
-  return `You are a playlist generator for music discovery, built for a serious Roon/TIDAL listener.
-
-Your job is not to list famous songs. Your job is to propose real, streamable, high-signal discovery candidates that a knowledgeable curator would plausibly put into a listening queue.
-
-Interpret the user's plain-language ask. Infer target genre, seed playlist vibe, era, mood, tempo, discovery depth, and sequencing from the wording. The user should not have to fill out metadata fields.
-
-Important distinction:
-- Seed/reference tracks are taste DNA, not a genre cage and not a list to copy.
-- The requested genre is the destination.
-- If the seed playlist and requested genre differ, translate the seed's sonic traits into the requested genre.
-- Example: an 80s/new-wave/synth-pop playlist plus "progressive tracks" means progressive/melodic/deep/organic/progressive-trance-adjacent tracks with 80s traits: analog synth color, new-wave melancholy, neon atmosphere, arpeggiated bass, gated/bright drums, Italo/boogie influence, or retro melodic hooks.
-- This applies to any genre pairing: identify what the seed feels like, then find real tracks in the target genre that carry that feeling.
-
-User ask: ${request || "Make a tasteful discovery playlist for what is playing now."}
-
-${nowPlayingContext ? `Roon context:\n${nowPlayingContext}` : "Roon context: none available"}
-${advancedLines ? `Optional hard constraints:\n${advancedLines}` : "Optional hard constraints: none"}
-${excludeLine}
-${referenceLine || historyLine}
-Prefer songs likely available on ${service}, Roon, or major streaming catalogs.
-IMPORTANT: discovery mode is enabled.
-- Think like a TIDAL/Roon catalog curator: choose tracks that are real releases, searchable by exact artist + title, and likely present in TIDAL.
-- Prefer artists and labels that make sense for the requested genre and seed vibe, not generic defaults.
-- If the ask says "like this", "more like this", "keep this vibe", or similar, use the Roon context as the seed.
-- Avoid obvious starter-pack picks unless the user explicitly asks for classics.
-- Prefer tasteful deep cuts, current/recent discoveries, underground-adjacent releases, and DJ-friendly album/single versions.
-- Stay inside the requested vibe, but allow adjacent subgenres when they would satisfy the listener better.
-- Only use progressive-house assumptions when the user asks for progressive/progressive house. Otherwise, follow the requested genre.
-- For progressive requests, include melodic progressive, deep progressive, organic house crossover, progressive trance where appropriate, and credible club/label picks; avoid big-room EDM and tracks that only look progressive because the title contains "progressive".
-- For decade/vibe translation requests, do NOT just return tracks from that decade unless the user asks for that. Translate the feel into the target genre.
-- Avoid live versions, radio edits, mashups, covers, karaoke, remasters, reissues, anniversary editions, deluxe/archive versions, and old tracks repackaged into recent years.
-- Build a coherent mini-set: adjacent keys/energy is nice, but vibe coherence matters more than chart familiarity.
-- Do not invent artists, collaborations, tracks, labels, or release years. Only return tracks you believe are real commercial releases.
-${years ? `- HARD RULE: every returned track must be an original release from ${years}. Do not use remasters, reissues, edits, deluxe editions, or old tracks with a new package date to satisfy the year range. If unsure, choose a different track.` : ""}
-Generate EXACTLY ${count} UNIQUE songs.
-year is required: original release year as a four-digit integer.
-Return ONLY a valid JSON object in this format:
-{"tracks":[{"artist":"Artist Name","title":"Song Title","year":1995,"reason":"short reason this fits"}]}
-No markdown, no prose, no code fences, no extra text.`;
+function compactReference(value, maxLength = 3000) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
-async function callOllama(config, prompt) {
+function buildSearchPlanPrompt({ request, genres, years, mood, language, count, reference, history, nowPlaying }) {
+  const nowPlayingContext = buildNowPlayingContext(nowPlaying);
+  const seedText = compactReference(reference || history || "");
+  const constraints = [
+    genres && `Requested genre/style: ${genres}`,
+    years && `Release date/year constraint: ${years}`,
+    mood && `Mood/energy: ${mood}`,
+    language && `Language: ${language}`,
+    count && `Requested track count: ${count}`
+  ].filter(Boolean).join("\n");
+
+  return `You are the strategy layer for a local Roon/TIDAL music discovery app.
+
+IMPORTANT:
+- Do NOT recommend specific tracks.
+- Do NOT invent track titles.
+- Your job is to create a catalogue search plan that the app will execute against TIDAL and Roon.
+- TIDAL/Roon are the source of truth. The app will only show verified playable catalogue results.
+
+Interpret the user's request, seed playlist, current Roon track, and optional filters.
+If the seed playlist and requested genre differ, translate the seed's sonic traits into the requested genre.
+Example: an 80s playlist plus "progressive house" means search progressive/melodic/deep/organic/progressive-trance-adjacent catalogues with 80s traits such as analog synth color, neon mood, gated drums, new-wave melancholy, Italo/boogie bass, or retro melodic hooks.
+The current Roon track is context only. Use it as a seed only if the user asks for now/current/like-this discovery or gives no other search intent.
+
+User request:
+${request || "Find tasteful music discoveries."}
+
+${nowPlayingContext ? `Current Roon context:\n${nowPlayingContext}` : "Current Roon context: none"}
+${constraints ? `Explicit constraints:\n${constraints}` : "Explicit constraints: none"}
+${seedText ? `Seed playlist / reference notes:\n${seedText}` : "Seed playlist / reference notes: none"}
+
+Return ONLY valid JSON in this exact shape:
+{
+  "intent": "one sentence",
+  "targetGenres": ["genre/style terms to search"],
+  "vibeTerms": ["sonic traits and mood words"],
+  "seedArtists": ["artists from the seed or now playing"],
+  "candidateArtists": ["credible artists to search, no track titles"],
+  "candidateLabels": ["credible labels to search"],
+  "searchQueries": ["short TIDAL/Roon search queries, no made-up track titles"],
+  "avoidTerms": ["terms to avoid"],
+  "notes": "short note"
+}
+
+Rules:
+- searchQueries should be catalogue-safe strings like "Anjunadeep melodic house 2026", "tech house Toolroom", or "Hernan Cattaneo progressive house".
+- Prefer artist/label/genre/year queries over guessed song titles.
+- For narrow genre/year discovery, include credible labels, artists, and one-ring adjacent scene terms; avoid generic SEO phrases like "best mix", "top hits", "playlist", or "summer vibes".
+- Do not default to progressive house just because the listener often likes it. Use progressive assumptions only when the request, seed, or explicit genre points there.
+- Do not include the current Roon artist as a seed when the user asks for an unrelated genre/date/vibe search.
+- If a year or date filter exists, include it in the relevant search queries.
+- Do not include more than 18 search queries, 16 candidateArtists, or 16 candidateLabels.
+- Do not include Markdown or extra text.`;
+}
+
+function normalizeStringArray(value, limit = 16) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const result = [];
+  for (const item of value) {
+    const text = String(item || "").replace(/\s+/g, " ").trim();
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    result.push(text);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
+function normalizeSearchPlan(plan = {}) {
+  return {
+    intent: String(plan.intent || "").replace(/\s+/g, " ").trim(),
+    targetGenres: normalizeStringArray(plan.targetGenres, 12),
+    vibeTerms: normalizeStringArray(plan.vibeTerms, 16),
+    seedArtists: normalizeStringArray(plan.seedArtists, 12),
+    candidateArtists: normalizeStringArray(plan.candidateArtists, 16),
+    candidateLabels: normalizeStringArray(plan.candidateLabels, 16),
+    searchQueries: normalizeStringArray(plan.searchQueries, 18),
+    avoidTerms: normalizeStringArray(plan.avoidTerms, 12),
+    notes: String(plan.notes || "").replace(/\s+/g, " ").trim()
+  };
+}
+
+function clampScore(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(100, Math.round(number)));
+}
+
+function normalizeCandidateText(value, maxLength = 180) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+}
+
+function llmTrackId(track = {}, index = 0) {
+  const explicit = track.tidal?.id || track.tidalId || track.id || track.trackId || track.tidal?.tidalUrl || track.tidalUrl;
+  if (explicit) return String(explicit);
+  return `${index}:${normalizeCandidateText(track.artist, 80)}|${normalizeCandidateText(track.title, 100)}`;
+}
+
+function compactCandidate(track = {}, index = 0) {
+  const breakdown = track.scoreBreakdown || {};
+  return {
+    id: llmTrackId(track, index),
+    title: normalizeCandidateText(track.title),
+    artist: normalizeCandidateText(track.artist),
+    album: normalizeCandidateText(track.album),
+    label: normalizeCandidateText(track.label || track.tidal?.label),
+    duration_min: Number(track.durationMs || 0) ? Math.round((Number(track.durationMs || 0) / 60000) * 10) / 10 : null,
+    release_date: normalizeCandidateText(track.releaseDate || track.tidal?.releaseDate || track.year),
+    source_query: normalizeCandidateText(track.query || track.discoverySource),
+    current_score: Number(track.score || breakdown.total || 0) || null,
+    current_prompt_match: breakdown.promptMatch?.percent ?? null,
+    current_taste_match: breakdown.tasteMatch?.percent ?? null,
+    reason: normalizeCandidateText(track.reason, 240),
+    why: Array.isArray(track.why) ? track.why.slice(0, 5).map((item) => normalizeCandidateText(item, 160)) : []
+  };
+}
+
+function topWeightedEntries(map = {}, limit = 12) {
+  return Object.values(map || {})
+    .filter((entry) => Number(entry.score || 0) !== 0)
+    .sort((left, right) => Number(right.score || 0) - Number(left.score || 0))
+    .slice(0, limit)
+    .map((entry) => ({
+      name: normalizeCandidateText(entry.name, 120),
+      score: Number(entry.score || 0)
+    }));
+}
+
+function compactTasteProfile(tasteProfile = {}) {
+  return {
+    liked_artists: topWeightedEntries(tasteProfile.artists, 14).filter((entry) => entry.score > 0),
+    rejected_artists: topWeightedEntries(tasteProfile.artists, 10).filter((entry) => entry.score < 0),
+    liked_labels: topWeightedEntries(tasteProfile.labels, 14).filter((entry) => entry.score > 0),
+    rejected_labels: topWeightedEntries(tasteProfile.labels, 10).filter((entry) => entry.score < 0),
+    feedback_count: Object.keys(tasteProfile.feedback || {}).length,
+    candidate_signals: Object.keys(tasteProfile.candidates || {}).length
+  };
+}
+
+function buildCandidateScoringPrompt({ tracks = [], options = {}, tasteProfile = {} } = {}) {
+  return `You are the strict scoring reviewer for The Rabbit Hole, a Roon/TIDAL music discovery app.
+
+You do NOT invent songs. You only score the provided TIDAL candidates.
+Return ONLY valid JSON. No markdown, no prose, no code fences.
+
+Reject obvious junk: playlists, compilations, chart packs, SEO genre/year uploads, karaoke, covers, tribute versions, live versions unless requested, remasters, reissues, anniversary/deluxe/archive versions, and generic background-music catalogue filler.
+Do NOT reject legitimate DJ-friendly remixes or extended/original mixes just because they are remixes.
+If metadata is missing, lower confidence. Never make up labels, years, genres, or facts.
+
+Discovery request:
+${JSON.stringify({
+    request: options.request || "",
+    genres: options.genres || "",
+    years: options.years || "",
+    mood: options.mood || "",
+    language: options.language || "",
+    scoringMode: options.scoringMode || "",
+    minScore: options.minScore || ""
+  })}
+
+Taste profile:
+${JSON.stringify(compactTasteProfile(tasteProfile))}
+
+TIDAL candidates:
+${JSON.stringify(tracks.map(compactCandidate))}
+
+Return exactly this shape:
+{
+  "candidates": [
+    {
+      "track_id": "same id from input",
+      "rejected": false,
+      "rejection_reason": "",
+      "scores": {
+        "prompt_match": 0,
+        "taste_match": 0,
+        "freshness": 0,
+        "artist_label_match": 0,
+        "length_preference": 0,
+        "genre_confidence": 0
+      },
+      "final_score": 0,
+      "genre": "short genre label",
+      "why": ["short reason", "short reason"]
+    }
+  ]
+}
+
+Scoring guidance:
+- prompt_match: how well it follows the explicit current request and advanced fields.
+- taste_match: how well it fits the user's saved likes/dislikes.
+- freshness: release/date fit and whether it avoids stale reissue tricks.
+- artist_label_match: artist/label relevance to request or taste profile.
+- length_preference: duration fit only, not genre quality.
+- genre_confidence: confidence this is actually the requested genre/vibe.
+- final_score should balance prompt first, taste second: 35% prompt, 25% taste, 15% freshness, 15% artist/label, 10% length, then adjust down for low genre confidence.
+- For a genre-only search, prompt_match and genre_confidence matter more than existing progressive-house taste.
+- Keep why bullets factual and tied to metadata/request/taste.`;
+}
+
+function normalizeCandidateScore(item = {}) {
+  const scores = item.scores && typeof item.scores === "object" ? item.scores : {};
+  const finalScore = clampScore(item.final_score);
+  return {
+    trackId: String(item.track_id || item.id || "").trim(),
+    rejected: Boolean(item.rejected),
+    rejectionReason: normalizeCandidateText(item.rejection_reason, 180),
+    scores: {
+      promptMatch: clampScore(scores.prompt_match),
+      tasteMatch: clampScore(scores.taste_match),
+      freshness: clampScore(scores.freshness),
+      artistLabelMatch: clampScore(scores.artist_label_match),
+      lengthPreference: clampScore(scores.length_preference ?? (100 - Number(scores.length_penalty || 0))),
+      genreConfidence: clampScore(scores.genre_confidence)
+    },
+    finalScore,
+    genre: normalizeCandidateText(item.genre, 120),
+    why: Array.isArray(item.why)
+      ? item.why.map((reason) => normalizeCandidateText(reason, 180)).filter(Boolean).slice(0, 5)
+      : []
+  };
+}
+
+async function scoreCandidateBatch(config, { tracks = [], options = {}, tasteProfile = {}, timeoutMs = 30_000 } = {}) {
+  const candidates = tracks.filter((track) => track?.artist && track?.title).slice(0, 50);
+  if (!candidates.length) return { prompt: "", scores: [], rawCount: 0 };
+
+  const prompt = buildCandidateScoringPrompt({ tracks: candidates, options, tasteProfile });
+  const raw = await callConfiguredModel(config, prompt, timeoutMs);
+  const parsed = extractJsonObject(raw);
+  const items = Array.isArray(parsed.candidates) ? parsed.candidates : [];
+  const scores = items.map(normalizeCandidateScore).filter((item) => item.trackId);
+  return {
+    prompt,
+    scores,
+    rawCount: items.length
+  };
+}
+
+async function callOllama(config, prompt, timeoutMs = LLM_TIMEOUT_MS) {
   const response = await fetchWithTimeout(`${config.ollamaBaseUrl}/api/generate`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -180,7 +322,7 @@ async function callOllama(config, prompt) {
         top_p: 0.9
       }
     })
-  });
+  }, timeoutMs);
 
   if (!response.ok) {
     throw new Error(`Ollama request failed: ${response.status} ${await response.text()}`);
@@ -190,10 +332,10 @@ async function callOllama(config, prompt) {
   return body.response;
 }
 
-async function callOpenRouter(config, prompt) {
+async function callOpenRouter(config, prompt, timeoutMs = LLM_TIMEOUT_MS) {
   if (!config.openRouterApiKey) throw new Error("OPENROUTER_API_KEY is not set.");
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const response = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       "authorization": `Bearer ${config.openRouterApiKey}`,
@@ -210,7 +352,7 @@ async function callOpenRouter(config, prompt) {
       temperature: 0.35,
       response_format: { type: "json_object" }
     })
-  });
+  }, timeoutMs);
 
   if (!response.ok) {
     throw new Error(`OpenRouter request failed: ${response.status} ${await response.text()}`);
@@ -219,36 +361,80 @@ async function callOpenRouter(config, prompt) {
   const body = await response.json();
   const content = body.choices?.[0]?.message?.content || "";
   const parsed = JSON.parse(content);
-  return Array.isArray(parsed) ? content : JSON.stringify(parsed.tracks || parsed.playlist || []);
+  if (Array.isArray(parsed)) return content;
+  if (Array.isArray(parsed.tracks) || Array.isArray(parsed.playlist)) return JSON.stringify(parsed.tracks || parsed.playlist);
+  return content;
 }
 
-async function generatePlaylist(config, options) {
-  const requestedCount = Math.max(1, Math.min(inferCount(options.request, options.count), 40));
-  const candidateCount = inferCandidateCount(requestedCount, options);
-  const prompt = buildPlaylistPrompt({
+function normalizeBaseUrl(baseUrl = "") {
+  return String(baseUrl || "").replace(/\/+$/, "");
+}
+
+async function callOpenAiCompatible(config, prompt, timeoutMs = LLM_TIMEOUT_MS) {
+  const baseUrl = normalizeBaseUrl(config.openAiCompatibleBaseUrl);
+  if (!baseUrl) throw new Error("LLM_BASE_URL is not set.");
+
+  const headers = {
+    "content-type": "application/json"
+  };
+  if (config.openAiCompatibleApiKey) {
+    headers.authorization = `Bearer ${config.openAiCompatibleApiKey}`;
+  }
+
+  const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model: config.openAiCompatibleModel,
+      messages: [
+        { role: "system", content: "You generate strict JSON playlist candidates for Roon. Return only valid JSON." },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.35,
+      top_p: 0.9,
+      response_format: { type: "text" }
+    })
+  }, timeoutMs);
+
+  if (!response.ok) {
+    throw new Error(`OpenAI-compatible LLM request failed: ${response.status} ${await response.text()}`);
+  }
+
+  const body = await response.json();
+  const content = body.choices?.[0]?.message?.content || "";
+  if (!content) throw new Error("OpenAI-compatible LLM returned an empty response.");
+  return content;
+}
+
+function callConfiguredModel(config, modelPrompt, timeoutMs = LLM_TIMEOUT_MS) {
+  if (config.llmProvider === "openrouter") return callOpenRouter(config, modelPrompt, timeoutMs);
+  if (OPENAI_COMPATIBLE_PROVIDERS.has(config.llmProvider)) {
+    return callOpenAiCompatible(config, modelPrompt, timeoutMs);
+  }
+  return callOllama(config, modelPrompt, timeoutMs);
+}
+
+async function generateSearchPlan(config, options) {
+  const requestedCount = Math.max(1, Math.min(requestedCountFor(options), 40));
+  const prompt = buildSearchPlanPrompt({
     ...options,
     history: options.reference || options.history || "",
-    count: candidateCount,
-    service: config.streamingService
+    count: requestedCount
   });
 
-  const callModel = (modelPrompt) => config.llmProvider === "openrouter"
-    ? callOpenRouter(config, modelPrompt)
-    : callOllama(config, modelPrompt);
-
-  let raw = await callModel(prompt);
-  try {
-    return {
-      prompt,
-      requestedCount,
-      candidateCount,
-      tracks: validateTracks(extractJsonArray(raw), candidateCount)
-    };
-  } catch (error) {
-    throw error;
+  const raw = await callConfiguredModel(config, prompt);
+  const plan = normalizeSearchPlan(extractJsonObject(raw));
+  if (!plan.searchQueries.length && !plan.candidateArtists.length && !plan.candidateLabels.length && !plan.targetGenres.length) {
+    throw new Error("The model did not return a usable search plan.");
   }
+  return {
+    prompt,
+    requestedCount,
+    plan
+  };
 }
 
 module.exports = {
-  generatePlaylist
+  generateSearchPlan,
+  scoreCandidateBatch
 };

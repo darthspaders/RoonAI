@@ -24,7 +24,8 @@ const state = {
   rabbitHoleGraph: null,
   rabbitHoleKey: "",
   isSeeking: false,
-  playerMaximized: localStorage.getItem("playerMaximized") === "1"
+  playerMaximized: localStorage.getItem("playerMaximized") === "1",
+  llmStatus: null
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -56,11 +57,11 @@ function summarizeNowPlaying(zone) {
   if (!now) return null;
   const enriched = now.radio_enrichment;
   const radioLookup = now.radio_lookup;
-  if (radioLookup?.catalogEnrichmentAllowed === false && radioLookup?.title && radioLookup?.artist) {
+  if (radioLookup?.title && radioLookup?.artist) {
     return {
       title: radioLookup.title,
       artist: radioLookup.artist,
-      album: radioLookup.album || ""
+      album: enriched?.album || radioLookup.album || ""
     };
   }
   if (enriched?.title && enriched?.artist) {
@@ -68,13 +69,6 @@ function summarizeNowPlaying(zone) {
       title: enriched.title,
       artist: enriched.artist,
       album: enriched.album || now.three_line?.line3 || ""
-    };
-  }
-  if (radioLookup?.title && radioLookup?.artist) {
-    return {
-      title: radioLookup.title,
-      artist: radioLookup.artist,
-      album: radioLookup.album || ""
     };
   }
 
@@ -141,7 +135,11 @@ function withLocalFeedback(track = null) {
 function nowPlayingTrack(zone = activeZone()) {
   const now = summarizeNowPlaying(zone);
   if (!now?.title) return null;
-  const enriched = zone?.now_playing?.radio_enrichment;
+  const rawNow = zone?.now_playing;
+  const enriched = rawNow?.radio_enrichment;
+  const roonImageUrl = !rawNow?.radio_lookup && rawNow?.image_key
+    ? `/api/roon/image/${encodeURIComponent(rawNow.image_key)}?width=360&height=360`
+    : "";
   return withLocalFeedback({
     artist: now.artist || "Unknown artist",
     title: now.title,
@@ -149,9 +147,10 @@ function nowPlayingTrack(zone = activeZone()) {
     durationMs: zone?.now_playing?.length ? Number(zone.now_playing.length) * 1000 : null,
     label: enriched?.label || "",
     year: enriched?.year || null,
+    releaseDate: enriched?.releaseDate || "",
     tidal: enriched || null,
     tidalUrl: enriched?.tidalUrl || "",
-    imageUrl: enriched?.imageUrl || "",
+    imageUrl: enriched?.imageUrl || roonImageUrl,
     discoverySource: "Now playing",
     statusChecks: ["Now playing in Roon"],
     roon: {
@@ -216,6 +215,16 @@ function formatSeconds(value) {
   return `${minutes}:${remainder}`;
 }
 
+function formatQueueSeconds(value) {
+  const seconds = Math.max(0, Math.round(Number(value || 0)));
+  if (!seconds) return "";
+  if (seconds < 3600) return formatSeconds(seconds);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+  const remainder = String(seconds % 60).padStart(2, "0");
+  return `${hours}:${minutes}:${remainder}`;
+}
+
 function isLiveRadioZone(zone = {}) {
   const now = zone?.now_playing || {};
   if (Number(now.length || 0) > 0) return false;
@@ -230,12 +239,20 @@ function isLiveRadioZone(zone = {}) {
   return /\b(?:di\.?fm|fm|radio|station|stream|live|premium)\b/i.test(text);
 }
 
+function queueRemainingCount(zone = {}, fallback = 0) {
+  if (zone?.queue_items_remaining !== undefined && zone?.queue_items_remaining !== null) {
+    const value = Number(zone.queue_items_remaining);
+    if (Number.isFinite(value)) return Math.max(0, value);
+  }
+  return Math.max(0, fallback);
+}
+
 function formatQueueInfo(zone) {
   if (isLiveRadioZone(zone)) return "Live radio - no fixed end";
   const queueItems = displayQueueItems(zone).length;
-  const count = Math.max(0, Number(zone?.queue_items_remaining || 0) || queueItems);
+  const count = queueRemainingCount(zone, queueItems);
   const remaining = Math.max(0, Number(zone?.queue_time_remaining || 0));
-  const time = formatSeconds(remaining);
+  const time = formatQueueSeconds(remaining);
   if (count > 0 && time) return `${count} queued - ${time} left`;
   if (count > 0) return `${count} queued`;
   if (time) return `${time} remaining`;
@@ -321,8 +338,8 @@ function liveQueueHtml(zone = {}) {
   const queue = zone.queue || {};
   const rawItems = Array.isArray(queue.items) ? queue.items : [];
   const items = displayQueueItems(zone);
-  const remaining = Math.max(0, Number(zone.queue_items_remaining || 0));
-  const time = formatSeconds(zone.queue_time_remaining || 0);
+  const remaining = queueRemainingCount(zone, items.length);
+  const time = formatQueueSeconds(zone.queue_time_remaining || 0);
   const countLabel = remaining || items.length;
   const suffix = [
     countLabel ? `${countLabel} remaining` : "",
@@ -477,6 +494,7 @@ function csvForTracks(tracks) {
     "album",
     "label",
     "year",
+    "releaseDate",
     "duration",
     "discoveryScore",
     "scoreBand",
@@ -499,6 +517,7 @@ function csvForTracks(tracks) {
     track.album,
     track.label || track.tidal?.label || "",
     track.year || "",
+    track.releaseDate || track.tidal?.releaseDate || "",
     formatDuration(track.durationMs),
     track.score || track.scoreBreakdown?.total || "",
     scoreBandFor(track.score || track.scoreBreakdown?.total).label,
@@ -596,7 +615,7 @@ function rabbitHoleTextFor(track = {}) {
   const artists = displayArtists(track.artist || track.tidal?.artist);
   const label = track.label || track.tidal?.label || "";
   const primaryArtist = artists[0] || track.artist || "this artist";
-  return `Using ${primaryArtist} as the seed artist, search ${label || "adjacent labels"} for deep progressive, melodic, or high-detail electronic tracks. Prioritize tracks longer than 7 minutes when available, released after 2020, not previously suggested, and Roon-queueable.`;
+  return `Find tracks like ${primaryArtist}${label ? ` connected to ${label}` : ""}, but go deeper and less obvious. Follow the prompt intent first, avoid repeats, and only return Roon-queueable matches.`;
 }
 
 function rabbitNodePayload(node = {}) {
@@ -612,7 +631,7 @@ function rabbitNodeHtml(node = {}, extra = false) {
   const meta = [
     node.type,
     node.source || (node.sources || [])[0] || "",
-    node.track?.year || "",
+    node.track?.releaseDate || node.track?.year || "",
     node.track?.durationMs ? formatDuration(node.track.durationMs) : ""
   ].filter(Boolean).join(" - ");
   return `
@@ -703,10 +722,10 @@ function setRabbitPrompt(prompt) {
   const mood = document.querySelector("[name='mood']");
   const years = document.querySelector("[name='years']");
   const count = document.querySelector("[name='count']");
-  if (genres && !genres.value.trim()) genres.value = "progressive house, melodic house, deep progressive, high-detail electronic";
-  if (mood && !mood.value.trim()) mood.value = "deep, hypnotic, detailed, less obvious";
-  if (years && !years.value.trim()) years.value = "2020-2026";
-  if (count && !count.value.trim()) count.value = "12";
+  if (genres && !genres.value.trim()) genres.value = "";
+  if (mood && !mood.value.trim()) mood.value = "";
+  if (years && !years.value.trim()) years.value = "";
+  if (count && !count.value.trim()) count.value = "";
   document.querySelector(".composer")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -881,6 +900,47 @@ function scoreBreakdownHtml(track) {
   `;
 }
 
+function matchSplitHtml(track) {
+  const breakdown = track.scoreBreakdown || {};
+  const prompt = breakdown.promptMatch || track.promptMatch || {};
+  const taste = breakdown.tasteMatch || track.tasteMatch || {};
+  const genre = breakdown.matchGenre || track.matchGenre || "";
+  const why = Array.isArray(breakdown.matchWhy) && breakdown.matchWhy.length
+    ? breakdown.matchWhy
+    : (Array.isArray(track.matchWhy) ? track.matchWhy : []);
+  const hasPrompt = prompt.percent !== undefined && prompt.percent !== null && prompt.percent !== "";
+  const hasTaste = taste.percent !== undefined && taste.percent !== null && taste.percent !== "";
+  if (!hasPrompt && !hasTaste && !genre && !why.length) return "";
+
+  return `
+    <div class="matchInsight">
+      <div class="matchMeters">
+        ${hasPrompt ? `
+          <div class="matchMeter prompt">
+            <span>Prompt Match</span>
+            <strong>${escapeHtml(prompt.percent)}%</strong>
+            ${prompt.label ? `<em>${escapeHtml(prompt.label)}</em>` : ""}
+          </div>
+        ` : ""}
+        ${hasTaste ? `
+          <div class="matchMeter taste">
+            <span>Taste Match</span>
+            <strong>${escapeHtml(taste.percent)}%</strong>
+            ${taste.label ? `<em>${escapeHtml(taste.label)}</em>` : ""}
+          </div>
+        ` : ""}
+      </div>
+      ${genre ? `<p class="matchGenre"><span>Genre:</span> <strong>${escapeHtml(genre)}</strong></p>` : ""}
+      ${why.length ? `
+        <div class="matchWhy">
+          <span>Why:</span>
+          <ul>${why.slice(0, 5).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
 function whyMatchedHtml(track) {
   const bullets = Array.isArray(track.why) && track.why.length
     ? track.why
@@ -945,6 +1005,54 @@ function showQueueReport(result = null) {
   report.innerHTML = queueReportHtml(result);
 }
 
+function intentListValue(value, fallback = "not specified") {
+  if (Array.isArray(value)) return value.length ? value.join(", ") : fallback;
+  const text = String(value || "").trim();
+  return text || fallback;
+}
+
+function intentDebugHtml(intent = {}) {
+  const rows = [
+    ["Requested genre", intent.requestedGenre || "open-ended"],
+    ["Requested vibe", intent.requestedVibe || "not specified"],
+    ["Era / date range", intent.requestedEraDateRange || "not specified"],
+    ["Requested length", intent.requestedLength || "not specified"],
+    ["Artist seed", intentListValue(intent.requestedArtists, "none selected")],
+    ["Labels", intentListValue(intent.requestedLabels, "none selected")],
+    ["Scoring mode", intent.scoringModeLabel || "Taste Guided"],
+    ["Learned taste", intent.learnedTaste || "lightly"],
+    ["Progressive bias", intent.progressiveBias || "off unless explicitly requested"]
+  ];
+  return `
+    <div class="intentDebugCard">
+      <div class="intentDebugHead">
+        <span>Intent Parsed</span>
+        <strong>${escapeHtml(intent.scoringModeLabel || "Taste Guided")}</strong>
+      </div>
+      <div class="intentDebugGrid">
+        ${rows.map(([label, value]) => `
+          <p>
+            <span>${escapeHtml(label)}</span>
+            <b>${escapeHtml(value)}</b>
+          </p>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function showIntentDebug(intent = null) {
+  const panel = $("#intentDebug");
+  if (!panel) return;
+  if (!intent) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  panel.hidden = false;
+  panel.innerHTML = intentDebugHtml(intent);
+}
+
 function cleanRenderedArtifacts(root) {
   root.querySelectorAll(".trackMeta").forEach((element) => {
     element.textContent = element.textContent.replace(/\s*\u00e2\u20ac\u00a2\s*/g, " - ");
@@ -952,6 +1060,8 @@ function cleanRenderedArtifacts(root) {
 }
 
 function emptyResultHtml(reason, verification = {}) {
+  const modelErrorText = String(verification.modelError || "");
+  const contextLimitHit = /\b(?:context|token|tokens|maximum context|too many|too large|exceed|exceeded|length)\b/i.test(modelErrorText);
   const issues = [
     verification.discoveryError ? `TIDAL discovery: ${verification.discoveryError}` : "",
     verification.roonVerificationError ? `Roon queue verification: ${verification.roonVerificationError}` : "",
@@ -960,6 +1070,7 @@ function emptyResultHtml(reason, verification = {}) {
     verification.tidalError ? `TIDAL verification: ${verification.tidalError}` : ""
   ].filter(Boolean);
   const tips = [
+    contextLimitHit ? "The local model likely hit its context/token limit. Reduce seed playlist text, lower requested tracks, or start a fresh Generate run with less reference data." : "",
     verification.yearRange ? "Strict year ranges need reliable TIDAL release-year metadata." : "",
     verification.minScore ? "Try lowering Minimum match one step if you want more output." : "",
     "Try a broader seed artist, label, or year range if the run was too narrow."
@@ -975,6 +1086,7 @@ function emptyResultHtml(reason, verification = {}) {
           <ul>${issues.map((issue) => `<li>${escapeHtml(issue)}</li>`).join("")}</ul>
         </div>
       ` : ""}
+      ${contextLimitHit ? "<p><strong>Context limit hit:</strong> The Rabbit Hole starts each Generate request fresh, so trim the prompt/reference payload and run it again.</p>" : ""}
       <div>
         <span>Try next</span>
         <ul>${tips.map((tip) => `<li>${escapeHtml(tip)}</li>`).join("")}</ul>
@@ -988,7 +1100,7 @@ function trackCardHtml(track, index) {
   const saved = isSavedCandidate(track);
   const meta = [
     track.artist,
-    track.year || "",
+    track.releaseDate || track.tidal?.releaseDate || track.year || "",
     track.durationMs ? formatDuration(track.durationMs) : ""
   ].filter(Boolean).join(" - ");
   return `
@@ -997,6 +1109,7 @@ function trackCardHtml(track, index) {
         <strong class="trackTitle">${index + 1}. ${escapeHtml(track.title)}</strong>
         <span class="trackMeta">${escapeHtml(meta)}</span>
         <p class="trackLabel">${label ? escapeHtml(label) : "Label unavailable"}</p>
+        ${matchSplitHtml(track)}
         ${scoreBreakdownHtml(track)}
         ${whyMatchedHtml(track)}
         <p class="sourceLine">Source: <strong>${escapeHtml(track.discoverySource || "TIDAL search")}</strong></p>
@@ -1008,6 +1121,7 @@ function trackCardHtml(track, index) {
       <div class="trackActions">
         ${track.tidal?.tidalUrl ? `<a class="buttonLink" href="${escapeHtml(track.tidal.tidalUrl)}" target="_blank" rel="noreferrer">TIDAL</a>` : ""}
         <button data-save-track='${escapeHtml(JSON.stringify(track))}' ${saved ? "disabled" : ""}>${saved ? "Saved" : "Save"}</button>
+        <button data-queue-next='${escapeHtml(JSON.stringify(track))}'>Add Next</button>
         <button data-track='${escapeHtml(JSON.stringify(track))}'>Play Roon</button>
       </div>
     </div>
@@ -1021,6 +1135,7 @@ function renderResults(result = {}) {
   };
   state.lastTracks = state.lastResult.tracks || [];
   $("#queueAll").disabled = !state.lastTracks.length;
+  $("#queueAllNext").disabled = !state.lastTracks.length;
   $("#copyList").disabled = !state.lastTracks.length;
   $("#exportCsv").disabled = !state.lastTracks.length;
 
@@ -1055,6 +1170,7 @@ function renderResults(result = {}) {
     ? state.lastTracks.map(trackCardHtml).join("")
     : emptyResultHtml(emptyReason, state.lastResult.verification || {});
   showQueueReport(null);
+  showIntentDebug(state.lastResult.verification?.intent || null);
   cleanRenderedArtifacts($("#tracks"));
   updateNowDiscoveryTools(activeZone());
 }
@@ -1063,17 +1179,12 @@ function applySession(session = {}) {
   if (!session.updatedAt) return;
   state.sessionUpdatedAt = session.updatedAt;
   const options = session.options || {};
-  for (const field of ["request", "reference", "genres", "years", "mood", "language", "count", "minScore"]) {
+  for (const field of ["request"]) {
     const element = document.querySelector(`[name="${field}"]`) || $(`#${field}`);
     const value = options[field];
     if (element && typeof value !== "object" && value !== undefined && value !== null) {
       element.value = value;
     }
-  }
-
-  if (options.reference || options.genres || options.years || options.mood || options.language) {
-    const advanced = document.querySelector(".advanced");
-    if (advanced) advanced.open = true;
   }
 
   if (session.result?.verification?.roonQueueable) {
@@ -1087,6 +1198,7 @@ function applySession(session = {}) {
     $("#resultTitle").textContent = "Previous results need Roon verification";
     $("#tracks").innerHTML = "<p class=\"muted\">Generate again to rebuild this list with strict TIDAL plus Roon verification. Old TIDAL-only session results are hidden so they do not look playable.</p>";
     showQueueReport(null);
+    showIntentDebug(null);
   }
 }
 
@@ -1099,6 +1211,17 @@ function applyAppState(app = {}) {
   if (!app) return;
   state.memory = app.memory || state.memory;
   renderMemoryStatus();
+
+  const llm = app.llm || {};
+  const systemTag = $("#systemTag");
+  if (systemTag) {
+    const provider = String(llm.label || "LOCAL MODEL").toUpperCase();
+    const model = llm.model ? ` - ${String(llm.model).toUpperCase()}` : "";
+    systemTag.textContent = `${provider}${model} - TIDAL - ROON MATCHING: STRICT`;
+  }
+  if (!state.llmStatus && llm.label) {
+    renderLlmStatus({ ...llm, checking: true });
+  }
 
   const feedbackMap = feedbackMapFromServer(app.feedback || {});
   const feedbackVersion = Object.entries(feedbackMap)
@@ -1127,6 +1250,73 @@ function applyAppState(app = {}) {
   const session = app.session || {};
   if (session.updatedAt && session.updatedAt !== state.sessionUpdatedAt) {
     applySession(session);
+  }
+}
+
+function renderLlmStatus(status = {}) {
+  const pill = $("#llmStatus");
+  if (!pill) return;
+  state.llmStatus = status;
+  const label = String(status.label || "Local model");
+  const model = status.model ? ` ${String(status.model).replace(/^qwen\//i, "")}` : "";
+  const online = Boolean(status.online && status.loaded !== false);
+  const checking = Boolean(status.checking && !status.reachable && status.loaded !== false);
+  pill.classList.toggle("statusOffline", !online && !checking);
+  pill.classList.toggle("statusUnknown", checking);
+  pill.title = status.message || "";
+  pill.textContent = online
+    ? `${label}${model}`
+    : (status.reachable && status.loaded === false ? `${label}: model not loaded` : `${label}: offline`);
+}
+
+function setCoverImage(cover, urls = []) {
+  const candidates = urls.map((url) => String(url || "").trim()).filter(Boolean);
+  const signature = candidates.join("\n");
+  if (cover.dataset.coverSignature === signature) return;
+  cover.dataset.coverSignature = signature;
+
+  if (!candidates.length) {
+    cover.style.backgroundImage = "";
+    cover.classList.remove("hasArt");
+    return;
+  }
+
+  const tryCandidate = (index) => {
+    if (cover.dataset.coverSignature !== signature) return;
+    const url = candidates[index];
+    if (!url) {
+      cover.style.backgroundImage = "";
+      cover.classList.remove("hasArt");
+      return;
+    }
+
+    const image = new Image();
+    image.onload = () => {
+      if (cover.dataset.coverSignature !== signature) return;
+      cover.style.backgroundImage = `url("${url.replace(/"/g, "%22")}")`;
+      cover.classList.add("hasArt");
+    };
+    image.onerror = () => tryCandidate(index + 1);
+    image.src = url;
+  };
+
+  tryCandidate(0);
+}
+
+async function refreshLlmStatus() {
+  const current = state.llmStatus || {};
+  if (!current.online && !current.reachable) renderLlmStatus({ ...current, checking: true, label: current.label || "Local model" });
+  try {
+    renderLlmStatus(await getJson("/api/llm-status"));
+  } catch (error) {
+    renderLlmStatus({
+      ...(state.llmStatus || {}),
+      online: false,
+      reachable: false,
+      loaded: false,
+      message: error.message,
+      label: state.llmStatus?.label || "Local model"
+    });
   }
 }
 
@@ -1180,16 +1370,10 @@ function renderState(payload) {
   }
 
   const cover = $("#cover");
-  if (now?.radio_enrichment?.imageUrl) {
-    cover.style.backgroundImage = `url("${String(now.radio_enrichment.imageUrl).replace(/"/g, "%22")}")`;
-    cover.classList.add("hasArt");
-  } else if (now?.image_key) {
-    cover.style.backgroundImage = `url("/api/roon/image/${encodeURIComponent(now.image_key)}?width=360&height=360")`;
-    cover.classList.add("hasArt");
-  } else {
-    cover.style.backgroundImage = "";
-    cover.classList.remove("hasArt");
-  }
+  setCoverImage(cover, [
+    now?.radio_enrichment?.imageUrl,
+    !now?.radio_lookup && now?.image_key ? `/api/roon/image/${encodeURIComponent(now.image_key)}?width=360&height=360` : ""
+  ]);
 
   const outputs = $("#outputs");
   if (outputs) {
@@ -1212,9 +1396,13 @@ async function queueTrackList(tracks, button, options = {}) {
   if (!tracks.length) return alert("There are no tracks to queue.");
 
   const originalText = button.textContent;
+  const mode = options.mode || "append";
+  const nextMode = mode === "next";
   button.disabled = true;
   button.textContent = "Adding...";
-  $("#busy").textContent = `Adding ${tracks.length} tracks to the existing Roon queue...`;
+  $("#busy").textContent = nextMode
+    ? `Adding ${tracks.length} track${tracks.length === 1 ? "" : "s"} next in the Roon queue...`
+    : `Adding ${tracks.length} tracks to the existing Roon queue...`;
 
   try {
     const result = await api("/api/roon/queue-tracks", {
@@ -1222,13 +1410,16 @@ async function queueTrackList(tracks, button, options = {}) {
       tracks,
       alternates: options.alternates || [],
       targetCount: options.targetCount || tracks.length,
-      mode: "append"
+      mode
     });
     console.info("Roon queue result", result);
-    button.textContent = result.failedCount ? `Added ${result.queuedCount}/${result.requested}` : "Added";
+    button.textContent = result.failedCount
+      ? `Added ${result.queuedCount}/${result.requested}`
+      : (nextMode ? "Added next" : "Added");
     const notes = [];
     if (result.shuffleDisabled) notes.push("Shuffle turned off");
-    if (result.appendOnly) notes.push("Added to existing queue");
+    if (result.topOfQueue) notes.push("Added next after the current track");
+    else if (result.appendOnly) notes.push("Added to existing queue");
     if (result.startReset?.reset) notes.push("Started at 0:00");
     if (result.startReset && !result.startReset.reset) notes.push(result.startReset.error || "Could not reset start position");
     if (result.warning) notes.push(result.warning);
@@ -1303,19 +1494,21 @@ async function refreshSaved() {
 function renderSaved() {
   $("#savedTitle").textContent = `${state.savedTracks.length} playlist candidate${state.savedTracks.length === 1 ? "" : "s"}`;
   $("#queueSaved").disabled = !state.savedTracks.length;
+  $("#queueSavedNext").disabled = !state.savedTracks.length;
   $("#copySaved").disabled = !state.savedTracks.length;
   $("#exportSaved").disabled = !state.savedTracks.length;
   $("#savedTracks").innerHTML = state.savedTracks.length ? state.savedTracks.map((track, index) => `
     <div class="track savedCandidate" id="saved-track-${index}">
       <div class="trackMain">
         <strong class="trackTitle">${index + 1}. ${escapeHtml(track.title)}</strong>
-        <span class="trackMeta">${escapeHtml(track.artist)}${track.year ? ` - ${escapeHtml(track.year)}` : ""}${track.durationMs ? ` - ${escapeHtml(formatDuration(track.durationMs))}` : ""}</span>
+        <span class="trackMeta">${escapeHtml(track.artist)}${track.releaseDate || track.year ? ` - ${escapeHtml(track.releaseDate || track.year)}` : ""}${track.durationMs ? ` - ${escapeHtml(formatDuration(track.durationMs))}` : ""}</span>
         ${track.score ? compactScoreBadgeHtml(track) : ""}
         ${track.tidal?.tidalUrl ? `<p class="muted">TIDAL: <a href="${escapeHtml(track.tidal.tidalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(track.tidal.title || track.title)}</a></p>` : ""}
       </div>
       <div class="trackActions">
         ${track.tidal?.tidalUrl ? `<a class="buttonLink" href="${escapeHtml(track.tidal.tidalUrl)}" target="_blank" rel="noreferrer">TIDAL</a>` : ""}
         <button data-queue-saved="${index}">Queue</button>
+        <button data-queue-next-saved="${index}">Add Next</button>
         <button data-play-saved="${index}">Play Roon</button>
         <button data-remove-saved="${escapeHtml(track.key)}">Remove</button>
       </div>
@@ -1595,10 +1788,12 @@ $("#tastePrompt").addEventListener("click", () => {
   const genres = document.querySelector("[name='genres']");
   const mood = document.querySelector("[name='mood']");
   const count = document.querySelector("[name='count']");
+  const scoringMode = document.querySelector("[name='scoringMode']");
   request.value = "find tracks that match my current taste profile, but go deeper, less obvious, and avoid repeats";
-  genres.value = "progressive house, melodic house, deep progressive, progressive trance";
-  mood.value = "hypnotic, detailed, driving, high-detail";
-  count.value = count.value || "12";
+  genres.value = "";
+  mood.value = "";
+  count.value = "";
+  if (scoringMode) scoringMode.value = "";
   setActiveView("player");
   request.focus();
 });
@@ -1649,30 +1844,59 @@ document.querySelectorAll("[data-preset]").forEach((button) => {
     const genres = document.querySelector("[name='genres']");
     const mood = document.querySelector("[name='mood']");
     const count = document.querySelector("[name='count']");
+    const scoringMode = document.querySelector("[name='scoringMode']");
+    const releasePreset = $("#releasePreset");
 
     if (button.dataset.preset === "now" && now?.title) {
-      request.value = `find me high-detail progressive tracks like ${now.artist} - ${now.title}`;
-      genres.value = genres.value || "progressive house, melodic house, deep progressive";
-      mood.value = mood.value || "hypnotic, detailed, driving";
+      request.value = `find tracks like ${now.artist} - ${now.title}, but deeper and less obvious`;
+      mood.value = "";
+      if (scoringMode) scoringMode.value = "";
     }
 
     if (button.dataset.preset === "artist") {
       const artist = now?.artist || "";
       request.value = artist
-        ? `discover deeper progressive tracks around ${artist}, less obvious and club-ready`
-        : "discover deeper progressive tracks from a scene-relevant artist";
-      genres.value = genres.value || "progressive house, melodic house";
-      mood.value = mood.value || "deep, hypnotic, detailed";
+        ? `find tracks like ${artist}, but deeper and less obvious`
+        : "find music from an artist or scene I can explore";
+      mood.value = "";
+      if (scoringMode) scoringMode.value = "";
     }
 
     if (button.dataset.preset === "long") {
-      request.value = "find progressive house and progressive trance tracks with detailed production";
-      genres.value = "progressive house, progressive trance, deep progressive";
-      mood.value = "hypnotic, driving, high-detail";
-      count.value = count.value || "12";
+      request.value = "find long, detailed electronic tracks released this week";
+      genres.value = "";
+      mood.value = "";
+      count.value = "";
+      if (releasePreset) releasePreset.value = "";
+      if (scoringMode) scoringMode.value = "";
     }
   });
 });
+
+$("#releasePreset")?.addEventListener("change", (event) => {
+  if (!event.target.value) return;
+  for (const name of ["releaseExactDate", "releaseStartDate", "releaseEndDate"]) {
+    const input = document.querySelector(`[name='${name}']`);
+    if (input) input.value = "";
+  }
+});
+
+for (const name of ["releaseExactDate", "releaseStartDate", "releaseEndDate"]) {
+  document.querySelector(`[name='${name}']`)?.addEventListener("input", (event) => {
+    if (!event.target.value) return;
+    const quick = $("#releasePreset");
+    if (quick) quick.value = "";
+    if (name === "releaseExactDate") {
+      for (const rangeName of ["releaseStartDate", "releaseEndDate"]) {
+        const input = document.querySelector(`[name='${rangeName}']`);
+        if (input) input.value = "";
+      }
+    } else {
+      const exact = document.querySelector("[name='releaseExactDate']");
+      if (exact) exact.value = "";
+    }
+  });
+}
 
 $("#refreshPlaylists").addEventListener("click", refreshPlaylists);
 
@@ -1704,6 +1928,22 @@ $("#playlistForm").addEventListener("submit", async (event) => {
   const submitButton = event.submitter || event.target.querySelector("button[type='submit']");
   const form = new FormData(event.target);
   const body = Object.fromEntries(form.entries());
+  for (const field of [
+    "reference",
+    "genres",
+    "years",
+    "mood",
+    "language",
+    "count",
+    "scoringMode",
+    "minScore",
+    "releasePreset",
+    "releaseExactDate",
+    "releaseStartDate",
+    "releaseEndDate"
+  ]) {
+    if (body[field] !== undefined && !String(body[field] || "").trim()) delete body[field];
+  }
   const zone = activeZone();
   body.zoneId = zone?.zone_id || "";
   body.nowPlaying = summarizeNowPlaying(zone);
@@ -1715,8 +1955,10 @@ $("#playlistForm").addEventListener("submit", async (event) => {
   state.lastTracks = [];
   state.lastResult = null;
   $("#queueAll").disabled = true;
+  $("#queueAllNext").disabled = true;
   $("#copyList").disabled = true;
   $("#exportCsv").disabled = true;
+  showIntentDebug(null);
   $("#tracks").innerHTML = `
     <div class="emptyState isWorking">
       <strong>Searching Roon first, then TIDAL metadata.</strong>
@@ -1755,6 +1997,14 @@ $("#queueAll").addEventListener("click", () => {
   });
 });
 
+$("#queueAllNext").addEventListener("click", () => {
+  queueTrackList(state.lastTracks, $("#queueAllNext"), {
+    alternates: state.lastResult?.alternates || [],
+    targetCount: state.lastTracks.length,
+    mode: "next"
+  });
+});
+
 $("#copySaved").addEventListener("click", async () => {
   await navigator.clipboard.writeText(plainList(state.savedTracks));
   $("#copySaved").textContent = "Copied";
@@ -1769,6 +2019,12 @@ $("#exportSaved").addEventListener("click", () => {
 
 $("#queueSaved").addEventListener("click", () => {
   queueTrackList(state.savedTracks, $("#queueSaved"));
+});
+
+$("#queueSavedNext").addEventListener("click", () => {
+  queueTrackList(state.savedTracks, $("#queueSavedNext"), {
+    mode: "next"
+  });
 });
 
 $("#purgeMemory").addEventListener("click", async (event) => {
@@ -1834,6 +2090,14 @@ $("#tracks").addEventListener("click", async (event) => {
     return;
   }
 
+  if (event.target.dataset.queueNext) {
+    await queueTrackList([JSON.parse(event.target.dataset.queueNext)], event.target, {
+      targetCount: 1,
+      mode: "next"
+    });
+    return;
+  }
+
   if (!event.target.dataset.track) return;
   await playTrackInRoon(JSON.parse(event.target.dataset.track), event.target);
 });
@@ -1843,6 +2107,13 @@ $("#savedTracks").addEventListener("click", async (event) => {
     const track = state.savedTracks[Number(event.target.dataset.queueSaved)];
     if (!track) return;
     await queueTrackList([track], event.target, { targetCount: 1 });
+    return;
+  }
+
+  if (event.target.dataset.queueNextSaved) {
+    const track = state.savedTracks[Number(event.target.dataset.queueNextSaved)];
+    if (!track) return;
+    await queueTrackList([track], event.target, { targetCount: 1, mode: "next" });
     return;
   }
 
@@ -1868,6 +2139,10 @@ events.onmessage = (event) => {
 };
 applyPlayerMaximized();
 refresh().catch(() => {});
+refreshLlmStatus().catch(() => {});
+setInterval(() => {
+  refreshLlmStatus().catch(() => {});
+}, 10_000);
 refreshSession().catch(() => {});
 refreshSaved().catch(() => {});
 refreshPlaylists().catch(() => {});

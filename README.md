@@ -55,6 +55,17 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=llama3.1:8b
 ```
 
+Stronger local model mode with LM Studio or llama.cpp:
+
+```env
+LLM_PROVIDER=openai-compatible
+LLM_BASE_URL=http://127.0.0.1:1234/v1
+LLM_MODEL=qwen3-32b
+LLM_API_KEY=
+```
+
+In LM Studio, load a Qwen 32B instruct model, start the local server, and copy the served model name into `LLM_MODEL` if it differs from the example.
+
 Optional hosted model fallback:
 
 ```env

@@ -7,6 +7,9 @@ const RoonApiStatus = require("node-roon-api-status");
 const RoonApiTransport = require("node-roon-api-transport");
 const { extractYearSearchTerms: extractSharedYearSearchTerms } = require("./yearRange");
 
+const STATE_UPDATE_DEBOUNCE_MS = 1000;
+const SEEK_UPDATE_EMIT_MS = 2000;
+
 function callRoon(fn) {
   return new Promise((resolve, reject) => {
     fn((error, body) => {
@@ -40,6 +43,14 @@ function actionRank(item, mode) {
     return 0;
   }
 
+  if (mode === "next") {
+    if (/\badd\s+next\b|\badd\s+to\s+next\b|\badd\s+after\b|\bplay\s+next\b/.test(title)) return 100;
+    if (/\badd\b.*\bqueue\b/.test(title)) return 70;
+    if (/^(queue|add to queue|add to play queue)$/.test(title)) return 60;
+    if (/\bqueue\b/.test(title) && !/^play queue$/.test(title)) return 50;
+    return 0;
+  }
+
   if (/^(play|play now|play from here)$/.test(title)) return 100;
   if (/\bplay\b/.test(title) && !/\bplay\s+queue\b/.test(title)) return 80;
   if (/\badd\s+to\s+queue\b|\bqueue\b|\badd\s+next\b/.test(title)) return 20;
@@ -68,6 +79,13 @@ function normalizeLookupText(value) {
 
 function cleanLookupText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function requestUsesNowPlayingAsSeed(options = {}) {
+  const request = cleanLookupText(options.request);
+  const text = normalizeLookupText(`${options.request || ""} ${options.reference || ""}`);
+  if (!request && !cleanLookupText(options.genres)) return true;
+  return /\b(?:now playing|current roon|current track|current song|what is playing|this track|this song|use current|like this|like what is playing|around what is playing)\b/.test(text);
 }
 
 function splitLookupArtists(value) {
@@ -185,6 +203,23 @@ function splitDiscoveryTerms(value) {
     .slice(0, 8);
 }
 
+function pruneBroadDiscoveryTerms(terms = []) {
+  const normalized = new Set(terms.map(normalizeLookupText));
+  const remove = new Set();
+  function removeTerms(values = []) {
+    for (const value of values) remove.add(normalizeLookupText(value));
+  }
+
+  if (normalized.has("tech house")) removeTerms(["house", "deep house", "melodic house", "organic house"]);
+  if (normalized.has("progressive house")) removeTerms(["house"]);
+  if (normalized.has("melodic house")) removeTerms(["house"]);
+  if (normalized.has("deep house")) removeTerms(["house"]);
+  if (normalized.has("melodic techno")) removeTerms(["techno"]);
+  if (normalized.has("dark ambient")) removeTerms(["ambient", "downtempo"]);
+
+  return terms.filter((term) => !remove.has(normalizeLookupText(term)));
+}
+
 function extractReferenceTracks(value, limit = 80) {
   const tracks = [];
   for (const line of String(value || "").split(/\r?\n/)) {
@@ -216,9 +251,16 @@ function derivedGenreTerms(options = {}) {
     "progressive trance",
     "melodic house",
     "melodic techno",
+    "tech house",
+    "minimal tech house",
     "deep house",
     "organic house",
+    "dark ambient",
+    "downtempo",
+    "cinematic electronic",
     "breakbeat",
+    "breaks",
+    "underground breaks",
     "new wave",
     "synth pop",
     "synthwave",
@@ -235,17 +277,27 @@ function derivedGenreTerms(options = {}) {
     if (text.includes(normalizeLookupText(genre))) terms.push(genre);
   }
   if (!terms.length && options.request) terms.push(cleanLookupText(options.request).slice(0, 80));
-  return Array.from(new Set(terms.map(cleanLookupText).filter(Boolean))).slice(0, 8);
+  return Array.from(new Set(pruneBroadDiscoveryTerms(terms).map(cleanLookupText).filter(Boolean))).slice(0, 8);
 }
 
 function createRoonDiscoveryQueries(options = {}) {
+  const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
+  const planQueries = Array.isArray(plan.searchQueries) ? plan.searchQueries.map(cleanLookupText).filter(Boolean) : [];
+  const planArtists = Array.from(new Set([
+    ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
+    ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : [])
+  ].map(cleanLookupText).filter(Boolean))).slice(0, 24);
+  const planLabels = Array.isArray(plan.candidateLabels) ? plan.candidateLabels.map(cleanLookupText).filter(Boolean).slice(0, 24) : [];
+  const planGenres = Array.isArray(plan.targetGenres) ? plan.targetGenres.map(cleanLookupText).filter(Boolean).slice(0, 12) : [];
+  const planVibes = Array.isArray(plan.vibeTerms) ? plan.vibeTerms.map(cleanLookupText).filter(Boolean).slice(0, 12) : [];
   const request = cleanLookupText(options.request);
-  const genres = derivedGenreTerms(options);
-  const moods = splitDiscoveryTerms(options.mood);
+  const genres = Array.from(new Set([...planGenres, ...derivedGenreTerms(options)].map(cleanLookupText).filter(Boolean))).slice(0, 12);
+  const moods = Array.from(new Set([...planVibes, ...splitDiscoveryTerms(options.mood)].map(cleanLookupText).filter(Boolean))).slice(0, 16);
   const years = extractYearSearchTerms(options.years || request);
   const references = extractReferenceTracks(options.reference, 100);
   const seedArtists = Array.from(new Set([
-    options.nowPlaying?.artist,
+    ...planArtists,
+    ...(requestUsesNowPlayingAsSeed(options) ? [options.nowPlaying?.artist] : []),
     ...references.map((track) => track.artist)
   ].map(cleanLookupText).filter(Boolean))).slice(0, 18);
   const progressiveText = normalizeLookupText(`${request} ${genres.join(" ")}`);
@@ -290,6 +342,8 @@ function createRoonDiscoveryQueries(options = {}) {
     if (query && query.length >= 3) queries.push(query);
   }
 
+  for (const query of planQueries.slice(0, 18)) add(query);
+
   for (const artist of seedArtists.slice(0, 12)) {
     for (const genre of genres.slice(0, 3)) add(`${artist} ${genre}`);
     for (const mood of moods.slice(0, 2)) add(`${artist} ${mood}`);
@@ -304,6 +358,13 @@ function createRoonDiscoveryQueries(options = {}) {
   for (const label of sceneLabels.slice(0, 10)) {
     for (const genre of genres.slice(0, 2)) add(`${label} ${genre}`);
     for (const year of years.slice(0, 2)) add(`${label} ${year}`);
+  }
+
+  for (const label of planLabels.slice(0, 12)) {
+    for (const genre of genres.slice(0, 3)) add(`${label} ${genre}`);
+    for (const mood of moods.slice(0, 2)) add(`${label} ${mood}`);
+    for (const year of years.slice(0, 2)) add(`${label} ${year}`);
+    add(label);
   }
 
   for (const track of references.slice(0, 12)) {
@@ -321,6 +382,31 @@ function createRoonDiscoveryQueries(options = {}) {
   add(cleanLookupText(`${request} ${options.genres || ""} ${options.mood || ""}`));
 
   return Array.from(new Set(queries.map(cleanLookupText).filter(Boolean))).slice(0, 72);
+}
+
+function createModelCandidateQueries(options = {}) {
+  const candidates = Array.isArray(options.llmCandidates) ? options.llmCandidates : [];
+  const queries = [];
+
+  function add(value) {
+    const query = cleanLookupText(value);
+    if (query && query.length >= 3) queries.push(query);
+  }
+
+  for (const candidate of candidates) {
+    const artist = cleanLookupText(candidate.artist);
+    const title = cleanLookupText(candidate.title);
+    const year = cleanLookupText(candidate.year);
+    if (artist && title) {
+      add(`${artist} ${title}`);
+      add(`${title} ${artist}`);
+      if (year) add(`${artist} ${title} ${year}`);
+    } else {
+      add(artist || title);
+    }
+  }
+
+  return Array.from(new Set(queries.map(cleanLookupText).filter(Boolean))).slice(0, 80);
 }
 
 function roonDiscoveryKey(track = {}) {
@@ -515,6 +601,17 @@ function queueItemSummary(item = {}) {
   };
 }
 
+function queueSignature(items = []) {
+  return JSON.stringify((items || []).map((item) => ({
+    id: item.id || "",
+    title: item.title || "",
+    subtitle: item.subtitle || "",
+    album: item.album || "",
+    imageKey: item.imageKey || "",
+    length: item.length || ""
+  })));
+}
+
 function queueItemsFromMessage(msg = {}) {
   for (const key of ["items", "queue", "queue_items", "items_added", "items_changed"]) {
     if (Array.isArray(msg[key])) return msg[key];
@@ -606,6 +703,9 @@ class RoonClient extends EventEmitter {
     this.playlistsSession = null;
     this.queues = new Map();
     this.queueSubscriptions = new Set();
+    this.queueSignatures = new Map();
+    this.zoneEmitTimer = null;
+    this.lastSeekEmitAt = 0;
   }
 
   start() {
@@ -636,17 +736,22 @@ class RoonClient extends EventEmitter {
     this.status.set_status(`Connected to ${core.display_name}`, false);
 
     this.transport.subscribe_zones((cmd, data) => {
+      let contentChanged = false;
+      let seekChanged = false;
+
       if (cmd === "Subscribed") {
         this.zones.clear();
         for (const zone of data.zones || []) {
           this.zones.set(zone.zone_id, zone);
           this.subscribeQueue(zone.zone_id);
         }
+        contentChanged = true;
       }
       if (cmd === "Changed") {
         for (const zone of data.zones_added || []) {
           this.zones.set(zone.zone_id, zone);
           this.subscribeQueue(zone.zone_id);
+          contentChanged = true;
         }
         for (const zone of data.zones_changed || []) {
           this.zones.set(zone.zone_id, {
@@ -654,23 +759,33 @@ class RoonClient extends EventEmitter {
             ...zone
           });
           this.subscribeQueue(zone.zone_id);
+          contentChanged = true;
         }
         for (const seek of data.zones_seek_changed || []) {
           const zone = this.zones.get(seek.zone_id);
           if (!zone) continue;
-          if (zone.now_playing) zone.now_playing.seek_position = seek.seek_position;
-          zone.queue_items_remaining = seek.queue_items_remaining;
-          zone.queue_time_remaining = seek.queue_time_remaining;
+          if (zone.now_playing && Object.prototype.hasOwnProperty.call(seek, "seek_position")) {
+            zone.now_playing.seek_position = seek.seek_position;
+          }
+          if (Object.prototype.hasOwnProperty.call(seek, "queue_items_remaining")) {
+            zone.queue_items_remaining = seek.queue_items_remaining;
+          }
+          if (Object.prototype.hasOwnProperty.call(seek, "queue_time_remaining")) {
+            zone.queue_time_remaining = seek.queue_time_remaining;
+          }
+          seekChanged = true;
         }
         for (const zone of data.zones_removed || []) {
           this.zones.delete(zone.zone_id);
           this.queues.delete(zone.zone_id);
+          this.queueSignatures.delete(zone.zone_id);
+          contentChanged = true;
         }
       }
-      this.emit("zones", this.getState());
+      this.scheduleZonesEmit({ contentChanged, seekChanged });
     });
 
-    this.emit("zones", this.getState());
+    this.scheduleZonesEmit({ contentChanged: true });
   }
 
   handleUnpaired() {
@@ -680,8 +795,48 @@ class RoonClient extends EventEmitter {
     this.zones.clear();
     this.queues.clear();
     this.queueSubscriptions.clear();
+    this.queueSignatures.clear();
+    this.cancelZonesEmit();
     this.status?.set_status("Disconnected from Roon", true);
+    this.emitZonesNow();
+  }
+
+  cancelZonesEmit() {
+    if (this.zoneEmitTimer) clearTimeout(this.zoneEmitTimer);
+    this.zoneEmitTimer = null;
+  }
+
+  scheduleZonesEmit({ contentChanged = false, seekChanged = false } = {}) {
+    if (contentChanged) {
+      this.cancelZonesEmit();
+      this.zoneEmitTimer = setTimeout(() => this.emitZonesNow(), STATE_UPDATE_DEBOUNCE_MS);
+      return;
+    }
+
+    if (!seekChanged) return;
+    const now = Date.now();
+    if (now - this.lastSeekEmitAt < SEEK_UPDATE_EMIT_MS) return;
+    this.lastSeekEmitAt = now;
+    if (!this.zoneEmitTimer) {
+      this.zoneEmitTimer = setTimeout(() => this.emitZonesNow(), STATE_UPDATE_DEBOUNCE_MS);
+    }
+  }
+
+  emitZonesNow() {
+    this.cancelZonesEmit();
     this.emit("zones", this.getState());
+  }
+
+  hasActivePlayback() {
+    for (const zone of this.zones.values()) {
+      if (zone?.state !== "playing") continue;
+      const text = [
+        zone.display_name,
+        ...(zone.outputs || []).map((output) => output.display_name)
+      ].filter(Boolean).join(" ");
+      if (/hqplayer/i.test(text)) return true;
+    }
+    return false;
   }
 
   getState() {
@@ -708,7 +863,8 @@ class RoonClient extends EventEmitter {
         if (cmd === "Unsubscribed") {
           this.queues.delete(zoneId);
           this.queueSubscriptions.delete(zoneId);
-          this.emit("zones", this.getState());
+          this.queueSignatures.delete(zoneId);
+          this.scheduleZonesEmit({ contentChanged: true });
           return;
         }
 
@@ -720,6 +876,9 @@ class RoonClient extends EventEmitter {
         const items = rawItems.length
           ? rawItems.map(queueItemSummary).filter((item) => item.title || item.subtitle)
           : changedItems;
+        const signature = queueSignature(items);
+        if (signature === this.queueSignatures.get(zoneId)) return;
+        this.queueSignatures.set(zoneId, signature);
         this.queues.set(zoneId, {
           updatedAt: Date.now(),
           response: cmd,
@@ -727,7 +886,7 @@ class RoonClient extends EventEmitter {
           rawKeys: Object.keys(msg || {}),
           changeCount: Array.isArray(msg.changes) ? msg.changes.length : 0
         });
-        this.emit("zones", this.getState());
+        this.scheduleZonesEmit({ contentChanged: true });
       });
     } catch (error) {
       this.queues.set(zoneId, {
@@ -818,20 +977,32 @@ class RoonClient extends EventEmitter {
     if (!key) throw new Error("Missing Roon image key.");
 
     const host = this.core.moo?.transport?.host || "127.0.0.1";
-    const port = this.core.registration?.http_port;
-    if (!port) throw new Error("Roon did not expose an image HTTP port.");
+    const ports = [
+      this.core.moo?.transport?.port,
+      this.core.registration?.http_port
+    ].filter(Boolean);
+    const uniquePorts = Array.from(new Set(ports));
+    if (!uniquePorts.length) throw new Error("Roon did not expose an image HTTP port.");
 
-    const url = new URL(`http://${host}:${port}/api/image/${encodeURIComponent(key)}`);
-    for (const [name, value] of Object.entries(options)) {
-      if (value !== undefined && value !== null && value !== "") url.searchParams.set(name, String(value));
+    let lastError = null;
+    for (const port of uniquePorts) {
+      const url = new URL(`http://${host}:${port}/api/image/${encodeURIComponent(key)}`);
+      for (const [name, value] of Object.entries(options)) {
+        if (value !== undefined && value !== null && value !== "") url.searchParams.set(name, String(value));
+      }
+
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Roon image request failed: HTTP ${response.status}`);
+        return {
+          contentType: response.headers.get("content-type") || options.format || "image/jpeg",
+          data: Buffer.from(await response.arrayBuffer())
+        };
+      } catch (error) {
+        lastError = error;
+      }
     }
-
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Roon image request failed: HTTP ${response.status}`);
-    return {
-      contentType: response.headers.get("content-type") || options.format || "image/jpeg",
-      data: Buffer.from(await response.arrayBuffer())
-    };
+    throw lastError || new Error("Roon image request failed.");
   }
 
   async listPlaylists() {
@@ -1131,7 +1302,11 @@ class RoonClient extends EventEmitter {
         Number(settings.candidateLimit || 0)
       )
     );
-    const queries = createRoonDiscoveryQueries(options).slice(0, Math.max(4, Math.min(72, Number(settings.maxQueries || 28))));
+    const modelQueries = createModelCandidateQueries(options)
+      .slice(0, Math.max(0, Math.min(80, Number(settings.modelQueryLimit || 40))));
+    const fallbackQueries = createRoonDiscoveryQueries(options);
+    const queries = Array.from(new Set([...modelQueries, ...fallbackQueries].map(cleanLookupText).filter(Boolean)))
+      .slice(0, Math.max(4, Math.min(120, Number(settings.maxQueries || 28))));
     const byKey = new Map();
     const discarded = [];
     const searchSummaries = [];
@@ -1407,7 +1582,13 @@ class RoonClient extends EventEmitter {
     const primary = Array.isArray(tracks) ? tracks.slice(0, 50) : [];
     const alternates = Array.isArray(options.alternates) ? options.alternates.slice(0, 50) : [];
     const targetCount = Math.min(50, Math.max(1, Number(options.targetCount || primary.length || 0)));
-    const requested = [...primary.map((track) => ({ track, isAlternate: false })), ...alternates.map((track) => ({ track, isAlternate: true }))];
+    const requestedTracks = options.mode === "next"
+      ? primary.slice().reverse()
+      : primary;
+    const requested = [
+      ...requestedTracks.map((track) => ({ track, isAlternate: false })),
+      ...alternates.map((track) => ({ track, isAlternate: true }))
+    ];
     if (!primary.length) throw new Error("No tracks were provided to queue.");
 
     const appendOnly = options.mode !== "replace";
@@ -1418,6 +1599,7 @@ class RoonClient extends EventEmitter {
     let playbackStartRequested = false;
     let playbackStartError = "";
     let addNextUsed = false;
+    let nextFallbackUsed = false;
     let shuffleDisabled = false;
 
     const zone = this.getZone(zoneId);
@@ -1429,11 +1611,12 @@ class RoonClient extends EventEmitter {
     for (const [index, request] of requested.entries()) {
       if (queued.length >= targetCount) break;
       const { track, isAlternate } = request;
-      const mode = appendOnly ? "queue" : (sentAny ? "queue" : "play");
+      const mode = options.mode === "next" ? "next" : (appendOnly ? "queue" : (sentAny ? "queue" : "play"));
       try {
         const result = await this.performSearchAction(track, zoneId, mode);
         if (result.success) {
           if (mode === "queue" && /add\s+next/i.test(result.action || "")) addNextUsed = true;
+          if (mode === "next" && !/(add|play)\s+(to\s+)?next|add\s+after/i.test(result.action || "")) nextFallbackUsed = true;
           const actionWasPlayback = /\bplay\b/i.test(result.action || "");
           queued.push({
             index,
@@ -1486,12 +1669,15 @@ class RoonClient extends EventEmitter {
       queuedCount: queued.length,
       failedCount: failed.length,
       appendOnly,
+      topOfQueue: options.mode === "next",
       started,
       playbackStartRequested,
       playbackStartError,
       startReset: queued.find((item) => item.startReset)?.startReset || null,
       shuffleDisabled,
-      warning: addNextUsed ? "Roon exposed Add Next instead of Add To Queue for at least one track; order may depend on Roon's queue behavior." : "",
+      warning: nextFallbackUsed
+        ? "Roon did not expose Add Next for at least one track, so a normal queue action was used."
+        : (addNextUsed ? "Roon exposed Add Next instead of Add To Queue for at least one track; order may depend on Roon's queue behavior." : ""),
       queued,
       failed
     };

@@ -257,18 +257,18 @@ function promptForEntity(entityNode, graph) {
   const relatedText = related.length ? related.join(", ") : "related artists from the graph";
 
   if (entityNode.type === "label") {
-    return `Using ${artist} as the seed artist, search ${entityNode.name} and adjacent labels for deep progressive, melodic, or high-detail electronic tracks. Prioritize tracks longer than 7 minutes when available, released after 2020, not previously suggested, and Roon-queueable.`;
+    return `Using ${artist} as the seed artist, search ${entityNode.name} and adjacent labels for deeper, less obvious tracks that fit the seed's sound. Avoid repeats and only return Roon-queueable matches.`;
   }
 
   if (entityNode.type === "artist" || entityNode.type === "remixer") {
-    return `Using ${entityNode.name} as the seed artist, search for deep progressive, melodic, or high-detail electronic tracks connected to ${labelText}. Prioritize tracks longer than 7 minutes when available, released after 2020, not previously suggested, and Roon-queueable.`;
+    return `Using ${entityNode.name} as the seed artist, search for deeper, less obvious tracks connected to ${labelText}. Follow the user's prompt intent first, avoid repeats, and only return Roon-queueable matches.`;
   }
 
   if (entityNode.type === "track" && entityNode.track) {
     return `Find tracks like ${entityNode.track.artist} - ${entityNode.track.title}, but go deeper and less obvious. Use ${labelText} and similar artists such as ${relatedText}. Avoid repeats and only return Roon-queueable matches.`;
   }
 
-  return `Using ${artist} as the seed artist, search for deep progressive, melodic, or high-detail electronic tracks from ${labelText}. Prioritize related artists such as ${relatedText}, tracks longer than 7 minutes when available, released after 2020, not previously suggested, and Roon-queueable.`;
+  return `Using ${artist} as the seed artist, search for deeper, less obvious tracks from ${labelText}. Prioritize related artists such as ${relatedText}, follow the prompt intent first, avoid repeats, and only return Roon-queueable matches.`;
 }
 
 function section(id, label, depth, items = []) {
@@ -477,7 +477,7 @@ class RabbitHoleGraph {
     graph.prompts = {
       artist: promptForEntity(entity("artist", primaryArtist), graph),
       label: labels[0] ? promptForEntity(labels[0], graph) : promptForEntity(entity("artist", primaryArtist), graph),
-      similarArtists: `Using ${primaryArtist} as the seed artist, explore related artists ${relatedArtists.slice(0, 8).map((item) => item.name).join(", ") || "from this graph"}. Prioritize deep progressive, melodic, or high-detail electronic tracks longer than 7 minutes when available, released after 2020, not previously suggested, and Roon-queueable.`,
+      similarArtists: `Using ${primaryArtist} as the seed artist, explore related artists ${relatedArtists.slice(0, 8).map((item) => item.name).join(", ") || "from this graph"}. Find deeper, less obvious tracks that fit the seed's sound, avoid repeats, and only return Roon-queueable matches.`,
       hiddenGems: `Find hidden gems connected to ${primaryArtist}, ${labels.slice(0, 5).map((item) => item.name).join(", ") || "adjacent labels"}, and ${relatedArtists.slice(0, 6).map((item) => item.name).join(", ") || "related artists"}. Avoid obvious top tracks and repeats. Only return Roon-queueable matches.`,
       graph: promptForEntity(entity("artist", primaryArtist), graph)
     };

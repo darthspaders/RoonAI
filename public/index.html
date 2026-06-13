@@ -9,15 +9,15 @@
   <body>
     <main class="shell">
       <section class="topChrome">
-        <p class="systemTag">OLLAMA - LOCAL - TIDAL - ROON MATCHING: STRICT</p>
+        <p id="systemTag" class="systemTag">LOCAL MODEL - TIDAL - ROON MATCHING: STRICT</p>
         <div class="brandMark">
           <span></span>
-          <h1>The Rabbit Hole</h1>
+          <img class="brandBanner" src="/assets/rabbit-hole-banner.jpg" alt="The Rabbit Hole">
           <span></span>
         </div>
         <div class="statusStack">
           <p id="connection" class="statusPill">Waiting for Roon...</p>
-          <p class="statusPill">Local model</p>
+          <p id="llmStatus" class="statusPill statusUnknown">Checking local model...</p>
         </div>
       </section>
 
@@ -90,11 +90,11 @@
               </div>
               <button type="submit">Generate</button>
             </div>
-            <textarea id="request" name="request" placeholder="Make me 8 tracks like what is playing now, but deeper and less obvious"></textarea>
+            <textarea id="request" name="request" placeholder="Find 90s trance, dark ambient, tracks like The Crystal Method, chill driving music, or long progressive house released this week"></textarea>
             <div class="quickActions">
               <button type="button" data-preset="now">Use current Roon track</button>
               <button type="button" data-preset="artist">Discover from artist</button>
-              <button type="button" data-preset="long">Any-length progressive</button>
+              <button type="button" data-preset="long">Long tracks this week</button>
             </div>
             <div class="playlistSeed">
               <label>Roon playlist
@@ -112,13 +112,37 @@
               <summary>Advanced</summary>
               <textarea id="reference" name="reference" class="reference" placeholder="Optional seed tracks, playlist notes, or a TIDAL playlist export. A URL alone is not enough for the local model to read the playlist yet."></textarea>
               <div class="grid">
-                <label>Genres <input name="genres" placeholder="progressive house"></label>
-                <label>Years <input name="years" placeholder="2018-2026"></label>
+                <label>Genres <input name="genres" placeholder="optional: trance, dark ambient, melodic techno"></label>
+                <label>Years / month <input name="years" placeholder="2026, May 2026, 2018-2026"></label>
                 <label>Mood <input name="mood" placeholder="hypnotic, driving"></label>
                 <label>Language <input name="language" placeholder="any"></label>
-                <label>Tracks <input name="count" type="number" min="1" max="40" value="8"></label>
+                <label>Tracks <input name="count" type="number" min="1" max="40" placeholder="optional"></label>
+                <label>Scoring mode
+                  <select name="scoringMode" id="scoringMode">
+                    <option value="" selected></option>
+                    <option value="taste-guided">Taste Guided</option>
+                    <option value="pure">Pure Search</option>
+                    <option value="explore">Explore Mode</option>
+                    <option value="similar">Similar Mode</option>
+                  </select>
+                </label>
+                <label>Release quick filter
+                  <select name="releasePreset" id="releasePreset">
+                    <option value="">Manual / prompt</option>
+                    <option value="today">Today</option>
+                    <option value="yesterday">Yesterday</option>
+                    <option value="last7">Last 7 Days</option>
+                    <option value="last30">Last 30 Days</option>
+                    <option value="last90">Last 90 Days</option>
+                    <option value="thisYear">This Year</option>
+                  </select>
+                </label>
+                <label>Exact date <input name="releaseExactDate" type="date"></label>
+                <label>Date start <input name="releaseStartDate" type="date"></label>
+                <label>Date end <input name="releaseEndDate" type="date"></label>
                 <label class="wideField">Minimum match
                   <select name="minScore" id="minScore">
+                    <option value="" selected></option>
                     <option value="0">Long shot+ / all verified</option>
                     <option value="60">Experimental+ (60+)</option>
                     <option value="70">Worth checking+ (70+)</option>
@@ -140,11 +164,13 @@
             <div class="resultActions">
               <span id="busy"></span>
               <button type="button" id="queueAll" disabled>Add all to queue</button>
+              <button type="button" id="queueAllNext" disabled>Add all next</button>
               <button type="button" id="copyList" disabled>Copy list</button>
               <button type="button" id="exportCsv" disabled>Export CSV</button>
             </div>
           </div>
           <div id="queueReport" class="queueReport" hidden></div>
+          <div id="intentDebug" class="intentDebug" hidden></div>
           <div id="tracks" class="tracks"></div>
         </section>
 
@@ -156,6 +182,7 @@
             </div>
             <div class="resultActions">
               <button type="button" id="queueSaved" disabled>Add candidates to queue</button>
+              <button type="button" id="queueSavedNext" disabled>Add candidates next</button>
               <button type="button" id="copySaved" disabled>Copy candidates</button>
               <button type="button" id="exportSaved" disabled>Export candidates</button>
               <button type="button" id="purgeMemory">Purge memory</button>
