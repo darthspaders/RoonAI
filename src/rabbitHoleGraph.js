@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 
 const CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 7;
+const CACHE_VERSION = 2;
 const USER_AGENT = "TheRabbitHole/0.1.0 (local Roon discovery app)";
 
 function cleanText(value) {
@@ -103,6 +104,38 @@ function mergeTrack(base = {}, next = {}) {
     tidal: next.tidal || base.tidal || null,
     roon: next.roon || base.roon || null
   };
+}
+
+function baseTitleForCatalogMatch(value) {
+  return normalize(String(value || "")
+    .replace(/\s*[\[(][^\])]*(?:mix|remix|edit|version|rework|dub|rerub|original|extended)[^\])]*[\])]/gi, " ")
+    .replace(/\s+/g, " "));
+}
+
+function titleConfirmsSeed(seed = {}, candidate = {}) {
+  const seedTitle = normalize(seed.title);
+  const candidateTitle = normalize(candidate.title);
+  const seedBase = baseTitleForCatalogMatch(seed.title);
+  const candidateBase = baseTitleForCatalogMatch(candidate.title);
+  return Boolean(
+    seedTitle &&
+    candidateTitle &&
+    (seedTitle === candidateTitle || (seedBase && seedBase === candidateBase))
+  );
+}
+
+function artistConfirmsSeed(seed = {}, candidate = {}) {
+  const seedArtists = splitArtists(seed.artist).map(normalize).filter(Boolean);
+  const candidateArtists = splitArtists(candidate.artist).map(normalize).filter(Boolean);
+  if (!seedArtists.length || !candidateArtists.length) return false;
+  return seedArtists.some((seedArtist) => candidateArtists.some((candidateArtist) => (
+    seedArtist === candidateArtist ||
+    (seedArtist.length >= 4 && candidateArtist.length >= 4 && (seedArtist.includes(candidateArtist) || candidateArtist.includes(seedArtist)))
+  )));
+}
+
+function catalogMatchConfirmsSeed(seed = {}, candidate = {}) {
+  return titleConfirmsSeed(seed, candidate) && artistConfirmsSeed(seed, candidate);
 }
 
 function feedbackWeight(feedback, weights = {}) {
@@ -314,6 +347,7 @@ class RabbitHoleGraph {
     const key = this.cacheKey(track);
     const entry = key ? this.cache.get(key) : null;
     if (!entry || Date.now() - Number(entry.updatedAtMs || 0) > this.ttlMs) return null;
+    if (entry.version !== CACHE_VERSION) return null;
     return {
       ...entry.graph,
       cached: true
@@ -329,6 +363,7 @@ class RabbitHoleGraph {
     for (const key of keys) {
       this.cache.set(key, {
         key,
+        version: CACHE_VERSION,
         updatedAtMs: Date.now(),
         graph
       });
@@ -344,7 +379,7 @@ class RabbitHoleGraph {
     if (tidal?.isConfigured?.() && seed.artist && seed.title) {
       try {
         const verified = await tidal.verify(seed, { strict: false });
-        if (verified) seed = mergeTrack(seed, { ...verified, tidal: verified });
+        if (verified && catalogMatchConfirmsSeed(seed, verified)) seed = mergeTrack(seed, { ...verified, tidal: verified });
       } catch {
         // Rabbit Hole can still be useful from local memory if TIDAL is slow or unavailable.
       }

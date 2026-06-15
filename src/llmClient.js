@@ -115,6 +115,7 @@ Rules:
 - Prefer artist/label/genre/year queries over guessed song titles.
 - For narrow genre/year discovery, include credible labels, artists, and one-ring adjacent scene terms; avoid generic SEO phrases like "best mix", "top hits", "playlist", or "summer vibes".
 - Do not default to progressive house just because the listener often likes it. Use progressive assumptions only when the request, seed, or explicit genre points there.
+- Treat "progressive psytrance" as psytrance, not progressive house. Treat "psychedelic trance" as a psytrance genre phrase, not a 70s/disco/funk vibe.
 - Do not include the current Roon artist as a seed when the user asks for an unrelated genre/date/vibe search.
 - If a year or date filter exists, include it in the relevant search queries.
 - Do not include more than 18 search queries, 16 candidateArtists, or 16 candidateLabels.

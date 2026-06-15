@@ -38,7 +38,10 @@
       <section id="playerView" class="view isActive">
         <section class="layout">
           <div class="panel player">
-            <button type="button" id="togglePlayerMax" class="playerMaxToggle" aria-pressed="false">Maximize Player</button>
+            <div class="playerViewControls">
+              <button type="button" id="togglePlayerMax" class="playerMaxToggle" aria-pressed="false">Maximize Player</button>
+              <button type="button" id="togglePlayerFull" class="playerFullToggle" aria-pressed="false">Full Window</button>
+            </div>
             <div class="now">
               <div class="artStack">
                 <div class="cover" id="cover"></div>
@@ -54,7 +57,11 @@
               <div id="nowDiscoveryBadge" class="nowDiscoveryBadge"></div>
               <div class="nowDiscoveryActions">
                 <button type="button" id="jumpToNowTrack">Jump to track</button>
-                <button type="button" id="saveNowCandidate">Add candidate</button>
+                <div class="nowCandidateAddGroup">
+                  <button type="button" id="saveNowCandidate">Add candidate</button>
+                  <div id="nowCandidateListMenu" class="candidateListMenu" hidden></div>
+                </div>
+                <button type="button" id="jumpToCandidatesList">Jump to candidates</button>
                 <button type="button" id="openRabbitHole">Open Rabbit Hole</button>
               </div>
             </div>
@@ -114,7 +121,19 @@
               <div class="grid">
                 <label>Genres <input name="genres" placeholder="optional: trance, dark ambient, melodic techno"></label>
                 <label>Years / month <input name="years" placeholder="2026, May 2026, 2018-2026"></label>
-                <label>Mood <input name="mood" placeholder="hypnotic, driving"></label>
+                <label>Vibe / mood <input name="mood" list="moodOptions" placeholder="optional"></label>
+                <datalist id="moodOptions">
+                  <option value=""></option>
+                  <option value="hypnotic"></option>
+                  <option value="driving"></option>
+                  <option value="dark"></option>
+                  <option value="uplifting"></option>
+                  <option value="chill"></option>
+                  <option value="underground"></option>
+                  <option value="cinematic"></option>
+                  <option value="female vocals"></option>
+                  <option value="long / extended"></option>
+                </datalist>
                 <label>Language <input name="language" placeholder="any"></label>
                 <label>Tracks <input name="count" type="number" min="1" max="40" placeholder="optional"></label>
                 <label>Scoring mode
@@ -151,6 +170,7 @@
                   </select>
                 </label>
               </div>
+              <section id="systemHealth" class="systemHealth" aria-live="polite"></section>
             </details>
           </form>
         </section>
@@ -167,14 +187,17 @@
               <button type="button" id="queueAllNext" disabled>Add all next</button>
               <button type="button" id="copyList" disabled>Copy list</button>
               <button type="button" id="exportCsv" disabled>Export CSV</button>
+              <button type="button" id="toggleRejected" disabled>Rejected</button>
             </div>
           </div>
           <div id="queueReport" class="queueReport" hidden></div>
           <div id="intentDebug" class="intentDebug" hidden></div>
+          <div id="sourceReport" class="sourceReport" hidden></div>
+          <div id="rejectedDebug" class="rejectedDebug" hidden></div>
           <div id="tracks" class="tracks"></div>
         </section>
 
-        <section class="panel saved">
+        <section id="candidatesPanel" class="panel saved">
           <div class="formHead">
             <div>
               <p class="eyebrow">Playlist Candidates</p>
@@ -187,6 +210,17 @@
               <button type="button" id="exportSaved" disabled>Export candidates</button>
               <button type="button" id="purgeMemory">Purge memory</button>
             </div>
+          </div>
+          <div class="savedListTools">
+            <label>Candidate list
+              <select id="savedListSelect"></select>
+            </label>
+            <label>List name
+              <input id="savedListName" type="text" placeholder="New candidate list">
+            </label>
+            <button type="button" id="createSavedList">Create list</button>
+            <button type="button" id="renameSavedList">Rename selected</button>
+            <button type="button" id="deleteSavedList">Delete selected</button>
           </div>
           <p id="memoryStatus" class="muted memoryStatus">Track memory loading...</p>
           <div id="savedTracks" class="tracks"></div>

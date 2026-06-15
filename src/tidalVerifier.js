@@ -5,23 +5,18 @@ const TIDAL_TOKEN_URL = "https://auth.tidal.com/v1/oauth2/token";
 const TIDAL_SEARCH_ROOT = "https://openapi.tidal.com/v2/searchResults";
 const TIDAL_TRACK_ROOT = "https://openapi.tidal.com/v2/tracks";
 const TIDAL_LEGACY_SEARCH_URL = "https://api.tidal.com/v1/search/tracks";
-const TIDAL_FETCH_TIMEOUT_MS = 12_000;
+const {
+  CircuitBreaker,
+  DEFAULT_TIDAL_CIRCUIT_COOLDOWN_MS,
+  DEFAULT_TIDAL_CIRCUIT_FAILURE_THRESHOLD,
+  DEFAULT_TIDAL_FETCH_TIMEOUT_MS,
+  fetchWithTimeout,
+  httpStatusError,
+  positiveNumber
+} = require("./tidalRequestGuard");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function fetchWithTimeout(url, options = {}, timeoutMs = TIDAL_FETCH_TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } catch (error) {
-    if (error?.name === "AbortError") throw new Error("TIDAL lookup timed out");
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 function cleanText(value) {
@@ -575,6 +570,15 @@ class TidalVerifier {
     this.clientId = config.clientId || "";
     this.clientSecret = config.clientSecret || "";
     this.accessToken = config.accessToken || "";
+    this.fetchImpl = config.fetchImpl || globalThis.fetch;
+    this.clock = config.clock || (() => Date.now());
+    this.timeoutMs = positiveNumber(config.timeoutMs, DEFAULT_TIDAL_FETCH_TIMEOUT_MS, { min: 500, max: 120_000 });
+    this.circuitBreaker = config.circuitBreaker || new CircuitBreaker({
+      label: "TIDAL",
+      failureThreshold: config.failureThreshold || DEFAULT_TIDAL_CIRCUIT_FAILURE_THRESHOLD,
+      cooldownMs: config.circuitCooldownMs || DEFAULT_TIDAL_CIRCUIT_COOLDOWN_MS,
+      clock: this.clock
+    });
     this.token = null;
     this.cache = new Map();
     this.nextRequestAt = 0;
@@ -582,6 +586,41 @@ class TidalVerifier {
 
   isConfigured() {
     return Boolean(this.enabled && (this.accessToken || (this.clientId && this.clientSecret)));
+  }
+
+  status() {
+    return {
+      enabled: this.enabled,
+      configured: this.isConfigured(),
+      timeoutMs: this.timeoutMs,
+      circuit: this.circuitBreaker.status()
+    };
+  }
+
+  async fetchTidalResponse(url, options = {}, label = "TIDAL request") {
+    this.circuitBreaker.assertCanRequest();
+
+    let response;
+    try {
+      response = await fetchWithTimeout(url, options, {
+        timeoutMs: this.timeoutMs,
+        fetchImpl: this.fetchImpl,
+        label
+      });
+    } catch (error) {
+      this.circuitBreaker.recordFailure(error);
+      throw error;
+    }
+
+    if (response.status >= 500) {
+      const error = httpStatusError(label, response.status);
+      this.circuitBreaker.recordFailure(error);
+      throw error;
+    }
+    if (response.ok || response.status === 404) {
+      this.circuitBreaker.recordSuccess();
+    }
+    return response;
   }
 
   async verify(track, { strict = false } = {}) {
@@ -767,12 +806,12 @@ class TidalVerifier {
     if ((result.year && result.releaseDate) || !result.tidalUrl) return result;
 
     try {
-      const response = await fetchWithTimeout(result.tidalUrl, {
+      const response = await this.fetchTidalResponse(result.tidalUrl, {
         headers: {
           accept: "text/html,application/xhtml+xml",
           "user-agent": USER_AGENT
         }
-      });
+      }, "TIDAL page lookup");
       if (!response.ok) return result;
 
       const metadata = extractReleaseMetadataFromHtml(await response.text());
@@ -849,40 +888,42 @@ class TidalVerifier {
 
   async fetchTidalJson(url, attempt = 0) {
     const token = await this.getAccessToken();
-    const now = Date.now();
+    const now = this.clock();
     if (this.nextRequestAt > now) await sleep(this.nextRequestAt - now);
 
-    const response = await fetchWithTimeout(url, {
+    const response = await this.fetchTidalResponse(url, {
       headers: {
         accept: "application/vnd.api+json, application/json",
         authorization: `Bearer ${token}`,
         "user-agent": USER_AGENT
       }
-    });
+    }, "TIDAL API lookup");
 
     if (response.status === 429) {
       const retryAfter = Number(response.headers.get("retry-after") || 2);
+      const rateLimitError = httpStatusError("TIDAL API lookup", response.status);
+      if (attempt >= 2) this.circuitBreaker.recordFailure(rateLimitError);
       if (attempt >= 2) throw new Error("TIDAL lookup failed: rate limited");
-      this.nextRequestAt = Date.now() + Math.max(1, retryAfter) * 1000;
+      this.nextRequestAt = this.clock() + Math.max(1, retryAfter) * 1000;
       await sleep(Math.max(1, retryAfter) * 1000);
       return this.fetchTidalJson(url, attempt + 1);
     }
 
-    this.nextRequestAt = Date.now() + 275;
+    this.nextRequestAt = this.clock() + 275;
     if (response.status === 404) return null;
-    if (!response.ok) throw new Error(`TIDAL lookup failed: HTTP ${response.status}`);
+    if (!response.ok) throw httpStatusError("TIDAL API lookup", response.status);
     return response.json();
   }
 
   async getAccessToken() {
     if (this.accessToken) return this.accessToken;
 
-    const now = Date.now();
+    const now = this.clock();
     if (this.token?.accessToken && this.token.expiresAtMs - now > 60_000) return this.token.accessToken;
     if (!this.clientId || !this.clientSecret) throw new Error("TIDAL credentials are missing.");
 
     const auth = Buffer.from(`${this.clientId}:${this.clientSecret}`, "utf8").toString("base64");
-    const response = await fetchWithTimeout(TIDAL_TOKEN_URL, {
+    const response = await this.fetchTidalResponse(TIDAL_TOKEN_URL, {
       method: "POST",
       headers: {
         authorization: `Basic ${auth}`,
@@ -890,7 +931,7 @@ class TidalVerifier {
         accept: "application/json"
       },
       body: new URLSearchParams({ grant_type: "client_credentials" })
-    });
+    }, "TIDAL token request");
 
     const json = await response.json().catch(() => null);
     if (!response.ok || !json?.access_token) {

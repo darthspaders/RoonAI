@@ -39,7 +39,10 @@ module.exports = {
     countryCode: process.env.TIDAL_COUNTRY_CODE || "US",
     clientId: process.env.TIDAL_CLIENT_ID || "",
     clientSecret: process.env.TIDAL_CLIENT_SECRET || "",
-    accessToken: process.env.TIDAL_ACCESS_TOKEN || ""
+    accessToken: process.env.TIDAL_ACCESS_TOKEN || "",
+    timeoutMs: Number(process.env.TIDAL_FETCH_TIMEOUT_MS || 12000),
+    failureThreshold: Number(process.env.TIDAL_CIRCUIT_FAILURES || 3),
+    circuitCooldownMs: Number(process.env.TIDAL_CIRCUIT_COOLDOWN_MS || 45000)
   },
   radioMetadata: {
     enabled: !/^(0|false|no)$/i.test(process.env.RADIO_METADATA_LOOKUP || "true"),
@@ -50,6 +53,9 @@ module.exports = {
     tidalAccessToken: process.env.TIDAL_ACCESS_TOKEN || "",
     tidalClientId: process.env.TIDAL_CLIENT_ID || "",
     tidalClientSecret: process.env.TIDAL_CLIENT_SECRET || "",
+    tidalTimeoutMs: Number(process.env.TIDAL_FETCH_TIMEOUT_MS || 12000),
+    tidalFailureThreshold: Number(process.env.TIDAL_CIRCUIT_FAILURES || 3),
+    tidalCircuitCooldownMs: Number(process.env.TIDAL_CIRCUIT_COOLDOWN_MS || 45000),
     discogsEnabled: !/^(0|false|no)$/i.test(process.env.DISCOGS_LOOKUP || "true"),
     discogsToken: process.env.DISCOGS_TOKEN || "",
     spotifyArtworkEnabled: /^(1|true|yes)$/i.test(process.env.SPOTIFY_ARTWORK_LOOKUP || ""),
@@ -68,5 +74,15 @@ module.exports = {
     musicBrainz: !/^(0|false|no)$/i.test(process.env.RABBIT_HOLE_MUSICBRAINZ || "true"),
     lastfmApiKey: process.env.LASTFM_API_KEY || "",
     discogsToken: process.env.DISCOGS_TOKEN || ""
+  },
+  lastfm: {
+    enabled: !/^(0|false|no)$/i.test(process.env.LASTFM_LOOKUP || "true"),
+    apiKey: process.env.LASTFM_API_KEY || "",
+    username: process.env.LASTFM_USERNAME || "",
+    historyLimit: Number(process.env.LASTFM_HISTORY_LIMIT || 200),
+    topArtistLimit: Number(process.env.LASTFM_TOP_ARTIST_LIMIT || 50),
+    topArtistPeriod: process.env.LASTFM_TOP_ARTIST_PERIOD || "12month",
+    cacheMs: Number(process.env.LASTFM_CACHE_MS || 300000),
+    timeoutMs: Number(process.env.LASTFM_TIMEOUT_MS || 3500)
   }
 };

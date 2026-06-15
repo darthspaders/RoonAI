@@ -1,4 +1,13 @@
 const EventEmitter = require("events");
+const {
+  CircuitBreaker,
+  DEFAULT_TIDAL_CIRCUIT_COOLDOWN_MS,
+  DEFAULT_TIDAL_CIRCUIT_FAILURE_THRESHOLD,
+  DEFAULT_TIDAL_FETCH_TIMEOUT_MS,
+  fetchWithTimeout,
+  httpStatusError,
+  positiveNumber
+} = require("./tidalRequestGuard");
 
 const DEFAULT_MIN_LOOKUP_INTERVAL_MS = 1500;
 const DEFAULT_CACHE_MAX = 200;
@@ -146,15 +155,17 @@ function makeLookupKey(track) {
   return `${normalizeKeyPart(track.artist)}|${normalizeKeyPart(track.title)}`;
 }
 
-async function defaultFetchJson(url, { headers = {} } = {}) {
-  if (typeof fetch !== "function") throw new Error("global fetch is not available");
-
-  const response = await fetch(url, {
+async function defaultFetchJson(url, { headers = {}, timeoutMs = DEFAULT_TIDAL_FETCH_TIMEOUT_MS, fetchImpl = globalThis.fetch } = {}) {
+  const response = await fetchWithTimeout(url, {
     headers: {
       "user-agent": USER_AGENT,
       accept: "application/json",
       ...headers
     }
+  }, {
+    timeoutMs,
+    fetchImpl,
+    label: "Metadata lookup"
   });
 
   if (response.status === 404) return null;
@@ -246,14 +257,28 @@ function titleKeysMatch(leftKeys, rightKeys) {
   return leftKeys.some((left) => rightKeys.some((right) => left === right || left.includes(right) || right.includes(left)));
 }
 
+function hasArtistForLookup(track = {}) {
+  return getArtistLookupAliases(track.artist).some((artist) => normalizeDiscogsMatchText(artist));
+}
+
+function artistAliasesMatch(expectedArtist, resultArtistText) {
+  const expected = getArtistLookupAliases(expectedArtist).map(normalizeDiscogsMatchText).filter(Boolean);
+  const actual = getArtistLookupAliases(resultArtistText).map(normalizeDiscogsMatchText).filter(Boolean);
+  if (!expected.length) return true;
+  if (!actual.length) return false;
+  return expected.some((left) => actual.some((right) => (
+    left === right ||
+    (left.length >= 4 && right.length >= 4 && (left.includes(right) || right.includes(left)))
+  )));
+}
+
 function isDiscogsTrackMatch(result, track = {}) {
   const resultTitle = normalizeDiscogsMatchText(result?.title);
   const trackTitle = normalizeDiscogsMatchText(track.title);
-  const trackArtists = getArtistLookupAliases(track.artist).map(normalizeDiscogsMatchText).filter(Boolean);
 
   if (!resultTitle) return false;
   if (trackTitle && !resultTitle.includes(trackTitle)) return false;
-  if (trackArtists.length && !trackArtists.some((artist) => resultTitle.includes(artist))) return false;
+  if (!artistAliasesMatch(track.artist, result?.title)) return false;
   return true;
 }
 
@@ -443,12 +468,10 @@ function getTidalTrackUrl(item = {}) {
 function isTidalTrackMatch(item = {}, track = {}, searchJson = {}) {
   const resultTitleKeys = getTitleMatchKeys(item.title || item.attributes?.title);
   const trackTitleKeys = getTitleMatchKeys(track.title);
-  const trackArtists = getArtistLookupAliases(track.artist).map(normalizeDiscogsMatchText).filter(Boolean);
-  const resultArtist = normalizeDiscogsMatchText(getTidalArtistNames(item, searchJson).join(" "));
 
   if (!resultTitleKeys.length || !trackTitleKeys.length) return false;
   if (!titleKeysMatch(resultTitleKeys, trackTitleKeys)) return false;
-  if (trackArtists.length && resultArtist && !trackArtists.some((artist) => resultArtist.includes(artist) || artist.includes(resultArtist))) return false;
+  if (!artistAliasesMatch(track.artist, getTidalArtistNames(item, searchJson).join(" "))) return false;
   return true;
 }
 
@@ -517,10 +540,18 @@ function isTidalTitleMatch(item = {}, track = {}) {
   return !!resultTitleKeys.length && !!trackTitleKeys.length && titleKeysMatch(resultTitleKeys, trackTitleKeys);
 }
 
+function isTidalDetailCandidate(item = {}, track = {}, searchJson = {}) {
+  return hasArtistForLookup(track) &&
+    isTidalTitleMatch(item, track) &&
+    !getTidalArtistNames(item, searchJson).length &&
+    !!cleanText(item.id);
+}
+
 function chooseTidalCandidate(searchJson, track = {}) {
   const items = getTidalItems(searchJson);
   return items.find((entry) => isTidalTrackMatch(entry, track, searchJson)) ||
-    items.find((entry) => isTidalTitleMatch(entry, track) && hasTidalCoverCandidate(entry, searchJson)) ||
+    items.find((entry) => isTidalDetailCandidate(entry, track, searchJson)) ||
+    (!hasArtistForLookup(track) ? items.find((entry) => isTidalTitleMatch(entry, track) && hasTidalCoverCandidate(entry, searchJson)) : null) ||
     null;
 }
 
@@ -552,7 +583,10 @@ function buildTidalTrackResult(result, searchJson) {
 }
 
 function chooseTidalTrack(searchJson, track = {}) {
-  return buildTidalTrackResult(chooseTidalCandidate(searchJson, track), searchJson);
+  const candidate = chooseTidalCandidate(searchJson, track);
+  if (!candidate) return null;
+  if (hasArtistForLookup(track) && !isTidalTrackMatch(candidate, track, searchJson)) return null;
+  return buildTidalTrackResult(candidate, searchJson);
 }
 
 function getSpotifyItems(searchJson) {
@@ -567,14 +601,12 @@ function getSpotifyArtistNames(item = {}) {
 
 function chooseSpotifyTrack(searchJson, track = {}) {
   const trackTitleKeys = getTitleMatchKeys(track.title);
-  const trackArtist = normalizeDiscogsMatchText(track.artist);
 
   for (const item of getSpotifyItems(searchJson)) {
     const resultTitleKeys = getTitleMatchKeys(item?.name);
-    const resultArtist = normalizeDiscogsMatchText(getSpotifyArtistNames(item).join(" "));
     if (!resultTitleKeys.length || !trackTitleKeys.length) continue;
     if (!titleKeysMatch(resultTitleKeys, trackTitleKeys)) continue;
-    if (trackArtist && resultArtist && !resultArtist.includes(trackArtist) && !trackArtist.includes(resultArtist)) continue;
+    if (!artistAliasesMatch(track.artist, getSpotifyArtistNames(item).join(" "))) continue;
 
     const images = Array.isArray(item?.album?.images) ? item.album.images : [];
     const image = images.find((entry) => cleanText(entry?.url)) || null;
@@ -608,6 +640,9 @@ class RadioMetadataResolver extends EventEmitter {
     tidalAccessToken = "",
     tidalClientId = "",
     tidalClientSecret = "",
+    tidalTimeoutMs = DEFAULT_TIDAL_FETCH_TIMEOUT_MS,
+    tidalFailureThreshold = DEFAULT_TIDAL_CIRCUIT_FAILURE_THRESHOLD,
+    tidalCircuitCooldownMs = DEFAULT_TIDAL_CIRCUIT_COOLDOWN_MS,
     discogsEnabled = true,
     discogsToken = "",
     albumArtProvider,
@@ -630,6 +665,7 @@ class RadioMetadataResolver extends EventEmitter {
     this.tidalAccessToken = cleanText(tidalAccessToken);
     this.tidalClientId = cleanText(tidalClientId);
     this.tidalClientSecret = cleanText(tidalClientSecret);
+    this.tidalTimeoutMs = positiveNumber(tidalTimeoutMs, DEFAULT_TIDAL_FETCH_TIMEOUT_MS, { min: 500, max: 120_000 });
     this.tidalToken = null;
     this.discogsEnabled = !!discogsEnabled;
     this.discogsToken = cleanText(discogsToken);
@@ -637,6 +673,12 @@ class RadioMetadataResolver extends EventEmitter {
     this.fetchJson = fetchJson;
     this.fetchImpl = fetchImpl;
     this.clock = clock;
+    this.tidalCircuitBreaker = new CircuitBreaker({
+      label: "Radio metadata TIDAL",
+      failureThreshold: tidalFailureThreshold,
+      cooldownMs: tidalCircuitCooldownMs,
+      clock: this.clock
+    });
     this.cache = new Map();
     this.pending = new Set();
     this.queue = [];
@@ -853,10 +895,12 @@ class RadioMetadataResolver extends EventEmitter {
     if (normalizedArtist && normalizedGuestlessTitle && normalizedGuestlessTitle !== normalizedTitle) searches.push(`${normalizedGuestlessTitle} ${normalizedArtist}`);
     if (normalizedArtist && normalizedGuestlessBaseTitle && normalizedGuestlessBaseTitle !== normalizedBaseTitle && normalizedGuestlessBaseTitle !== normalizedGuestlessTitle) searches.push(`${normalizedArtist} ${normalizedGuestlessBaseTitle}`);
     if (normalizedArtist && normalizedGuestlessBaseTitle && normalizedGuestlessBaseTitle !== normalizedBaseTitle && normalizedGuestlessBaseTitle !== normalizedGuestlessTitle) searches.push(`${normalizedGuestlessBaseTitle} ${normalizedArtist}`);
-    searches.push(track.title);
-    if (baseTitle && baseTitle !== track.title) searches.push(baseTitle);
-    if (guestlessTitle && guestlessTitle !== track.title) searches.push(guestlessTitle);
-    if (guestlessBaseTitle && guestlessBaseTitle !== baseTitle && guestlessBaseTitle !== guestlessTitle) searches.push(guestlessBaseTitle);
+    if (!artistAliases.length) {
+      searches.push(track.title);
+      if (baseTitle && baseTitle !== track.title) searches.push(baseTitle);
+      if (guestlessTitle && guestlessTitle !== track.title) searches.push(guestlessTitle);
+      if (guestlessBaseTitle && guestlessBaseTitle !== baseTitle && guestlessBaseTitle !== guestlessTitle) searches.push(guestlessBaseTitle);
+    }
     return Array.from(new Set(searches.map(cleanText).filter(Boolean)));
   }
 
@@ -938,7 +982,7 @@ class RadioMetadataResolver extends EventEmitter {
       const candidate = chooseTidalCandidate(searchJson, track);
       if (!candidate) continue;
 
-      let result = buildTidalTrackResult(candidate, searchJson);
+      let result = isTidalTrackMatch(candidate, track, searchJson) ? buildTidalTrackResult(candidate, searchJson) : null;
       if (!result) {
         result = await this.lookupTidalTrackDetails(candidate, track);
       }
@@ -999,6 +1043,10 @@ class RadioMetadataResolver extends EventEmitter {
 
   async searchTidalWeb(track, key) {
     if (typeof this.fetchImpl !== "function") return null;
+    if (hasArtistForLookup(track)) {
+      this.logger?.debug?.("Skipping TIDAL web artwork for artist-qualified radio lookup: " + track.artist + " - " + track.title);
+      return null;
+    }
 
     for (const query of this.createSearchQueries(track)) {
       const searchUrl = this.createTidalWebSearchUrl(query);
@@ -1127,7 +1175,7 @@ class RadioMetadataResolver extends EventEmitter {
     }
 
     try {
-      return await this.fetchJson(url, { headers: this.createTidalHeaders(accessToken) });
+      return await this.fetchTidalJsonWithGuard(url, accessToken);
     } catch (error) {
       if (error.status !== 401 || !this.tidalAccessToken || !this.tidalClientId || !this.tidalClientSecret) {
         throw error;
@@ -1135,8 +1183,47 @@ class RadioMetadataResolver extends EventEmitter {
 
       this.logger?.warn?.("Manual TIDAL access token was rejected; retrying with client credentials");
       const retryToken = await this.getTidalAccessToken({ ignoreManual: true });
-      return this.fetchJson(url, { headers: this.createTidalHeaders(retryToken) });
+      return this.fetchTidalJsonWithGuard(url, retryToken);
     }
+  }
+
+  async fetchTidalJsonWithGuard(url, accessToken) {
+    this.tidalCircuitBreaker.assertCanRequest();
+    try {
+      const json = await this.fetchJson(url, {
+        headers: this.createTidalHeaders(accessToken),
+        timeoutMs: this.tidalTimeoutMs,
+        fetchImpl: this.fetchImpl
+      });
+      this.tidalCircuitBreaker.recordSuccess();
+      return json;
+    } catch (error) {
+      this.tidalCircuitBreaker.recordFailure(error);
+      throw error;
+    }
+  }
+
+  async fetchTidalResponseWithGuard(url, options = {}, label = "Radio metadata TIDAL request") {
+    this.tidalCircuitBreaker.assertCanRequest();
+    let response;
+    try {
+      response = await fetchWithTimeout(url, options, {
+        timeoutMs: this.tidalTimeoutMs,
+        fetchImpl: this.fetchImpl,
+        label
+      });
+    } catch (error) {
+      this.tidalCircuitBreaker.recordFailure(error);
+      throw error;
+    }
+
+    if (response.status === 429 || response.status >= 500) {
+      const error = httpStatusError(label, response.status);
+      this.tidalCircuitBreaker.recordFailure(error);
+      throw error;
+    }
+    if (response.ok || response.status === 404) this.tidalCircuitBreaker.recordSuccess();
+    return response;
   }
 
   createTidalHeaders(accessToken) {
@@ -1160,7 +1247,7 @@ class RadioMetadataResolver extends EventEmitter {
 
     const body = new URLSearchParams({ grant_type: "client_credentials" });
     const auth = Buffer.from(`${this.tidalClientId}:${this.tidalClientSecret}`, "utf8").toString("base64");
-    const response = await this.fetchImpl(TIDAL_TOKEN_URL, {
+    const response = await this.fetchTidalResponseWithGuard(TIDAL_TOKEN_URL, {
       method: "POST",
       headers: {
         authorization: `Basic ${auth}`,
@@ -1168,7 +1255,7 @@ class RadioMetadataResolver extends EventEmitter {
         accept: "application/json"
       },
       body
-    });
+    }, "Radio metadata TIDAL token request");
 
     let json;
     try {
@@ -1226,7 +1313,7 @@ class RadioMetadataResolver extends EventEmitter {
       searches.push({ artist: track.artist, track: track.title });
       searches.push({ q: `${track.artist} ${track.title}` });
     }
-    searches.push({ q: track.title });
+    if (!track.artist) searches.push({ q: track.title });
 
     for (const params of searches) {
       const searchUrl = new URL("https://api.discogs.com/database/search");
@@ -1265,7 +1352,7 @@ class RadioMetadataResolver extends EventEmitter {
     if (track.artist) {
       queries.push(`recording:"${track.title}" AND artist:"${track.artist}"`);
     }
-    queries.push(`recording:"${track.title}"`);
+    if (!track.artist) queries.push(`recording:"${track.title}"`);
 
     for (const query of queries) {
       const searchUrl = `https://musicbrainz.org/ws/2/recording?query=${encodeURIComponent(query)}&fmt=json&limit=5&inc=releases+artist-credits`;
@@ -1287,7 +1374,16 @@ class RadioMetadataResolver extends EventEmitter {
     }
   }
 
-  updateConfig({ enabled, cacheMax, minLookupIntervalMs, spotifyArtworkEnabled, spotifyMarket, spotifyClientId, spotifyClientSecret, tidalArtworkEnabled, tidalCountryCode, tidalSearchBaseUrl, tidalAccessToken, tidalClientId, tidalClientSecret, discogsEnabled, discogsToken, albumArtProvider } = {}) {
+  status() {
+    return {
+      enabled: this.enabled,
+      tidalArtworkEnabled: this.tidalArtworkEnabled,
+      tidalTimeoutMs: this.tidalTimeoutMs,
+      tidalCircuit: this.tidalCircuitBreaker.status()
+    };
+  }
+
+  updateConfig({ enabled, cacheMax, minLookupIntervalMs, spotifyArtworkEnabled, spotifyMarket, spotifyClientId, spotifyClientSecret, tidalArtworkEnabled, tidalCountryCode, tidalSearchBaseUrl, tidalAccessToken, tidalClientId, tidalClientSecret, tidalTimeoutMs, tidalFailureThreshold, tidalCircuitCooldownMs, discogsEnabled, discogsToken, albumArtProvider } = {}) {
     const nextEnabled = enabled !== undefined ? !!enabled : this.enabled;
     const nextCacheMax = Number(cacheMax) || this.cacheMax;
     const nextMinLookupIntervalMs = Number(minLookupIntervalMs) || this.minLookupIntervalMs;
@@ -1301,6 +1397,9 @@ class RadioMetadataResolver extends EventEmitter {
     const nextTidalAccessToken = tidalAccessToken !== undefined ? cleanText(tidalAccessToken) : this.tidalAccessToken;
     const nextTidalClientId = tidalClientId !== undefined ? cleanText(tidalClientId) : this.tidalClientId;
     const nextTidalClientSecret = tidalClientSecret !== undefined ? cleanText(tidalClientSecret) : this.tidalClientSecret;
+    const nextTidalTimeoutMs = tidalTimeoutMs !== undefined ? positiveNumber(tidalTimeoutMs, DEFAULT_TIDAL_FETCH_TIMEOUT_MS, { min: 500, max: 120_000 }) : this.tidalTimeoutMs;
+    const nextTidalFailureThreshold = tidalFailureThreshold !== undefined ? positiveNumber(tidalFailureThreshold, DEFAULT_TIDAL_CIRCUIT_FAILURE_THRESHOLD, { min: 1, max: 20 }) : this.tidalCircuitBreaker.failureThreshold;
+    const nextTidalCircuitCooldownMs = tidalCircuitCooldownMs !== undefined ? positiveNumber(tidalCircuitCooldownMs, DEFAULT_TIDAL_CIRCUIT_COOLDOWN_MS, { min: 1000, max: 10 * 60_000 }) : this.tidalCircuitBreaker.cooldownMs;
     const nextDiscogsEnabled = discogsEnabled !== undefined ? !!discogsEnabled : this.discogsEnabled;
     const nextDiscogsToken = discogsToken !== undefined ? cleanText(discogsToken) : this.discogsToken;
     const nextAlbumArtProvider = albumArtProvider !== undefined ? albumArtProvider : this.albumArtProvider;
@@ -1313,6 +1412,9 @@ class RadioMetadataResolver extends EventEmitter {
       nextTidalAccessToken !== this.tidalAccessToken ||
       nextTidalClientId !== this.tidalClientId ||
       nextTidalClientSecret !== this.tidalClientSecret ||
+      nextTidalTimeoutMs !== this.tidalTimeoutMs ||
+      nextTidalFailureThreshold !== this.tidalCircuitBreaker.failureThreshold ||
+      nextTidalCircuitCooldownMs !== this.tidalCircuitBreaker.cooldownMs ||
       nextDiscogsEnabled !== this.discogsEnabled ||
       nextDiscogsToken !== this.discogsToken ||
       nextAlbumArtProvider !== this.albumArtProvider;
@@ -1327,6 +1429,13 @@ class RadioMetadataResolver extends EventEmitter {
     this.tidalAccessToken = nextTidalAccessToken;
     this.tidalClientId = nextTidalClientId;
     this.tidalClientSecret = nextTidalClientSecret;
+    this.tidalTimeoutMs = nextTidalTimeoutMs;
+    this.tidalCircuitBreaker = new CircuitBreaker({
+      label: "Radio metadata TIDAL",
+      failureThreshold: nextTidalFailureThreshold,
+      cooldownMs: nextTidalCircuitCooldownMs,
+      clock: this.clock
+    });
     this.tidalToken = null;
     this.discogsEnabled = nextDiscogsEnabled;
     this.discogsToken = nextDiscogsToken;

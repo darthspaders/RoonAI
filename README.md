@@ -88,12 +88,20 @@ Optional discovery enrichment:
 
 ```env
 RABBIT_HOLE_MUSICBRAINZ=true
+LASTFM_LOOKUP=true
 LASTFM_API_KEY=
+LASTFM_USERNAME=
+LASTFM_HISTORY_LIMIT=200
+LASTFM_TOP_ARTIST_LIMIT=50
+LASTFM_TOP_ARTIST_PERIOD=12month
+LASTFM_TIMEOUT_MS=3500
 DISCOGS_TOKEN=
 SPOTIFY_ARTWORK_LOOKUP=false
 SPOTIFY_CLIENT_ID=
 SPOTIFY_CLIENT_SECRET=
 ```
+
+`LASTFM_API_KEY` lets Rabbit Hole call Last.fm. `LASTFM_USERNAME` is also required if you want the app to check recent scrobbles, avoid recent repeats, and use long-term top artists as a light taste signal. `LASTFM_TOP_ARTIST_PERIOD` defaults to `12month`.
 
 Optional HQPlayer status line:
 

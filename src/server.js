@@ -9,6 +9,7 @@ const config = require("./config");
 const {
   candidateIdentityKeys,
   buildDiscoveryProfile,
+  autoBroadenSearchPasses,
   discoverTracks,
   discoveryStatusFor,
   effectiveDiscoveryCount,
@@ -25,18 +26,27 @@ const {
 const { DiscoveryHistory } = require("./discoveryHistory");
 const { ListeningHistory } = require("./listeningHistory");
 const { generateSearchPlan, scoreCandidateBatch } = require("./llmClient");
+const { LastFmClient } = require("./lastFmClient");
+const {
+  createModelReviewAudit,
+  classifyModelReviewChange,
+  modelReviewAuditItem,
+  recordModelReviewAudit
+} = require("./modelReviewAudit");
+const { QueryYieldTracker } = require("./queryYieldTracker");
 const { HQPlayerStatus } = require("./hqplayerStatus");
 const { RoonClient } = require("./roonClient");
 const { RabbitHoleGraph } = require("./rabbitHoleGraph");
 const { RadioMetadataResolver, parseRadioTrack } = require("./radioMetadataResolver");
 const { SavedPlaylist } = require("./savedPlaylist");
-const { SessionStore } = require("./sessionStore");
+const { SessionStore, trackKey } = require("./sessionStore");
 const { TasteProfile, normalizeRating } = require("./tasteProfile");
 const { TidalVerifier } = require("./tidalVerifier");
 const { TrackMemory } = require("./trackMemory");
 const yearRangeUtil = require("./yearRange");
 
 const publicDir = path.join(__dirname, "..", "public");
+const MAX_JSON_BODY_BYTES = 5 * 1024 * 1024;
 const roon = new RoonClient();
 const tidal = new TidalVerifier(config.tidal);
 const discoveryHistory = new DiscoveryHistory();
@@ -45,6 +55,8 @@ const savedPlaylist = new SavedPlaylist();
 const sessionStore = new SessionStore();
 const tasteProfile = new TasteProfile();
 const trackMemory = new TrackMemory();
+const lastfm = new LastFmClient(config.lastfm);
+const queryYieldTracker = new QueryYieldTracker();
 const rabbitHoleGraph = new RabbitHoleGraph();
 const radioMetadataResolver = new RadioMetadataResolver({
   enabled: config.radioMetadata.enabled,
@@ -55,6 +67,9 @@ const radioMetadataResolver = new RadioMetadataResolver({
   tidalAccessToken: config.radioMetadata.tidalAccessToken,
   tidalClientId: config.radioMetadata.tidalClientId,
   tidalClientSecret: config.radioMetadata.tidalClientSecret,
+  tidalTimeoutMs: config.radioMetadata.tidalTimeoutMs,
+  tidalFailureThreshold: config.radioMetadata.tidalFailureThreshold,
+  tidalCircuitCooldownMs: config.radioMetadata.tidalCircuitCooldownMs,
   discogsEnabled: config.radioMetadata.discogsEnabled,
   discogsToken: config.radioMetadata.discogsToken,
   spotifyArtworkEnabled: config.radioMetadata.spotifyArtworkEnabled,
@@ -492,9 +507,24 @@ function withTrackMemory(state) {
 
 async function readJson(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let totalBytes = 0;
+  for await (const chunk of req) {
+    totalBytes += chunk.length;
+    if (totalBytes > MAX_JSON_BODY_BYTES) {
+      const error = new Error("Request body too large.");
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
   if (!chunks.length) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    const error = new Error("Invalid JSON request body.");
+    error.statusCode = 400;
+    throw error;
+  }
 }
 
 async function mapWithConcurrency(items, limit, mapper) {
@@ -531,6 +561,37 @@ async function withTimeout(promise, timeoutMs, message) {
   }
 }
 
+async function lastFmHistoryForDiscovery() {
+  const status = lastfm.status();
+  if (!status.configured) {
+    const reason = status.enabled === false
+      ? "Last.fm lookup disabled"
+      : (!status.apiKeyConfigured
+        ? "LASTFM_API_KEY is missing"
+        : (!status.usernameConfigured
+          ? "LASTFM_USERNAME is missing"
+          : "LASTFM_USERNAME does not look like a Last.fm username"));
+    return { ...status, checked: false, reason };
+  }
+  try {
+    return await withTimeout(
+      lastfm.historySnapshot({
+        limit: config.lastfm.historyLimit,
+        topArtistLimit: config.lastfm.topArtistLimit,
+        topArtistPeriod: config.lastfm.topArtistPeriod
+      }),
+      config.lastfm.timeoutMs,
+      "Last.fm history check timed out."
+    );
+  } catch (error) {
+    return {
+      ...status,
+      checked: false,
+      error: error.message || "Last.fm history unavailable"
+    };
+  }
+}
+
 function mergeTrackLists(...lists) {
   const seen = new Set();
   const merged = [];
@@ -545,6 +606,139 @@ function mergeTrackLists(...lists) {
     }
   }
   return merged;
+}
+
+function discoveryPoolCount(result = {}) {
+  return mergeTrackLists(result.tracks, result.alternates).length;
+}
+
+function mergeQueryYieldSummaries(base = {}, extra = {}) {
+  if (!base?.recordCount && !extra?.recordCount) return base?.recordCount ? base : extra;
+  const combineItems = (left = [], right = [], limit = 8) => [...left, ...right].slice(0, limit);
+  return {
+    enabled: Boolean(base.enabled || extra.enabled),
+    attempted: Number(base.attempted || 0) + Number(extra.attempted || 0),
+    returned: Number(base.returned || 0) + Number(extra.returned || 0),
+    accepted: Number(base.accepted || 0) + Number(extra.accepted || 0),
+    rejected: Number(base.rejected || 0) + Number(extra.rejected || 0),
+    seoRejects: Number(base.seoRejects || 0) + Number(extra.seoRejects || 0),
+    genreRejects: Number(base.genreRejects || 0) + Number(extra.genreRejects || 0),
+    errorCount: Number(base.errorCount || 0) + Number(extra.errorCount || 0),
+    recordCount: Number(base.recordCount || 0) + Number(extra.recordCount || 0),
+    adjustments: combineItems(base.adjustments || [], extra.adjustments || []),
+    best: combineItems(base.best || [], extra.best || []),
+    worst: combineItems(base.worst || [], extra.worst || []),
+    error: base.error || extra.error || ""
+  };
+}
+
+function annotateAutoBroadenTracks(list = [], pass = {}) {
+  return list.map((track) => ({
+    ...track,
+    autoBroadened: true,
+    discoverySource: track.discoverySource || pass.label || "Auto-broadened search",
+    discoveryLane: track.discoveryLane || pass.lane || "core-expanded",
+    statusChecks: Array.from(new Set([
+      ...(Array.isArray(track.statusChecks) ? track.statusChecks : []),
+      pass.label || "Auto-broadened search"
+    ].filter(Boolean)))
+  }));
+}
+
+async function runAutoBroadenSearches(discovered = {}, baseOptions = {}, searchProfile = buildDiscoveryProfile(baseOptions), requestedCount = 8, scrobbleHistory = null, budgets = {}) {
+  const passes = autoBroadenSearchPasses(baseOptions, searchProfile, discovered, requestedCount);
+  const queryYieldHealth = passes.find((pass) => pass.queryYieldHealth)?.queryYieldHealth || null;
+  const summary = {
+    enabled: true,
+    attempted: 0,
+    added: 0,
+    poolBefore: discoveryPoolCount(discovered),
+    poolAfter: discoveryPoolCount(discovered),
+    targetPool: passes[0]?.targetPool || 0,
+    yieldAware: Boolean(queryYieldHealth?.retryNeeded),
+    queryYieldHealth,
+    lanes: [],
+    errors: []
+  };
+
+  if (!passes.length) {
+    return {
+      ...discovered,
+      verification: {
+        ...(discovered.verification || {}),
+        autoBroaden: summary
+      }
+    };
+  }
+
+  let current = discovered;
+  const perPassTimeoutMs = Math.max(8_000, Math.min(30_000, Math.floor(Number(budgets.discoveryTimeoutMs || 30_000) / 2)));
+
+  for (const pass of passes) {
+    const beforePool = discoveryPoolCount(current);
+    if (beforePool >= pass.targetPool && (current.tracks || []).length >= requestedCount) break;
+
+    summary.attempted += 1;
+    try {
+      const broadened = await withTimeout(
+        discoverTracks({
+          tidal,
+          options: pass.options,
+          history: discoveryHistory,
+          tasteProfile,
+          scrobbleHistory,
+          queryYieldTracker
+        }),
+        perPassTimeoutMs,
+        `${pass.label} took too long.`
+      );
+      const broadenedTracks = annotateAutoBroadenTracks(broadened.tracks || [], pass);
+      const broadenedAlternates = annotateAutoBroadenTracks(broadened.alternates || [], pass);
+      current = {
+        ...current,
+        tracks: mergeTrackLists(current.tracks, broadenedTracks),
+        alternates: mergeTrackLists(current.alternates, broadenedAlternates),
+        discarded: [...(current.discarded || []), ...(broadened.discarded || [])],
+        verification: {
+          ...(current.verification || {}),
+          queryYield: mergeQueryYieldSummaries(current.verification?.queryYield, broadened.verification?.queryYield),
+          autoBroaden: summary
+        }
+      };
+
+      const afterPool = discoveryPoolCount(current);
+      const added = Math.max(0, afterPool - beforePool);
+      summary.added += added;
+      summary.poolAfter = afterPool;
+      summary.lanes.push({
+        lane: pass.lane,
+        label: pass.label,
+        reason: pass.reason,
+        yieldAware: pass.lane === "yield-retry" || Boolean(pass.queryYieldHealth?.retryNeeded),
+        generated: broadened.verification?.generated || 0,
+        kept: broadened.tracks?.length || 0,
+        alternates: broadened.alternates?.length || 0,
+        added
+      });
+    } catch (error) {
+      summary.errors.push({
+        lane: pass.lane,
+        label: pass.label,
+        error: error.message
+      });
+    }
+  }
+
+  return {
+    ...current,
+    verification: {
+      ...(current.verification || {}),
+      autoBroaden: {
+        ...summary,
+        poolAfter: discoveryPoolCount(current)
+      }
+    }
+  };
 }
 
 function clampScore(value, min = 1, max = 100) {
@@ -673,6 +867,7 @@ async function applyModelCandidateReview(discovered = {}, options = {}) {
   }
 
   let rejected = 0;
+  const audit = createModelReviewAudit();
   const discarded = [...(discovered.discarded || [])];
   function applyList(list = []) {
     const next = [];
@@ -683,8 +878,11 @@ async function applyModelCandidateReview(discovered = {}, options = {}) {
         next.push(track);
         continue;
       }
+      const beforeScore = Number(track.score || track.scoreBreakdown?.total || 0) || Number(score.finalScore || 0) || 0;
       if (hardModelReject(score)) {
         rejected += 1;
+        const item = modelReviewAuditItem(track, score, beforeScore, null, "rejected");
+        recordModelReviewAudit(audit, item, "rejected");
         discarded.push({
           ...track,
           llmReview: score,
@@ -692,7 +890,23 @@ async function applyModelCandidateReview(discovered = {}, options = {}) {
         });
         continue;
       }
-      next.push(applyModelReview(track, score));
+      const reviewedTrack = applyModelReview(track, score);
+      const afterScore = Number(reviewedTrack.score || reviewedTrack.scoreBreakdown?.total || 0) || beforeScore;
+      const type = classifyModelReviewChange(score, beforeScore, afterScore, false);
+      const item = modelReviewAuditItem(reviewedTrack, score, beforeScore, afterScore, type);
+      recordModelReviewAudit(audit, item, type);
+      next.push({
+        ...reviewedTrack,
+        modelReview: {
+          action: type,
+          before: item.before,
+          after: item.after,
+          delta: item.delta,
+          modelScore: item.modelScore,
+          genreConfidence: item.genreConfidence,
+          reason: item.reason
+        }
+      });
     }
     return next;
   }
@@ -709,6 +923,7 @@ async function applyModelCandidateReview(discovered = {}, options = {}) {
       scored: scoreMap.size,
       rejected,
       rawCount: review.rawCount || 0,
+      audit,
       error: ""
     }
   };
@@ -1054,7 +1269,7 @@ async function decorateRoonFirstResult(roonResult, options = {}) {
 
 function appSnapshot() {
   const taste = tasteProfile.read();
-  const saved = savedPlaylist.list();
+  const saved = savedPlaylist.snapshot();
   const session = sessionStore.read();
   return {
     updatedAt: new Date().toISOString(),
@@ -1063,7 +1278,55 @@ function appSnapshot() {
     taste: tasteProfile.summary(taste),
     feedback: taste.feedback || {},
     memory: trackMemory.summary(),
+    queryYield: queryYieldTracker.summary(),
+    lastfm: lastfm.status(),
+    tidal: tidal.status(),
+    radioMetadata: radioMetadataResolver.status(),
     llm: llmSnapshot()
+  };
+}
+
+function sessionTrackFor(track = {}) {
+  const key = trackKey(track);
+  if (!key) return null;
+  const session = sessionStore.read();
+  const pools = [
+    ...(session.result?.tracks || []),
+    ...(session.result?.alternates || []),
+    ...(session.result?.discarded || [])
+  ];
+  return pools.find((candidate) => trackKey(candidate) === key) || null;
+}
+
+function feedbackTrackWithSessionContext(track = {}) {
+  const sessionTrack = sessionTrackFor(track) || {};
+  return {
+    ...sessionTrack,
+    ...track,
+    scoreBreakdown: track.scoreBreakdown || sessionTrack.scoreBreakdown || null,
+    llmReview: track.llmReview || sessionTrack.llmReview || null,
+    modelReview: track.modelReview || sessionTrack.modelReview || null,
+    discoverySource: track.discoverySource || sessionTrack.discoverySource || "",
+    discoveryLane: track.discoveryLane || sessionTrack.discoveryLane || ""
+  };
+}
+
+function feedbackCalibrationContext(track = {}) {
+  const modelReview = track.modelReview || {};
+  const llmReview = track.scoreBreakdown?.llmReview || track.llmReview || {};
+  return {
+    modelReview,
+    modelAction: modelReview.action || "",
+    beforeScore: modelReview.before,
+    afterScore: modelReview.after,
+    delta: modelReview.delta,
+    modelScore: modelReview.modelScore ?? llmReview.finalScore,
+    genreConfidence: modelReview.genreConfidence ?? llmReview.genreConfidence,
+    promptMatch: track.promptMatch ?? track.scoreBreakdown?.promptMatch,
+    tasteMatch: track.tasteMatch ?? track.scoreBreakdown?.tasteMatch,
+    reason: modelReview.reason || llmReview.rejectionReason || "",
+    discoverySource: track.discoverySource || "",
+    discoveryLane: track.discoveryLane || ""
   };
 }
 
@@ -1107,7 +1370,10 @@ function scheduleBroadcast() {
 function serveStatic(req, res, pathname) {
   const safePath = pathname === "/" ? "/index.html" : pathname;
   const filePath = path.normalize(path.join(publicDir, safePath));
-  if (!filePath.startsWith(publicDir)) return sendJson(res, 403, { error: "Forbidden" });
+  const relativePath = path.relative(publicDir, filePath);
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return sendJson(res, 403, { error: "Forbidden" });
+  }
 
   fs.readFile(filePath, (error, data) => {
     if (error) return sendJson(res, 404, { error: "Not found" });
@@ -1307,6 +1573,42 @@ function queueableStatusChecks(track = {}) {
   ];
 }
 
+function roonVerificationTimeoutFallback(discovered = {}, requestedCount = 8, error = null) {
+  const fallbackTracks = mergeTrackLists(discovered.tracks, discovered.alternates)
+    .slice(0, Math.max(1, requestedCount))
+    .map((track) => ({
+      ...track,
+      roon: {
+        ...(track.roon || {}),
+        verified: false
+      },
+      statusChecks: [
+        "Roon verification timed out",
+        "Queue action will be checked when queued",
+        ...(Array.isArray(track.statusChecks) ? track.statusChecks.filter((status) => !/^Roon\b/i.test(String(status || ""))) : [])
+      ]
+    }));
+  const discarded = discovered.discarded || [];
+  return {
+    ...discovered,
+    tracks: fallbackTracks,
+    alternates: mergeTrackLists(discovered.tracks, discovered.alternates)
+      .filter((track) => !fallbackTracks.some((fallback) => candidateIdentityKeys(fallback).some((key) => candidateIdentityKeys(track).includes(key))))
+      .slice(0, Math.max(80, requestedCount * 8)),
+    discarded,
+    verification: {
+      ...(discovered.verification || {}),
+      roonQueueable: false,
+      roonStrict: true,
+      roonVerificationError: error?.message || "Roon queue verification took too long.",
+      roonVerificationFallback: true,
+      kept: fallbackTracks.length,
+      generated: fallbackTracks.length + discarded.length,
+      discarded: discarded.length
+    }
+  };
+}
+
 function withNormalizedYearFilter(options = {}) {
   const parsed = yearRangeUtil.parseYearRange(options);
   if (!parsed) return options;
@@ -1319,6 +1621,8 @@ function withNormalizedYearFilter(options = {}) {
 function shouldSkipModelForCatalogSearch(options = {}) {
   const parsed = yearRangeUtil.parseYearRange(options);
   if (!parsed) return false;
+  const profile = buildDiscoveryProfile(options);
+  if (profile.targetGenres?.length) return true;
   const text = normalizeMatchText(`${options.request || ""} ${options.genres || ""} ${options.mood || ""}`);
   return /\b(?:progressive|house|trance|melodic|deep|organic|techno|ambient|disco|synth|new wave|rock|jazz|metal|country|pop|funk|soul|r b|hip hop)\b/.test(text);
 }
@@ -1341,7 +1645,7 @@ function strictSearchBudgets(options = {}, requestedCount = 8) {
     roonFirstTimeoutMs: Math.min(35_000, Math.max(16_000, requestedCount * 1_600)),
     modelTimeoutMs: Math.min(45_000, Math.max(catalogMode ? 30_000 : 25_000, requestedCount * 1_500)),
     discoveryTimeoutMs: catalogMode
-      ? Math.min(300_000, Math.max(220_000, requestedCount * 8_500))
+      ? Math.min(90_000, Math.max(30_000, requestedCount * 3_500))
       : Math.min(120_000, Math.max(60_000, requestedCount * 5_000)),
     roonQueueTimeoutMs: Math.min(45_000, Math.max(18_000, requestedCount * 1_800))
   };
@@ -1460,6 +1764,8 @@ async function filterForRoonQueueable(result, zoneId, options = {}) {
   }
 
   const discarded = [...(result.discarded || []), ...rejected];
+  const belowMinimumKept = accepted.filter((track) => track.belowMinimum).length;
+  const aboveMinimumKept = minScore ? Math.max(0, accepted.length - belowMinimumKept) : accepted.length;
   delete result.alternates;
   return {
     ...result,
@@ -1475,7 +1781,10 @@ async function filterForRoonQueueable(result, zoneId, options = {}) {
       roonCheckLimit: maxChecks,
       generated: accepted.length + discarded.length,
       kept: accepted.length,
-      discarded: discarded.length
+      discarded: discarded.length,
+      belowMinimumKept,
+      aboveMinimumKept,
+      minScoreSoftFallback: Boolean(minScore && belowMinimumKept)
     }
   };
 }
@@ -1531,7 +1840,9 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && pathname === "/api/history-report") {
-    const state = withHqplayerStatus(roon.getState());
+    const baseState = withHqplayerStatus(roon.getState());
+    scheduleRadioEnrichment(baseState);
+    const state = attachRadioEnrichment(baseState);
     listeningHistory.recordState(state);
     return sendJson(res, 200, listeningHistory.report({
       roonState: state,
@@ -1545,7 +1856,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && pathname === "/api/saved") {
-    return sendJson(res, 200, { tracks: savedPlaylist.list() });
+    return sendJson(res, 200, savedPlaylist.snapshot());
   }
 
   if (req.method === "GET" && pathname === "/api/session") {
@@ -1558,6 +1869,23 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && pathname === "/api/memory") {
     return sendJson(res, 200, trackMemory.summary());
+  }
+
+  if (req.method === "GET" && pathname === "/api/query-yield") {
+    return sendJson(res, 200, queryYieldTracker.summary());
+  }
+
+  if (req.method === "GET" && pathname === "/api/lastfm/status") {
+    const snapshot = await lastFmHistoryForDiscovery();
+    return sendJson(res, 200, {
+      ...lastfm.status(),
+      checked: Boolean(snapshot.checked),
+      returned: Number(snapshot.returned || 0),
+      topArtistPeriod: snapshot.topArtistPeriod || "",
+      topArtistsReturned: Number(snapshot.topArtistsReturned || 0),
+      topArtistsError: snapshot.topArtistsError || "",
+      error: snapshot.error || snapshot.reason || ""
+    });
   }
 
   if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
@@ -1594,19 +1922,26 @@ async function handleApi(req, res, url) {
     const catalogSearchMode = shouldSkipModelForCatalogSearch(effectiveBody);
     const budgets = strictSearchBudgets(effectiveBody, requestedCount);
     const roonFirst = { tracks: [], alternates: [], discarded: [], verification: {} };
+    const lastFmHistoryPromise = lastFmHistoryForDiscovery();
     let roonFirstError = "";
     let modelResult = null;
     let modelError = "";
+    let modelSkipped = "";
 
-    try {
-      modelResult = await withTimeout(
-        generateSearchPlan(config, effectiveBody),
-        budgets.modelTimeoutMs,
-        "The local model took too long to answer."
-      );
-    } catch (error) {
-      modelError = error.message;
+    if (catalogSearchMode) {
+      modelSkipped = "Catalog-style search; using deterministic TIDAL/Roon discovery for planning, then model review on verified candidates.";
       modelResult = { plan: null };
+    } else {
+      try {
+        modelResult = await withTimeout(
+          generateSearchPlan(config, effectiveBody),
+          budgets.modelTimeoutMs,
+          "The local model took too long to answer."
+        );
+      } catch (error) {
+        modelError = error.message;
+        modelResult = { plan: null };
+      }
     }
 
     const searchBody = {
@@ -1620,6 +1955,7 @@ async function handleApi(req, res, url) {
       ? "Roon-first discovery disabled. TIDAL generates candidates; Roon verifies queueability after scoring."
       : "No Roon output zone selected. Roon verification requires a zone.";
 
+    const scrobbleHistory = await lastFmHistoryPromise;
     let discovered = null;
     try {
       discovered = await withTimeout(
@@ -1627,7 +1963,9 @@ async function handleApi(req, res, url) {
           tidal,
           options: searchBody,
           history: discoveryHistory,
-          tasteProfile
+          tasteProfile,
+          scrobbleHistory,
+          queryYieldTracker
         }),
         budgets.discoveryTimeoutMs,
         "TIDAL discovery took too long."
@@ -1645,7 +1983,34 @@ async function handleApi(req, res, url) {
           discarded: (roonFirst.discarded || []).length,
           discoveryError: error.message,
           intent: searchProfile.intent,
-          scoringMode: searchProfile.scoringMode
+          scoringMode: searchProfile.scoringMode,
+          lastfm: {
+            enabled: scrobbleHistory?.enabled !== false,
+            configured: Boolean(scrobbleHistory?.configured),
+            apiKeyConfigured: Boolean(scrobbleHistory?.apiKeyConfigured),
+            usernameConfigured: Boolean(scrobbleHistory?.usernameConfigured),
+            checked: Boolean(scrobbleHistory?.checked),
+            returned: Number(scrobbleHistory?.returned || 0),
+            topArtistPeriod: scrobbleHistory?.topArtistPeriod || "",
+            topArtistsReturned: Number(scrobbleHistory?.topArtistsReturned || 0),
+            topArtistsError: scrobbleHistory?.topArtistsError || "",
+            error: scrobbleHistory?.error || scrobbleHistory?.reason || ""
+          },
+          queryYield: {
+            enabled: true,
+            attempted: 0,
+            returned: 0,
+            accepted: 0,
+            rejected: 0,
+            seoRejects: 0,
+            genreRejects: 0,
+            errorCount: 1,
+            recordCount: 0,
+            adjustments: [],
+            best: [],
+            worst: [],
+            error: error.message
+          }
         }
       };
     }
@@ -1664,7 +2029,7 @@ async function handleApi(req, res, url) {
         : (OPENAI_COMPATIBLE_PROVIDERS.has(config.llmProvider)
           ? config.openAiCompatibleModel
           : config.ollamaModel),
-      modelSkipped: "",
+      modelSkipped,
       roonFirstKept: roonFirst.tracks.length,
       roonFirstError,
       roonFirstSearches: roonFirst.verification?.searches || 0,
@@ -1675,17 +2040,29 @@ async function handleApi(req, res, url) {
       tidalDirectFallback: false,
       strategy: "tidal-catalog-first-roon-verified"
     };
+    discovered = await runAutoBroadenSearches(
+      discovered,
+      searchBody,
+      searchProfile,
+      requestedCount,
+      scrobbleHistory,
+      budgets
+    );
     let modelCandidateReview = { enabled: false, scored: 0, rejected: 0, error: "" };
     try {
       const reviewed = await applyModelCandidateReview(discovered, searchBody);
       discovered = reviewed.result;
       modelCandidateReview = reviewed.review;
+      if (modelError && !modelCandidateReview.error) {
+        modelCandidateReview.planningError = modelError;
+      }
     } catch (error) {
       modelCandidateReview = {
         enabled: false,
         scored: 0,
         rejected: 0,
-        error: error.message
+        error: error.message,
+        planningError: modelError || ""
       };
     }
     discovered.verification = {
@@ -1700,19 +2077,7 @@ async function handleApi(req, res, url) {
         "Roon queue verification took too long."
       );
     } catch (error) {
-      result = {
-        ...discovered,
-        tracks: roonFirst.tracks || [],
-        verification: {
-          ...(discovered.verification || {}),
-          roonQueueable: true,
-          roonStrict: true,
-          roonVerificationError: error.message,
-          kept: roonFirst.tracks.length,
-          generated: (roonFirst.tracks || []).length + (discovered.discarded || []).length,
-          discarded: (discovered.discarded || []).length
-        }
-      };
+      result = roonVerificationTimeoutFallback(discovered, requestedCount, error);
     }
     discoveryHistory.record(result.tracks || []);
     trackMemory.record([...(result.tracks || []), ...(result.alternates || [])]);
@@ -1736,9 +2101,10 @@ async function handleApi(req, res, url) {
   }
   if (pathname === "/api/feedback") {
     const rating = normalizeRating(body.rating);
-    const result = tasteProfile.record(body.track || {}, rating);
-    sessionStore.updateFeedback(body.track || {}, rating);
-    trackMemory.updateFeedback(body.track || {}, rating);
+    const feedbackTrack = feedbackTrackWithSessionContext(body.track || {});
+    const result = tasteProfile.record(feedbackTrack, rating, feedbackCalibrationContext(feedbackTrack));
+    sessionStore.updateFeedback(feedbackTrack, rating);
+    trackMemory.updateFeedback(feedbackTrack, rating);
     scheduleBroadcast();
     return sendJson(res, 200, result);
   }
@@ -1808,7 +2174,7 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, result);
   }
   if (pathname === "/api/saved/add") {
-    const result = savedPlaylist.add(body.track || {});
+    const result = savedPlaylist.add(body.track || {}, body.listId || body.list_id || "");
     if (result.added && typeof tasteProfile.recordCandidate === "function") {
       result.taste = tasteProfile.recordCandidate(result.track || body.track || {});
     }
@@ -1816,7 +2182,32 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, result);
   }
   if (pathname === "/api/saved/remove") {
-    const result = savedPlaylist.remove(body.key);
+    const result = savedPlaylist.remove(body.key, body.listId || body.list_id || "");
+    scheduleBroadcast();
+    return sendJson(res, 200, result);
+  }
+  if (pathname === "/api/saved/move") {
+    const result = savedPlaylist.move(body.key, body.fromListId || body.from_list_id || "", body.toListId || body.to_list_id || "");
+    scheduleBroadcast();
+    return sendJson(res, 200, result);
+  }
+  if (pathname === "/api/saved/list/select") {
+    const result = savedPlaylist.select(body.listId || body.list_id || "");
+    scheduleBroadcast();
+    return sendJson(res, 200, result);
+  }
+  if (pathname === "/api/saved/list/create") {
+    const result = savedPlaylist.create(body.name || "");
+    scheduleBroadcast();
+    return sendJson(res, 200, result);
+  }
+  if (pathname === "/api/saved/list/rename") {
+    const result = savedPlaylist.rename(body.listId || body.list_id || "", body.name || "");
+    scheduleBroadcast();
+    return sendJson(res, 200, result);
+  }
+  if (pathname === "/api/saved/list/delete") {
+    const result = savedPlaylist.delete(body.listId || body.list_id || "");
     scheduleBroadcast();
     return sendJson(res, 200, result);
   }
@@ -1838,7 +2229,8 @@ const server = http.createServer(async (req, res) => {
       serveStatic(req, res, url.pathname);
     }
   } catch (error) {
-    sendJson(res, 500, { error: error.message });
+    const status = Number(error?.statusCode || error?.status || 500);
+    sendJson(res, status >= 400 && status < 600 ? status : 500, { error: error.message || "Server error" });
   }
 });
 

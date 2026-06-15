@@ -559,6 +559,45 @@ select:focus option,
   flex-wrap: wrap;
 }
 
+.nowCandidateAddGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  max-width: 100%;
+}
+
+.candidateListMenu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 70;
+  display: grid;
+  gap: 8px;
+  width: max-content;
+  min-width: min(260px, 86vw);
+  max-width: min(340px, 88vw);
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgba(7, 3, 16, 0.98), rgba(3, 1, 8, 0.97)) padding-box,
+    linear-gradient(135deg, rgba(217, 179, 255, 0.42), rgba(255, 115, 216, 0.22), rgba(143, 240, 255, 0.16)) border-box;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.58), inset 0 1px 0 rgba(244, 232, 255, 0.08);
+}
+
+.candidateListMenu[hidden] {
+  display: none;
+}
+
+.candidateListMenu button {
+  width: 100%;
+  min-height: 38px;
+  justify-content: flex-start;
+  text-align: left;
+  white-space: normal;
+}
+
 .nowDiscoveryBadge {
   display: flex;
   align-items: center;
@@ -950,12 +989,133 @@ input {
   min-width: 0;
 }
 
+.systemHealth {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.systemHealthHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: rgba(236, 218, 255, 0.78);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.systemHealthHead small {
+  color: rgba(213, 192, 238, 0.66);
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: none;
+}
+
+.healthGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.healthCard {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgba(7, 2, 16, 0.98), rgba(12, 3, 24, 0.94)) padding-box,
+    linear-gradient(135deg, rgba(151, 104, 255, 0.34), rgba(224, 103, 255, 0.12)) border-box;
+  box-shadow: inset 0 1px 0 rgba(244, 232, 255, 0.06);
+}
+
+.healthCard div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.healthCard span,
+.healthCard small {
+  overflow-wrap: anywhere;
+}
+
+.healthCard span {
+  color: rgba(203, 176, 237, 0.74);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.healthCard strong {
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 850;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.healthCard small {
+  display: block;
+  margin-top: 7px;
+  color: rgba(231, 216, 249, 0.74);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.healthCard::before {
+  content: "";
+  display: block;
+  width: 9px;
+  height: 9px;
+  margin-bottom: 8px;
+  border-radius: 999px;
+  background: var(--good);
+  box-shadow: 0 0 14px rgba(28, 244, 195, 0.42);
+}
+
+.healthWarn::before {
+  background: #ffca63;
+  box-shadow: 0 0 14px rgba(255, 202, 99, 0.42);
+}
+
+.healthBad::before {
+  background: #ff4f74;
+  box-shadow: 0 0 14px rgba(255, 79, 116, 0.44);
+}
+
+.healthUnknown::before {
+  background: #9e88bd;
+  box-shadow: 0 0 12px rgba(158, 136, 189, 0.36);
+}
+
 .results {
   margin-top: 20px;
 }
 
 .saved {
   margin-top: 20px;
+}
+
+.savedListTools {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.1fr) minmax(180px, 1fr) auto auto auto;
+  align-items: end;
+  gap: 12px;
+  margin: 14px 0 10px;
+}
+
+.savedListTools select {
+  width: 100%;
+  min-width: 0;
+}
+
+.savedListTools button {
+  min-height: 38px;
+  white-space: nowrap;
 }
 
 .reportHero {
@@ -1192,6 +1352,203 @@ input {
   overflow-wrap: anywhere;
 }
 
+.sourceReport {
+  margin: 0 0 10px;
+}
+
+.sourceReport[hidden] {
+  display: none;
+}
+
+.sourceReportCard {
+  display: grid;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background:
+    linear-gradient(145deg, rgba(5, 2, 13, 0.94), rgba(14, 7, 29, 0.88)) padding-box,
+    linear-gradient(135deg, rgba(143, 240, 255, 0.2), rgba(255, 220, 135, 0.18), rgba(255, 115, 216, 0.12)) border-box;
+  box-shadow: var(--inner-light), 0 12px 30px rgba(2, 0, 8, 0.34);
+}
+
+.sourceReportMetrics,
+.sourceReportColumns,
+.sourceReportNotes {
+  display: grid;
+  gap: 8px;
+}
+
+.sourceReportMetrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.sourceReportMetrics p,
+.sourceReportNotes p,
+.sourceReportGrid p {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(217, 179, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(6, 2, 13, 0.52);
+}
+
+.sourceReportMetrics span,
+.sourceReportColumns h3,
+.sourceReportNotes span,
+.sourceReportGrid span,
+.sourceReportEmpty {
+  color: rgba(217, 179, 255, 0.72);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.sourceReportMetrics b,
+.sourceReportNotes b,
+.sourceReportGrid b {
+  color: rgba(250, 246, 255, 0.94);
+  font-size: 13px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.sourceReportMetrics b {
+  font-size: 18px;
+}
+
+.sourceReportColumns {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+}
+
+.sourceReportColumns section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sourceReportColumns h3 {
+  margin: 0;
+}
+
+.sourceReportGrid {
+  display: grid;
+  gap: 6px;
+}
+
+.sourceReportGrid p {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.sourceReportGrid b {
+  color: var(--accent);
+}
+
+.sourceReportEmpty {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(217, 179, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(6, 2, 13, 0.38);
+}
+
+.sourceReportNotes {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.sourceReportCard details {
+  color: rgba(241, 232, 255, 0.9);
+}
+
+.sourceReportCard summary {
+  cursor: pointer;
+  font-weight: 850;
+}
+
+.sourceReportCard summary span {
+  margin-left: 8px;
+  color: rgba(217, 179, 255, 0.72);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.sourceReportCard ol {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding-left: 22px;
+}
+
+.sourceReportCard li strong {
+  display: block;
+  color: #fff;
+}
+
+.sourceReportCard li span {
+  color: rgba(236, 224, 251, 0.82);
+  overflow-wrap: anywhere;
+}
+
+.modelAudit,
+.feedbackCalibration,
+.queryYieldDebug {
+  border-top: 1px solid rgba(217, 179, 255, 0.12);
+  padding-top: 4px;
+}
+
+.modelAuditGrid,
+.feedbackCalibrationGrid,
+.queryYieldDebug .modelAuditGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.modelAuditGrid section,
+.feedbackCalibrationGrid section,
+.queryYieldDebug .modelAuditGrid section {
+  min-width: 0;
+}
+
+.modelAuditGrid h3,
+.feedbackCalibrationGrid h3,
+.queryYieldDebug .modelAuditGrid h3 {
+  margin: 0 0 6px;
+  color: rgba(217, 179, 255, 0.72);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.modelAuditGrid ol,
+.feedbackCalibrationGrid ol,
+.queryYieldDebug .modelAuditGrid ol {
+  margin: 0;
+}
+
+.modelAuditGrid li,
+.feedbackCalibrationGrid li,
+.queryYieldDebug .modelAuditGrid li {
+  display: grid;
+  gap: 4px;
+}
+
+.modelAuditGrid li em,
+.feedbackCalibrationGrid li em,
+.queryYieldDebug .modelAuditGrid li em {
+  color: rgba(236, 224, 251, 0.72);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .emptyState {
   display: grid;
   gap: 12px;
@@ -1261,6 +1618,26 @@ input {
   flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.candidateSaveGroup,
+.savedMoveGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.candidateSaveGroup select,
+.savedMoveGroup select {
+  width: min(190px, 42vw);
+  min-width: 130px;
+  min-height: 40px;
+}
+
+.candidateSaveGroup button,
+.savedMoveGroup button {
+  min-width: 74px;
 }
 
 .volumeButtons {
@@ -1551,6 +1928,76 @@ input {
   font-size: 13px;
 }
 
+.rejectedDebug {
+  margin: 0 0 12px;
+}
+
+.rejectedDebug[hidden] {
+  display: none;
+}
+
+.rejectedDebugCard {
+  display: grid;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background:
+    linear-gradient(145deg, rgba(6, 2, 15, 0.94), rgba(16, 5, 28, 0.88)) padding-box,
+    linear-gradient(135deg, rgba(255, 115, 216, 0.28), rgba(217, 179, 255, 0.2), rgba(143, 240, 255, 0.12)) border-box;
+  box-shadow: var(--inner-light), 0 12px 30px rgba(2, 0, 8, 0.34);
+}
+
+.rejectedGroups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.rejectedGroups p {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(217, 179, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(6, 2, 13, 0.52);
+}
+
+.rejectedGroups b {
+  color: #ff9eda;
+}
+
+.rejectedGroups span,
+.rejectedDebug li span {
+  color: rgba(236, 224, 251, 0.82);
+  overflow-wrap: anywhere;
+}
+
+.rejectedDebug details {
+  color: rgba(241, 232, 255, 0.9);
+}
+
+.rejectedDebug summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.rejectedDebug ol {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding-left: 22px;
+}
+
+.rejectedDebug li strong {
+  display: block;
+  color: #fff;
+}
+
 .liveQueue {
   margin: 14px 0;
   padding: 12px;
@@ -1685,7 +2132,8 @@ input {
   pointer-events: none;
 }
 
-.feedbackButton.never {
+.feedbackButton.never,
+.feedbackButton.wrong_genre {
   min-width: 132px;
 }
 
@@ -1709,6 +2157,13 @@ input {
     linear-gradient(135deg, rgba(220, 190, 255, 0.9), rgba(121, 78, 201, 0.68)) padding-box,
     linear-gradient(135deg, rgba(239, 219, 255, 0.9), rgba(174, 107, 255, 0.5)) border-box;
   box-shadow: var(--inner-light), 0 0 22px rgba(174, 107, 255, 0.18);
+}
+
+.feedbackButton.wrong_genre.active {
+  background:
+    linear-gradient(135deg, rgba(255, 206, 112, 0.94), rgba(183, 111, 26, 0.72)) padding-box,
+    linear-gradient(135deg, rgba(255, 232, 172, 0.92), rgba(255, 178, 64, 0.54)) border-box;
+  box-shadow: var(--inner-light), 0 0 24px rgba(255, 178, 64, 0.22);
 }
 
 .feedbackButton.skip.active,
@@ -1793,6 +2248,10 @@ button:disabled:hover {
     justify-items: stretch;
   }
 
+  .healthGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .brandMark {
     order: -1;
   }
@@ -1862,6 +2321,21 @@ button:disabled:hover {
     grid-template-columns: 1fr;
   }
 
+  .sourceReportMetrics,
+  .sourceReportNotes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sourceReportColumns {
+    grid-template-columns: 1fr;
+  }
+
+  .modelAuditGrid,
+  .feedbackCalibrationGrid,
+  .queryYieldDebug .modelAuditGrid {
+    grid-template-columns: 1fr;
+  }
+
   .reportHero {
     display: grid;
   }
@@ -1875,6 +2349,19 @@ button:disabled:hover {
 
   .grid {
     grid-template-columns: 1fr;
+  }
+
+  .systemHealthHead {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .healthGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .healthCard {
+    padding: 12px;
   }
 
   .wideField {
@@ -1895,6 +2382,26 @@ button:disabled:hover {
   }
 
   .intentDebugGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sourceReportMetrics,
+  .sourceReportNotes {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .sourceReportCard {
+    padding: 10px;
+  }
+
+  .sourceReportCard summary span {
+    display: block;
+    margin: 4px 0 0;
+  }
+
+  .modelAuditGrid,
+  .feedbackCalibrationGrid,
+  .queryYieldDebug .modelAuditGrid {
     grid-template-columns: 1fr;
   }
 
@@ -1944,6 +2451,10 @@ button:disabled:hover {
     justify-content: flex-start;
   }
 
+  .nowCandidateAddGroup {
+    width: 100%;
+  }
+
   .nowDiscoveryActions .scoreBadge {
     max-width: 100%;
     white-space: normal;
@@ -1987,6 +2498,17 @@ button:disabled:hover {
   .trackActions {
     justify-content: flex-start;
     gap: 8px;
+  }
+
+  .candidateSaveGroup,
+  .savedMoveGroup {
+    width: 100%;
+  }
+
+  .candidateSaveGroup select,
+  .savedMoveGroup select {
+    flex: 1 1 160px;
+    width: auto;
   }
 
   .trackActions button,
@@ -2126,6 +2648,10 @@ button:disabled:hover {
     padding: 12px 10px;
   }
 
+  .savedListTools {
+    grid-template-columns: 1fr;
+  }
+
   .tracks {
     gap: 16px;
   }
@@ -2198,6 +2724,18 @@ button:disabled:hover {
 
   .trackActions {
     width: 100%;
+  }
+
+  .candidateSaveGroup,
+  .savedMoveGroup {
+    width: 100%;
+  }
+
+  .candidateSaveGroup select,
+  .savedMoveGroup select {
+    flex: 1 1 160px;
+    width: auto;
+    font-size: 16px;
   }
 
   .trackActions button,
@@ -2617,6 +3155,10 @@ a,
     width: 100%;
   }
 
+  .player > .nowDiscoveryTools .nowCandidateAddGroup {
+    min-width: 0;
+  }
+
   .player > .controls {
     grid-area: controls;
     margin: 0;
@@ -2951,6 +3493,12 @@ body.playerMaximized {
   .player.isMaximized .nowDiscoveryActions {
     grid-area: actions;
   }
+
+  .player.isMaximized .nowCandidateAddGroup {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 620px) {
@@ -2977,6 +3525,13 @@ body.playerMaximized {
   .player.isMaximized .nowDiscoveryActions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .player.isMaximized .nowCandidateAddGroup {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: 1fr;
     width: 100%;
   }
 
@@ -3118,5 +3673,616 @@ body.playerMaximized {
 
   .composer .grid {
     gap: 14px;
+  }
+}
+
+/* Tablet player polish: even button rows, contained seek bar, and fullscreen player shell. */
+.player,
+.player * {
+  min-width: 0;
+}
+
+.playerViewControls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 6;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  max-width: calc(100% - 24px);
+}
+
+.playerViewControls button,
+.playerMaxToggle,
+.playerFullToggle {
+  position: static;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 820;
+  white-space: nowrap;
+}
+
+.player > .now {
+  padding-right: min(260px, 38vw);
+}
+
+.seekBlock,
+#seekSlider {
+  width: 100%;
+  max-width: 100%;
+}
+
+.playerMeta,
+.seekTimes {
+  min-width: 0;
+}
+
+#queueInfo {
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (min-width: 700px) and (max-width: 1099px) and (orientation: landscape) {
+  .shell {
+    width: min(100vw - 20px, 1180px);
+    padding-top: 8px;
+  }
+
+  .topChrome,
+  .topbar {
+    margin-bottom: 8px;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .player {
+    width: 100%;
+    min-width: 0;
+    padding: 14px;
+  }
+
+  .player > .now {
+    padding-right: min(250px, 34vw);
+  }
+
+  .nowDiscoveryTools {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "feedback badge"
+      "actions actions";
+    align-items: start;
+    gap: 10px;
+  }
+
+  .nowFeedback {
+    grid-area: feedback;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+
+  .nowDiscoveryBadge {
+    grid-area: badge;
+    justify-content: flex-end;
+  }
+
+  .nowDiscoveryActions {
+    grid-area: actions;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+
+  .nowDiscoveryActions button,
+  .nowCandidateAddGroup,
+  .nowCandidateAddGroup > button,
+  .feedbackButtons button,
+  .controls button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .feedbackButton.wrong_genre,
+  .feedbackButton.never {
+    min-width: 0;
+  }
+
+  .controls {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin: 12px 0 10px;
+  }
+
+  .seekBlock {
+    margin-bottom: 8px;
+  }
+}
+
+.player.isMaximized {
+  max-width: none;
+  overflow-x: hidden;
+}
+
+.player.isMaximized .playerViewControls {
+  top: 14px;
+  right: 14px;
+}
+
+.player.isMaximized > .now {
+  padding-right: 0;
+}
+
+.player.isMaximized .nowDiscoveryActions,
+.player.isMaximized .controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  width: 100%;
+}
+
+.player.isMaximized .nowDiscoveryActions button,
+.player.isMaximized .nowCandidateAddGroup,
+.player.isMaximized .nowCandidateAddGroup > button,
+.player.isMaximized .controls button,
+.player.isMaximized .feedbackButtons button {
+  width: 100%;
+  min-width: 0;
+}
+
+.player.isMaximized .nowCandidateAddGroup {
+  display: grid;
+}
+
+.player.isFullWindow,
+.player:fullscreen,
+.player:-webkit-full-screen {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  max-height: none;
+  overflow: auto;
+  border-radius: 0;
+  padding: max(58px, calc(44px + env(safe-area-inset-top))) max(16px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background:
+    linear-gradient(145deg, rgba(5, 2, 12, 0.98), rgba(15, 6, 29, 0.96)) padding-box,
+    var(--holo-border) border-box;
+}
+
+body.playerFullWindow {
+  overflow: hidden;
+}
+
+@media (min-width: 760px) and (orientation: landscape) {
+  .player.isMaximized,
+  .player.isFullWindow,
+  .player:fullscreen,
+  .player:-webkit-full-screen {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "now"
+      "tools"
+      "controls"
+      "seek"
+      "queue"
+      "rabbit";
+    gap: clamp(8px, 1.4vh, 16px);
+    align-content: start;
+  }
+
+  .player.isMaximized .cover,
+  .player.isFullWindow .cover,
+  .player:fullscreen .cover,
+  .player:-webkit-full-screen .cover {
+    width: clamp(74px, 15vh, 128px);
+    height: clamp(74px, 15vh, 128px);
+  }
+
+  .player.isMaximized #nowTitle,
+  .player.isFullWindow #nowTitle,
+  .player:fullscreen #nowTitle,
+  .player:-webkit-full-screen #nowTitle {
+    font-size: clamp(26px, 5vh, 48px);
+    line-height: 1.02;
+  }
+
+  .player.isMaximized #nowSubtitle,
+  .player.isFullWindow #nowSubtitle,
+  .player:fullscreen #nowSubtitle,
+  .player:-webkit-full-screen #nowSubtitle {
+    font-size: clamp(16px, 3vh, 26px);
+  }
+
+  .player.isMaximized .feedbackButtons,
+  .player.isFullWindow .feedbackButtons,
+  .player:fullscreen .feedbackButtons,
+  .player:-webkit-full-screen .feedbackButtons {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+
+  .player.isMaximized .feedbackButtons button,
+  .player.isFullWindow .feedbackButtons button,
+  .player:fullscreen .feedbackButtons button,
+  .player:-webkit-full-screen .feedbackButtons button,
+  .player.isMaximized .nowDiscoveryActions button,
+  .player.isFullWindow .nowDiscoveryActions button,
+  .player:fullscreen .nowDiscoveryActions button,
+  .player:-webkit-full-screen .nowDiscoveryActions button,
+  .player.isMaximized .controls button,
+  .player.isFullWindow .controls button,
+  .player:fullscreen .controls button,
+  .player:-webkit-full-screen .controls button {
+    min-height: clamp(38px, 6vh, 54px);
+    font-size: clamp(14px, 2.4vh, 20px);
+    padding: 0 10px;
+  }
+
+  .player.isMaximized .playerMeta,
+  .player.isMaximized .seekTimes,
+  .player.isFullWindow .playerMeta,
+  .player.isFullWindow .seekTimes,
+  .player:fullscreen .playerMeta,
+  .player:fullscreen .seekTimes,
+  .player:-webkit-full-screen .playerMeta,
+  .player:-webkit-full-screen .seekTimes {
+    font-size: clamp(13px, 2.2vh, 18px);
+  }
+
+  .player.isMaximized #seekSlider,
+  .player.isFullWindow #seekSlider,
+  .player:fullscreen #seekSlider,
+  .player:-webkit-full-screen #seekSlider {
+    min-height: clamp(28px, 5vh, 40px);
+  }
+}
+
+@media (max-width: 620px) {
+  .playerViewControls {
+    left: 10px;
+    right: 10px;
+    justify-content: flex-end;
+  }
+
+  .playerViewControls button {
+    min-height: 30px;
+    padding: 0 9px;
+    font-size: 11px;
+  }
+
+  .player > .now {
+    padding-right: 0;
+    padding-top: 26px;
+  }
+}
+
+/* Full-window player hierarchy: score first, ratings second, actions evenly spaced. */
+@media (min-width: 700px) and (orientation: landscape) {
+  .player.isMaximized > .nowDiscoveryTools,
+  .player.isFullWindow > .nowDiscoveryTools,
+  .player:fullscreen > .nowDiscoveryTools,
+  .player:-webkit-full-screen > .nowDiscoveryTools {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "badge"
+      "feedback"
+      "actions";
+    align-items: stretch;
+    gap: clamp(8px, 1.3vh, 14px);
+    width: 100%;
+  }
+
+  .player.isMaximized .nowDiscoveryBadge,
+  .player.isFullWindow .nowDiscoveryBadge,
+  .player:fullscreen .nowDiscoveryBadge,
+  .player:-webkit-full-screen .nowDiscoveryBadge {
+    grid-area: badge;
+    justify-content: flex-end;
+    padding: 0;
+  }
+
+  .player.isMaximized .nowDiscoveryBadge .scoreBadge,
+  .player.isFullWindow .nowDiscoveryBadge .scoreBadge,
+  .player:fullscreen .nowDiscoveryBadge .scoreBadge,
+  .player:-webkit-full-screen .nowDiscoveryBadge .scoreBadge {
+    min-height: clamp(32px, 5vh, 46px);
+    padding: 0 clamp(14px, 2.4vw, 24px);
+    border-width: 2px;
+    border-radius: 999px;
+    font-size: clamp(15px, 2.7vh, 22px);
+    font-weight: 900;
+    letter-spacing: 0;
+    box-shadow: var(--inner-light), 0 0 28px rgba(143, 240, 255, 0.12);
+  }
+
+  .player.isMaximized .nowFeedback,
+  .player.isFullWindow .nowFeedback,
+  .player:fullscreen .nowFeedback,
+  .player:-webkit-full-screen .nowFeedback {
+    grid-area: feedback;
+  }
+
+  .player.isMaximized .nowDiscoveryActions,
+  .player.isFullWindow .nowDiscoveryActions,
+  .player:fullscreen .nowDiscoveryActions,
+  .player:-webkit-full-screen .nowDiscoveryActions {
+    grid-area: actions;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: clamp(8px, 1.4vw, 12px);
+    width: 100%;
+  }
+
+  .player.isMaximized .nowCandidateAddGroup,
+  .player.isFullWindow .nowCandidateAddGroup,
+  .player:fullscreen .nowCandidateAddGroup,
+  .player:-webkit-full-screen .nowCandidateAddGroup {
+    grid-column: auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .player.isMaximized .nowDiscoveryActions button,
+  .player.isFullWindow .nowDiscoveryActions button,
+  .player:fullscreen .nowDiscoveryActions button,
+  .player:-webkit-full-screen .nowDiscoveryActions button,
+  .player.isMaximized .nowCandidateAddGroup > button,
+  .player.isFullWindow .nowCandidateAddGroup > button,
+  .player:fullscreen .nowCandidateAddGroup > button,
+  .player:-webkit-full-screen .nowCandidateAddGroup > button {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* Full-window player focus: larger artwork, no Roon queue panel. */
+@media (min-width: 700px) and (orientation: landscape) {
+  .player.isFullWindow,
+  .player:fullscreen,
+  .player:-webkit-full-screen {
+    grid-template-areas:
+      "now"
+      "tools"
+      "controls"
+      "seek"
+      "rabbit";
+    gap: clamp(10px, 1.7vh, 18px);
+  }
+
+  .player.isFullWindow > .liveQueue,
+  .player:fullscreen > .liveQueue,
+  .player:-webkit-full-screen > .liveQueue {
+    display: none !important;
+  }
+
+  .player.isFullWindow > .now,
+  .player:fullscreen > .now,
+  .player:-webkit-full-screen > .now {
+    gap: clamp(18px, 2.4vw, 36px);
+    align-items: center;
+    min-height: clamp(230px, 48vh, 430px);
+  }
+
+  .player.isFullWindow .cover,
+  .player:fullscreen .cover,
+  .player:-webkit-full-screen .cover {
+    width: clamp(220px, 46vh, 420px);
+    height: clamp(220px, 46vh, 420px);
+  }
+
+  .player.isFullWindow .artStack,
+  .player:fullscreen .artStack,
+  .player:-webkit-full-screen .artStack {
+    align-self: center;
+  }
+}
+
+/* Phone portrait fullscreen: keep the player dense without touching landscape. */
+@media (max-width: 699px) and (orientation: portrait) {
+  .player.isFullWindow,
+  .player:fullscreen,
+  .player:-webkit-full-screen {
+    grid-template-areas:
+      "now"
+      "tools"
+      "controls"
+      "seek"
+      "rabbit";
+    gap: 10px;
+    padding: max(50px, calc(40px + env(safe-area-inset-top))) 14px max(12px, env(safe-area-inset-bottom));
+    overflow-x: hidden;
+  }
+
+  .player.isFullWindow .playerViewControls,
+  .player:fullscreen .playerViewControls,
+  .player:-webkit-full-screen .playerViewControls {
+    top: 10px;
+    left: 12px;
+    right: 12px;
+    gap: 8px;
+  }
+
+  .player.isFullWindow .playerViewControls button,
+  .player:fullscreen .playerViewControls button,
+  .player:-webkit-full-screen .playerViewControls button {
+    min-height: 32px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+
+  .player.isFullWindow > .now,
+  .player:fullscreen > .now,
+  .player:-webkit-full-screen > .now {
+    display: grid;
+    grid-template-columns: minmax(128px, 44vw) minmax(0, 1fr);
+    gap: 14px;
+    align-items: center;
+    padding: 0;
+  }
+
+  .player.isFullWindow .cover,
+  .player:fullscreen .cover,
+  .player:-webkit-full-screen .cover {
+    width: min(44vw, 190px);
+    height: min(44vw, 190px);
+  }
+
+  .player.isFullWindow #nowTitle,
+  .player:fullscreen #nowTitle,
+  .player:-webkit-full-screen #nowTitle {
+    font-size: clamp(28px, 8vw, 40px);
+    line-height: 1;
+  }
+
+  .player.isFullWindow #nowSubtitle,
+  .player:fullscreen #nowSubtitle,
+  .player:-webkit-full-screen #nowSubtitle {
+    margin-top: 6px;
+    font-size: clamp(17px, 4.8vw, 24px);
+    line-height: 1.08;
+  }
+
+  .player.isFullWindow > .nowDiscoveryTools,
+  .player:fullscreen > .nowDiscoveryTools,
+  .player:-webkit-full-screen > .nowDiscoveryTools {
+    gap: 8px;
+    margin: 0;
+  }
+
+  .player.isFullWindow .feedbackButtons,
+  .player:fullscreen .feedbackButtons,
+  .player:-webkit-full-screen .feedbackButtons {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+    margin: 0;
+  }
+
+  .player.isFullWindow .feedbackButtons button,
+  .player:fullscreen .feedbackButtons button,
+  .player:-webkit-full-screen .feedbackButtons button {
+    min-width: 0;
+    min-height: 46px;
+    padding: 0 10px;
+    font-size: 17px;
+  }
+
+  .player.isFullWindow .feedbackButton.never,
+  .player:fullscreen .feedbackButton.never,
+  .player:-webkit-full-screen .feedbackButton.never {
+    grid-column: auto;
+  }
+
+  .player.isFullWindow .nowDiscoveryBadge,
+  .player:fullscreen .nowDiscoveryBadge,
+  .player:-webkit-full-screen .nowDiscoveryBadge {
+    justify-content: flex-start;
+    margin-top: 2px;
+  }
+
+  .player.isFullWindow .nowDiscoveryBadge .scoreBadge,
+  .player:fullscreen .nowDiscoveryBadge .scoreBadge,
+  .player:-webkit-full-screen .nowDiscoveryBadge .scoreBadge {
+    min-height: 28px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+
+  .player.isFullWindow .nowDiscoveryActions,
+  .player:fullscreen .nowDiscoveryActions,
+  .player:-webkit-full-screen .nowDiscoveryActions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+
+  .player.isFullWindow .nowCandidateAddGroup,
+  .player:fullscreen .nowCandidateAddGroup,
+  .player:-webkit-full-screen .nowCandidateAddGroup,
+  .player.isFullWindow .nowDiscoveryActions #openRabbitHole,
+  .player:fullscreen .nowDiscoveryActions #openRabbitHole,
+  .player:-webkit-full-screen .nowDiscoveryActions #openRabbitHole {
+    grid-column: auto;
+  }
+
+  .player.isFullWindow .nowDiscoveryActions button,
+  .player:fullscreen .nowDiscoveryActions button,
+  .player:-webkit-full-screen .nowDiscoveryActions button,
+  .player.isFullWindow .nowCandidateAddGroup > button,
+  .player:fullscreen .nowCandidateAddGroup > button,
+  .player:-webkit-full-screen .nowCandidateAddGroup > button {
+    width: 100%;
+    min-height: 42px;
+    min-width: 0;
+    padding: 0 10px;
+    font-size: 15px;
+    line-height: 1.1;
+  }
+
+  .player.isFullWindow > .controls,
+  .player:fullscreen > .controls,
+  .player:-webkit-full-screen > .controls {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0;
+  }
+
+  .player.isFullWindow .controls button,
+  .player:fullscreen .controls button,
+  .player:-webkit-full-screen .controls button {
+    min-height: 40px;
+    padding: 0 8px;
+    font-size: 14px;
+  }
+
+  .player.isFullWindow > .seekBlock,
+  .player:fullscreen > .seekBlock,
+  .player:-webkit-full-screen > .seekBlock {
+    gap: 4px;
+    margin: 0;
+  }
+
+  .player.isFullWindow .playerMeta,
+  .player.isFullWindow .seekTimes,
+  .player:fullscreen .playerMeta,
+  .player:fullscreen .seekTimes,
+  .player:-webkit-full-screen .playerMeta,
+  .player:-webkit-full-screen .seekTimes {
+    font-size: 12px;
+  }
+
+  .player.isFullWindow #seekSlider,
+  .player:fullscreen #seekSlider,
+  .player:-webkit-full-screen #seekSlider {
+    min-height: 26px;
+  }
+
+  .player.isFullWindow > .liveQueue,
+  .player:fullscreen > .liveQueue,
+  .player:-webkit-full-screen > .liveQueue {
+    display: none !important;
   }
 }

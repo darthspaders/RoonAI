@@ -7,8 +7,12 @@ const state = {
   lastResult: null,
   playlists: [],
   playlistSeedTracks: [],
+  savedLists: [],
+  activeSavedListId: "",
   savedTracks: [],
   feedbackByKey: {},
+  calibration: null,
+  calibrationVersion: "",
   appUpdatedAt: "",
   savedVersion: "",
   sessionUpdatedAt: "",
@@ -17,6 +21,8 @@ const state = {
   memory: null,
   historyReport: null,
   historyNeedsRefresh: true,
+  appStatus: null,
+  connectionStatus: { connected: false, coreName: "" },
   nowTrack: null,
   nowTrackSource: "",
   nowMatchIndex: -1,
@@ -25,7 +31,8 @@ const state = {
   rabbitHoleKey: "",
   isSeeking: false,
   playerMaximized: localStorage.getItem("playerMaximized") === "1",
-  llmStatus: null
+  llmStatus: null,
+  rejectedDebugOpen: false
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -50,6 +57,17 @@ function escapeHtml(value) {
     "\"": "&quot;",
     "'": "&#39;"
   }[character]));
+}
+
+function safeHttpUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    const url = new URL(text, window.location.origin);
+    return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
 }
 
 function summarizeNowPlaying(zone) {
@@ -223,6 +241,139 @@ function formatQueueSeconds(value) {
   const minutes = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
   const remainder = String(seconds % 60).padStart(2, "0");
   return `${hours}:${minutes}:${remainder}`;
+}
+
+function formatHealthSeconds(value) {
+  const seconds = Math.ceil(Number(value || 0) / 1000);
+  if (!seconds) return "0s";
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+function formatHealthTimeout(value) {
+  const ms = Number(value || 0);
+  if (!ms) return "";
+  if (ms < 1000) return `${ms}ms timeout`;
+  return `${Math.round(ms / 100) / 10}s timeout`;
+}
+
+function providerHealthClass(level) {
+  if (level === "bad") return "healthBad";
+  if (level === "warn") return "healthWarn";
+  if (level === "unknown") return "healthUnknown";
+  return "healthOk";
+}
+
+function circuitHealth(provider = {}, options = {}) {
+  const circuit = provider.circuit || provider.tidalCircuit || {};
+  const configured = provider.configured !== undefined ? Boolean(provider.configured) : true;
+  const enabled = provider.enabled !== false;
+  const stateLabel = String(circuit.state || "unknown");
+  const failures = Number(circuit.failureCount || 0);
+  const threshold = Number(circuit.failureThreshold || 0);
+  const retryAfterMs = Number(circuit.retryAfterMs || 0);
+  const timeoutText = formatHealthTimeout(provider.timeoutMs || provider.tidalTimeoutMs);
+  const lastError = String(circuit.lastError || "").trim();
+
+  if (!enabled) {
+    return { level: "unknown", status: "disabled", detail: timeoutText || "not active" };
+  }
+  if (!configured) {
+    return { level: "warn", status: "not configured", detail: "missing credentials" };
+  }
+  if (stateLabel === "open") {
+    return {
+      level: "bad",
+      status: `backing off for ${formatHealthSeconds(retryAfterMs)}`,
+      detail: lastError || timeoutText || "repeated fetch failures"
+    };
+  }
+  if (stateLabel === "half-open") {
+    return {
+      level: "warn",
+      status: "retrying after backoff",
+      detail: lastError || timeoutText || "checking recovery"
+    };
+  }
+  if (failures > 0) {
+    return {
+      level: "warn",
+      status: `${failures}${threshold ? `/${threshold}` : ""} recent failures`,
+      detail: lastError || timeoutText || "watching TIDAL"
+    };
+  }
+  return {
+    level: "ok",
+    status: options.readyText || "ready",
+    detail: timeoutText || "healthy"
+  };
+}
+
+function llmHealthSummary(app = {}) {
+  const status = state.llmStatus || {};
+  const llm = app.llm || {};
+  const label = status.label || llm.label || "Local model";
+  const model = status.model || llm.model || "";
+  const detail = [label, model].filter(Boolean).join(" ");
+  if (status.online && status.loaded !== false) return { level: "ok", status: "ready", detail };
+  if (status.checking) return { level: "unknown", status: "checking", detail };
+  if (status.reachable && status.loaded === false) return { level: "warn", status: "model not loaded", detail: status.message || detail };
+  if (state.llmStatus) return { level: "bad", status: "offline", detail: status.message || detail };
+  return { level: "unknown", status: "not checked yet", detail };
+}
+
+function lastFmHealthSummary(app = {}) {
+  const lastfm = app.lastfm || {};
+  if (lastfm.enabled === false) return { level: "unknown", status: "disabled", detail: "Last.fm lookup off" };
+  if (!lastfm.apiKeyConfigured) return { level: "warn", status: "API key missing", detail: "taste history unavailable" };
+  if (!lastfm.usernameConfigured) return { level: "warn", status: "username missing", detail: "scrobble history unavailable" };
+  if (lastfm.usernameValid === false) return { level: "bad", status: "username invalid", detail: "check LASTFM_USERNAME" };
+  if (lastfm.configured) return { level: "ok", status: "connected", detail: "taste history available" };
+  return { level: "unknown", status: "not checked", detail: "waiting for status" };
+}
+
+function healthCardHtml(item = {}) {
+  const level = providerHealthClass(item.level);
+  return `
+    <article class="healthCard ${level}">
+      <div>
+        <span>${escapeHtml(item.label)}</span>
+        <strong>${escapeHtml(item.status || "")}</strong>
+      </div>
+      <small>${escapeHtml(item.detail || "")}</small>
+    </article>
+  `;
+}
+
+function renderSystemHealth() {
+  const container = $("#systemHealth");
+  if (!container) return;
+  const app = state.appStatus || {};
+  const connection = state.connectionStatus || {};
+  const roon = connection.connected
+    ? { level: "ok", label: "Roon", status: "connected", detail: connection.coreName || "Core ready" }
+    : { level: "bad", label: "Roon", status: "not connected", detail: "extension not linked" };
+  const tidal = circuitHealth(app.tidal || {}, { readyText: "ready" });
+  const radioTidal = circuitHealth(app.radioMetadata || {}, { readyText: "ready" });
+  const llm = llmHealthSummary(app);
+  const lastfm = lastFmHealthSummary(app);
+  const updatedAt = app.updatedAt ? `Updated ${formatDateTime(Date.parse(app.updatedAt))}` : "";
+
+  container.innerHTML = `
+    <div class="systemHealthHead">
+      <span>System Health</span>
+      ${updatedAt ? `<small>${escapeHtml(updatedAt)}</small>` : ""}
+    </div>
+    <div class="healthGrid">
+      ${healthCardHtml(roon)}
+      ${healthCardHtml({ label: "TIDAL Search", ...tidal })}
+      ${healthCardHtml({ label: "Radio Art TIDAL", ...radioTidal })}
+      ${healthCardHtml({ label: "Local Model", ...llm })}
+      ${healthCardHtml({ label: "Last.fm", ...lastfm })}
+    </div>
+  `;
 }
 
 function isLiveRadioZone(zone = {}) {
@@ -423,6 +574,14 @@ function plainList(tracks) {
   return (tracks || []).map((track) => `${track.artist} - ${track.title}`).join("\n");
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isFetchDrop(error = {}) {
+  return /failed to fetch|networkerror|load failed|network request failed/i.test(String(error.message || error));
+}
+
 function normalizeKeyText(value) {
   return String(value || "")
     .normalize("NFD")
@@ -440,6 +599,118 @@ function trackKeyFor(track = {}) {
 
 function savedVersionFor(tracks = []) {
   return (tracks || []).map((track) => `${track.key || trackKeyFor(track)}:${track.feedback || ""}:${track.savedAt || ""}`).join("|");
+}
+
+function normalizeSavedSnapshot(payload = {}) {
+  if (Array.isArray(payload)) {
+    return {
+      activeListId: "default",
+      lists: [{ id: "default", name: "Candidates", count: payload.length }],
+      tracks: payload
+    };
+  }
+
+  const tracks = Array.isArray(payload.tracks) ? payload.tracks : [];
+  const lists = Array.isArray(payload.lists) && payload.lists.length
+    ? payload.lists.map((list) => ({
+      id: String(list.id || "").trim() || "default",
+      name: String(list.name || "").trim() || "Candidates",
+      count: Number(list.count ?? list.tracks?.length ?? 0),
+      createdAt: list.createdAt || 0,
+      updatedAt: list.updatedAt || 0
+    }))
+    : [{ id: "default", name: "Candidates", count: tracks.length }];
+  const activeListId = lists.some((list) => list.id === payload.activeListId)
+    ? payload.activeListId
+    : lists[0].id;
+
+  return { activeListId, lists, tracks };
+}
+
+function savedSnapshotVersion(snapshot = {}) {
+  return [
+    snapshot.activeListId || "",
+    (snapshot.lists || []).map((list) => `${list.id}:${list.name}:${list.count}:${list.updatedAt || ""}`).join("|"),
+    savedVersionFor(snapshot.tracks || [])
+  ].join("||");
+}
+
+function applySavedSnapshot(payload = {}) {
+  const snapshot = normalizeSavedSnapshot(payload);
+  state.savedLists = snapshot.lists;
+  state.activeSavedListId = snapshot.activeListId;
+  state.savedTracks = applyFeedbackToTracks(snapshot.tracks || []);
+  state.savedVersion = savedSnapshotVersion({ ...snapshot, tracks: state.savedTracks });
+  return snapshot;
+}
+
+function activeSavedList() {
+  return state.savedLists.find((list) => list.id === state.activeSavedListId) || state.savedLists[0] || {
+    id: "default",
+    name: "Candidates",
+    count: state.savedTracks.length
+  };
+}
+
+function savedListFilename(extension) {
+  const slug = normalizeKeyText(activeSavedList().name).replace(/\s+/g, "-") || "playlist-candidates";
+  return `rabbit-hole-${slug}.${extension}`;
+}
+
+function savedListOptionsHtml(selectedId = state.activeSavedListId) {
+  const lists = state.savedLists.length ? state.savedLists : [activeSavedList()];
+  return lists.map((list) => `
+    <option value="${escapeHtml(list.id)}" ${list.id === selectedId ? "selected" : ""}>
+      ${escapeHtml(list.name)}
+    </option>
+  `).join("");
+}
+
+function savedMoveOptionsHtml(sourceListId = state.activeSavedListId) {
+  return (state.savedLists || [])
+    .filter((list) => list.id !== sourceListId)
+    .map((list) => `
+      <option value="${escapeHtml(list.id)}">${escapeHtml(list.name)} (${Number(list.count || 0)})</option>
+    `).join("");
+}
+
+function candidateListById(listId = "") {
+  return state.savedLists.find((list) => list.id === listId) || activeSavedList();
+}
+
+function renderNowCandidateListMenu() {
+  const menu = $("#nowCandidateListMenu");
+  if (!menu) return;
+  const lists = state.savedLists.length ? state.savedLists : [activeSavedList()];
+  menu.innerHTML = lists.map((list) => `
+    <button type="button" data-now-candidate-list="${escapeHtml(list.id)}">
+      Add to ${escapeHtml(list.name)}${Number.isFinite(Number(list.count)) ? ` (${Number(list.count)})` : ""}
+    </button>
+  `).join("");
+}
+
+function toggleNowCandidateListMenu(show = null) {
+  const menu = $("#nowCandidateListMenu");
+  if (!menu) return;
+  const nextVisible = show === null ? menu.hidden : Boolean(show);
+  if (nextVisible) renderNowCandidateListMenu();
+  menu.hidden = !nextVisible;
+}
+
+function updateNowCandidateSaveState(track = state.nowTrack) {
+  const button = $("#saveNowCandidate");
+  if (!button) return;
+  if (!track) {
+    button.disabled = true;
+    button.textContent = "Add candidate";
+    toggleNowCandidateListMenu(false);
+    return;
+  }
+
+  button.disabled = false;
+  button.textContent = "Add candidate";
+  button.title = "Choose a candidate list";
+  renderNowCandidateListMenu();
 }
 
 function feedbackMapFromServer(feedback = {}) {
@@ -465,6 +736,40 @@ function applyFeedbackToTrack(track = {}) {
 
 function applyFeedbackToTracks(tracks = []) {
   return (tracks || []).map(applyFeedbackToTrack);
+}
+
+function calibrationVersion(calibration = null) {
+  if (!calibration) return "";
+  return JSON.stringify({
+    total: calibration.total || 0,
+    reviewed: calibration.reviewed || 0,
+    promptMismatches: calibration.promptMismatches || 0,
+    modelMisses: calibration.modelMisses || 0,
+    badBoosts: calibration.badBoosts || 0,
+    missedLikes: calibration.missedLikes || 0,
+    updatedAt: calibration.updatedAt || "",
+    recent: (calibration.recent || []).map((item) => `${item.recordedAt || ""}:${item.rating || ""}:${item.modelAction || ""}:${item.artist || ""}:${item.title || ""}`)
+  });
+}
+
+function applyCalibration(calibration = null) {
+  const nextVersion = calibrationVersion(calibration);
+  if (nextVersion === state.calibrationVersion) return false;
+  state.calibration = calibration || null;
+  state.calibrationVersion = nextVersion;
+  if (state.lastResult) {
+    state.lastResult.verification = {
+      ...(state.lastResult.verification || {}),
+      feedbackCalibration: state.calibration
+    };
+    showSourceReport(state.lastResult);
+  }
+  return true;
+}
+
+function applyFeedbackResponse(result = {}) {
+  const calibration = result.profile?.calibration || null;
+  if (calibration) applyCalibration(calibration);
 }
 
 function renderMemoryStatus() {
@@ -563,7 +868,8 @@ function compactScoreBadgeHtml(track) {
   const score = track?.score || track?.scoreBreakdown?.total || "";
   if (!score) return "";
   const band = scoreBandFor(score);
-  return `<span class="scoreBadge ${escapeHtml(band.className)}">Discovery ${escapeHtml(score)} - ${escapeHtml(band.label)}</span>`;
+  const suffix = track?.belowMinimum ? " - below minimum" : "";
+  return `<span class="scoreBadge ${escapeHtml(band.className)}">Discovery ${escapeHtml(score)} - ${escapeHtml(band.label)}${escapeHtml(suffix)}</span>`;
 }
 
 function normalizeFeedbackValue(value) {
@@ -571,6 +877,7 @@ function normalizeFeedbackValue(value) {
   if (rating === "love") return "love";
   if (rating === "good" || rating === "up") return "good";
   if (rating === "ok" || rating === "okay") return "ok";
+  if (rating === "wrong_genre" || rating === "wrong genre" || rating === "wrong" || rating === "not what i asked for" || rating === "not_asked") return "wrong_genre";
   if (rating === "skip" || rating === "down") return "skip";
   if (rating === "never" || rating === "never_again" || rating === "never again") return "never";
   return "";
@@ -584,11 +891,12 @@ function feedbackButtonsHtml(track, index, prefix = "") {
     { value: "love", label: "&#10084;&#65039; Love", aria: "Love" },
     { value: "good", label: "&#128077; Good", aria: "Good" },
     { value: "ok", label: "&#128076; OK", aria: "OK" },
+    { value: "wrong_genre", label: "Wrong Genre", aria: "Not what I asked for" },
     { value: "skip", label: "&#128078; Skip", aria: "Skip" },
     { value: "never", label: "&#128683; Never Again", aria: "Never Again" }
   ];
   return options.map((option) => `
-    <button type="button" class="feedbackButton ${escapeHtml(option.value)} ${feedback === option.value ? "active" : ""}" ${attr}="${escapeHtml(option.value)}" ${indexAttr}="${index}" aria-label="${escapeHtml(option.aria)}" aria-pressed="${feedback === option.value}">${option.label}</button>
+    <button type="button" class="feedbackButton ${escapeHtml(option.value)} ${feedback === option.value ? "active" : ""}" ${attr}="${escapeHtml(option.value)}" ${indexAttr}="${index}" aria-label="${escapeHtml(option.aria)}" title="${escapeHtml(option.aria)}" aria-pressed="${feedback === option.value}">${option.label}</button>
   `).join("");
 }
 
@@ -796,6 +1104,14 @@ function scrollToSavedTrack(index) {
   setTimeout(() => target.classList.remove("trackFocus"), 1800);
 }
 
+function scrollToCandidatesList() {
+  const target = $("#candidatesPanel");
+  if (!target) return;
+  target.scrollIntoView({ behavior: "smooth", block: "start" });
+  target.classList.add("trackFocus");
+  setTimeout(() => target.classList.remove("trackFocus"), 1800);
+}
+
 function nowPlayingBadgeHtml(track = {}, source = "") {
   const scoreBadge = compactScoreBadgeHtml(track);
   if (scoreBadge) return scoreBadge;
@@ -809,9 +1125,10 @@ function updateNowDiscoveryTools(zone = activeZone()) {
   const badge = $("#nowDiscoveryBadge");
   const jump = $("#jumpToNowTrack");
   const saveNow = $("#saveNowCandidate");
+  const jumpCandidates = $("#jumpToCandidatesList");
   const openRabbitHole = $("#openRabbitHole");
   const rabbitHolePanel = $("#rabbitHolePanel");
-  if (!tools || !feedback || !badge || !jump || !saveNow || !openRabbitHole || !rabbitHolePanel) return;
+  if (!tools || !feedback || !badge || !jump || !saveNow || !jumpCandidates || !openRabbitHole || !rabbitHolePanel) return;
 
   const match = findNowPlayingMatch(zone);
   state.nowMatchIndex = match.index;
@@ -826,8 +1143,8 @@ function updateNowDiscoveryTools(zone = activeZone()) {
     badge.innerHTML = "";
     jump.disabled = true;
     jump.textContent = "Jump to track";
-    saveNow.disabled = true;
-    saveNow.textContent = "Add candidate";
+    updateNowCandidateSaveState(null);
+    jumpCandidates.disabled = true;
     openRabbitHole.disabled = true;
     rabbitHolePanel.hidden = true;
     return;
@@ -842,9 +1159,9 @@ function updateNowDiscoveryTools(zone = activeZone()) {
   badge.innerHTML = nowPlayingBadgeHtml(match.track, match.source);
   jump.textContent = match.source === "saved" ? "Jump to saved" : "Jump to track";
   jump.disabled = match.index < 0 && match.savedIndex < 0;
-  const saved = isSavedCandidate(match.track);
-  saveNow.disabled = saved;
-  saveNow.textContent = saved ? "In candidates" : "Add candidate";
+  updateNowCandidateSaveState(match.track);
+  jumpCandidates.disabled = false;
+  jumpCandidates.title = `Jump to ${activeSavedList().name}`;
   openRabbitHole.disabled = false;
   if (!rabbitHolePanel.hidden) {
     const nextKey = trackKeyFor(match.track);
@@ -883,17 +1200,20 @@ function scoreBreakdownHtml(track) {
   if (breakdown.tasteAdjustment) {
     rows.push(["Taste Adjustment", breakdown.tasteAdjustment, 12]);
   }
+  if (breakdown.calibrationAdjustment) {
+    rows.push(["Calibration Adjustment", breakdown.calibrationAdjustment, 10]);
+  }
 
   return `
     <div class="scoreBox">
       <div class="scoreTotal">
         <span>Discovery Score: <strong>${escapeHtml(score)}</strong></span>
-        <span class="scoreBadge ${escapeHtml(band.className)}">${escapeHtml(band.label)}</span>
+        <span class="scoreBadge ${escapeHtml(band.className)}">${escapeHtml(track.belowMinimum ? `${band.label} - below minimum` : band.label)}</span>
       </div>
       <div class="scoreGrid">
         ${rows.map(([label, value, max]) => `
           <span>${escapeHtml(label)}</span>
-          <strong>${escapeHtml(value)}${label === "Taste Adjustment" ? "" : `/${escapeHtml(max)}`}</strong>
+          <strong>${escapeHtml(value)}${label.endsWith("Adjustment") ? "" : `/${escapeHtml(max)}`}</strong>
         `).join("")}
       </div>
     </div>
@@ -962,7 +1282,10 @@ function statusChecksHtml(track) {
     : ["TIDAL verified", "History status not checked"];
   return `
     <div class="statusBlock">
-      ${statuses.map((status) => `<span class="statusChip">${escapeHtml(status)}</span>`).join("")}
+      ${statuses.map((status) => {
+        const label = status === "Scrobble history not connected" ? "Scrobble history not checked" : status;
+        return `<span class="statusChip">${escapeHtml(label)}</span>`;
+      }).join("")}
     </div>
   `;
 }
@@ -1005,6 +1328,444 @@ function showQueueReport(result = null) {
   report.innerHTML = queueReportHtml(result);
 }
 
+function discardedReasonSummary(discarded = []) {
+  const counts = new Map();
+  for (const item of discarded) {
+    const reason = String(item.reason || "No reason provided").replace(/\s+/g, " ").trim();
+    counts.set(reason, (counts.get(reason) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 10);
+}
+
+function incrementCount(map, key, amount = 1) {
+  const label = String(key || "").trim() || "Unknown";
+  map.set(label, (map.get(label) || 0) + amount);
+}
+
+function sortedCounts(map, limit = 8) {
+  return [...map.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, limit);
+}
+
+function rejectionBucketFor(item = {}) {
+  const reason = String(item.reason || "").toLowerCase();
+  if (/\b(?:seo|catalogue filler|catalog filler|genre date|mix compilation|filler|sludge)\b/.test(reason)) return "SEO/catalog sludge";
+  if (/\b(?:roon|queueable|queue action|exact queueable match|best result)\b/.test(reason)) return "Roon not queueable";
+  if (/\b(?:outside the requested|genre\/vibe|requested genre|scene|wrong genre|does not confirm|search query|corroborat|metadata)\b/.test(reason)) return "Genre/scene mismatch";
+  if (/\b(?:release|year|date|outside \d{4}|range)\b/.test(reason)) return "Date/range mismatch";
+  if (/\b(?:previously suggested|held back|history)\b/.test(reason)) return "Previously suggested";
+  if (/\b(?:below minimum|minimum)\b/.test(reason)) return "Below minimum";
+  if (/\b(?:short|radio edit)\b/.test(reason)) return "Short/edit";
+  if (/\b(?:tidal|verified|verification)\b/.test(reason)) return "TIDAL verification";
+  return "Other discarded";
+}
+
+function sourceReportFor(result = {}) {
+  const verification = result.verification || {};
+  const tracks = Array.isArray(result.tracks) ? result.tracks : [];
+  const discarded = Array.isArray(result.discarded) ? result.discarded : [];
+  const sources = new Map();
+  const lanes = new Map();
+  const rejectionBuckets = new Map();
+
+  for (const track of tracks) {
+    incrementCount(sources, track.discoverySource || "TIDAL search");
+    incrementCount(lanes, track.discoveryLane || "core");
+  }
+  for (const item of discarded) {
+    incrementCount(rejectionBuckets, rejectionBucketFor(item));
+  }
+
+  const autoBroaden = verification.autoBroaden || {};
+  const laneQuotas = verification.laneQuotas || {};
+  const lastfm = verification.lastfm || {};
+  const calibration = verification.feedbackCalibration || state.calibration || {};
+  const queryYield = verification.queryYield || {};
+  const metrics = [
+    ["Generated", verification.generated || tracks.length + discarded.length || tracks.length],
+    ["Kept", verification.kept ?? tracks.length],
+    ["Discarded", verification.discarded ?? discarded.length],
+    ["Roon checked", verification.roonChecked || 0],
+    ["Roon rejected", verification.roonRejected || 0],
+    ["Below floor kept", verification.belowMinimumKept || 0],
+    ["Auto-broaden added", autoBroaden.added || 0],
+    ["Yield retries", autoBroaden.yieldAware ? (autoBroaden.lanes || []).filter((lane) => lane.yieldAware).length || 1 : 0],
+    ["Last.fm scrobbles", lastfm.checked ? (lastfm.returned || 0) : "not checked"],
+    ["Last.fm top artists", lastfm.checked ? (lastfm.topArtistsReturned || 0) : "not checked"],
+    ["Query accepted", queryYield.accepted || 0],
+    ["Query sludge", Number(queryYield.seoRejects || 0) + Number(queryYield.genreRejects || 0)],
+    ["Model misses", calibration.modelMisses || 0]
+  ];
+
+  return {
+    metrics,
+    sources: sortedCounts(sources, 8),
+    lanes: sortedCounts(lanes, 8),
+    rejectionBuckets: sortedCounts(rejectionBuckets, 8),
+    autoBroaden,
+    model: {
+      queryCount: verification.modelPlanQueryCount || 0,
+      skipped: verification.modelSkipped || "",
+      error: verification.modelError || "",
+      review: verification.modelCandidateReview || null
+    },
+    roon: {
+      checked: verification.roonChecked || 0,
+      rejected: verification.roonRejected || 0,
+      limit: verification.roonCheckLimit || 0,
+      queueable: Boolean(verification.roonQueueable),
+      error: verification.roonVerificationError || ""
+    },
+    laneQuotas,
+    lastfm,
+    calibration,
+    queryYield
+  };
+}
+
+function sourceReportGridHtml(items = [], emptyText = "none") {
+  if (!items.length) return `<p class="sourceReportEmpty">${escapeHtml(emptyText)}</p>`;
+  return items.map(([label, count]) => `
+    <p>
+      <span>${escapeHtml(label)}</span>
+      <b>${escapeHtml(count)}</b>
+    </p>
+  `).join("");
+}
+
+function modelAuditDeltaText(item = {}) {
+  if (item.after === null || item.after === undefined) return `was ${item.before || 0}`;
+  const delta = Number(item.delta || 0);
+  const sign = delta > 0 ? "+" : "";
+  return `${item.before || 0} -> ${item.after || 0} (${sign}${delta})`;
+}
+
+function modelAuditItemsHtml(items = [], emptyText = "none") {
+  if (!items.length) return `<p class="sourceReportEmpty">${escapeHtml(emptyText)}</p>`;
+  return items.map((item) => `
+    <li>
+      <strong>${escapeHtml(item.label || "Unknown track")}</strong>
+      <span>${escapeHtml(modelAuditDeltaText(item))} · model ${escapeHtml(item.modelScore || 0)} · genre ${escapeHtml(item.genreConfidence || 0)}</span>
+      <em>${escapeHtml(item.reason || "Model score adjustment")}</em>
+    </li>
+  `).join("");
+}
+
+function modelReviewAuditHtml(audit = null) {
+  if (!audit) return "";
+  const total = Number(audit.boostedCount || 0) +
+    Number(audit.downrankedCount || 0) +
+    Number(audit.rejectedCount || 0) +
+    Number(audit.warningCount || 0) +
+    Number(audit.unchangedCount || 0);
+  if (!total) return "";
+  return `
+    <details class="modelAudit">
+      <summary>
+        Model Review Audit
+        <span>${escapeHtml(`${audit.boostedCount || 0} boosted, ${audit.downrankedCount || 0} downranked, ${audit.rejectedCount || 0} rejected`)}</span>
+      </summary>
+      <div class="modelAuditGrid">
+        <section>
+          <h3>Boosted</h3>
+          <ol>${modelAuditItemsHtml(audit.boosted || [], "No boosted candidates")}</ol>
+        </section>
+        <section>
+          <h3>Downranked</h3>
+          <ol>${modelAuditItemsHtml(audit.downranked || [], "No downranked candidates")}</ol>
+        </section>
+        <section>
+          <h3>Rejected / warned</h3>
+          <ol>${modelAuditItemsHtml([...(audit.rejected || []), ...(audit.warnings || [])], "No model rejects or warnings")}</ol>
+        </section>
+      </div>
+    </details>
+  `;
+}
+
+function calibrationIssueLabel(issue = "") {
+  const normalized = String(issue || "").toLowerCase();
+  if (normalized === "wrong_genre") return "Wrong genre";
+  if (normalized === "bad_boost") return "Bad boost";
+  if (normalized === "liked_downranked") return "Liked but downranked";
+  if (normalized === "negative_model_approved") return "Negative on approved track";
+  if (normalized === "model_miss") return "Model miss";
+  return normalized ? normalized.replace(/_/g, " ") : "Feedback mismatch";
+}
+
+function calibrationRecentHtml(items = []) {
+  if (!items.length) return `<p class="sourceReportEmpty">No feedback mismatches yet</p>`;
+  return items.slice(0, 6).map((item) => `
+    <li>
+      <strong>${escapeHtml([item.title, item.artist].filter(Boolean).join(" - ") || "Unknown track")}</strong>
+      <span>${escapeHtml(`${calibrationIssueLabel(item.issue)}; you marked ${item.rating || "feedback"}; model ${item.modelAction || "unreviewed"}`)}</span>
+      <em>${escapeHtml(`${item.source || "Unknown source"}${item.modelScore ? `; model ${item.modelScore}` : ""}${item.genreConfidence ? `; genre ${item.genreConfidence}` : ""}`)}</em>
+    </li>
+  `).join("");
+}
+
+function calibrationSourcesHtml(sources = []) {
+  if (!sources.length) return `<p class="sourceReportEmpty">No calibrated sources yet</p>`;
+  return sources.slice(0, 6).map((source) => `
+    <p>
+      <span>${escapeHtml(source.source || source.label || source.lane || source.name || "Unknown source")}</span>
+      <b>${escapeHtml(`${source.modelMisses || 0}/${source.total || 0} misses`)}</b>
+    </p>
+  `).join("");
+}
+
+function feedbackCalibrationHtml(calibration = null) {
+  if (!calibration || !Number(calibration.total || 0)) return "";
+  const summary = `${calibration.modelMisses || 0} model misses, ${calibration.promptMismatches || 0} wrong genre`;
+  const watchedBuckets = [
+    ...(calibration.sources || []).map((item) => ({ ...item, name: item.source })),
+    ...(calibration.labels || []).map((item) => ({ ...item, name: item.label })),
+    ...(calibration.lanes || []).map((item) => ({ ...item, name: item.lane }))
+  ].sort((left, right) => Number(right.modelMisses || 0) - Number(left.modelMisses || 0) || Number(right.total || 0) - Number(left.total || 0));
+  return `
+    <details class="feedbackCalibration" open>
+      <summary>
+        Feedback Calibration
+        <span>${escapeHtml(summary)}</span>
+      </summary>
+      <div class="feedbackCalibrationGrid">
+        <section>
+          <h3>Calibration totals</h3>
+          <div class="sourceReportGrid">
+            ${sourceReportGridHtml([
+              ["Feedback with context", calibration.total || 0],
+              ["Model-reviewed", calibration.reviewed || 0],
+              ["Model misses", calibration.modelMisses || 0],
+              ["Bad boosts", calibration.badBoosts || 0],
+              ["Liked downranks", calibration.missedLikes || 0]
+            ])}
+          </div>
+        </section>
+        <section>
+          <h3>Sources / labels to watch</h3>
+          <div class="sourceReportGrid">${calibrationSourcesHtml(watchedBuckets)}</div>
+        </section>
+        <section>
+          <h3>Recent mismatches</h3>
+          <ol>${calibrationRecentHtml(calibration.recent || [])}</ol>
+        </section>
+      </div>
+    </details>
+  `;
+}
+
+function queryYieldRowsHtml(items = [], emptyText = "none") {
+  if (!items.length) return `<p class="sourceReportEmpty">${escapeHtml(emptyText)}</p>`;
+  return items.slice(0, 6).map((item) => {
+    const label = item.query || item.template || "Unknown query";
+    const detail = [
+      item.accepted !== undefined ? `${item.accepted || 0} accepted` : "",
+      item.returned !== undefined ? `${item.returned || 0} returned` : "",
+      item.rejected !== undefined ? `${item.rejected || 0} rejected` : "",
+      item.seoRejects ? `${item.seoRejects} SEO` : "",
+      item.genreRejects ? `${item.genreRejects} genre` : "",
+      item.errorCount ? `${item.errorCount} errors` : "",
+      item.quality !== undefined ? `quality ${item.quality}` : ""
+    ].filter(Boolean).join(", ");
+    return `
+      <li>
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(detail || "No yield details")}</span>
+      </li>
+    `;
+  }).join("");
+}
+
+function queryYieldHtml(queryYield = {}) {
+  const hasDetails = Boolean(
+    (queryYield.best || []).length ||
+    (queryYield.worst || []).length ||
+    (queryYield.adjustments || []).length
+  );
+  if (!hasDetails) return "";
+  return `
+    <details class="queryYieldDebug">
+      <summary>
+        Query Yield
+        <span>${escapeHtml(`${queryYield.accepted || 0} accepted, ${Number(queryYield.seoRejects || 0) + Number(queryYield.genreRejects || 0)} sludge`)}</span>
+      </summary>
+      <div class="modelAuditGrid">
+        <section>
+          <h3>Best this run</h3>
+          <ol>${queryYieldRowsHtml(queryYield.best || [], "No accepted query patterns")}</ol>
+        </section>
+        <section>
+          <h3>Worst this run</h3>
+          <ol>${queryYieldRowsHtml(queryYield.worst || [], "No weak query patterns")}</ol>
+        </section>
+        <section>
+          <h3>Memory adjustments</h3>
+          <ol>${queryYieldRowsHtml(queryYield.adjustments || [], "No prior query memory used")}</ol>
+        </section>
+      </div>
+    </details>
+  `;
+}
+
+function sourceReportHtml(result = {}) {
+  const report = sourceReportFor(result);
+  const autoLanes = Array.isArray(report.autoBroaden.lanes) ? report.autoBroaden.lanes : [];
+  const autoSummary = report.autoBroaden.attempted
+    ? `${report.autoBroaden.attempted} pass${report.autoBroaden.attempted === 1 ? "" : "es"}, ${report.autoBroaden.added || 0} added`
+    : "not needed";
+  const yieldRetrySummary = report.autoBroaden.yieldAware && report.autoBroaden.queryYieldHealth
+    ? report.autoBroaden.queryYieldHealth.summary || "weak query yield"
+    : "";
+  const modelSummary = report.model.error
+    ? `model error: ${report.model.error}`
+    : (report.model.skipped || `${report.model.queryCount} planned queries`);
+  const review = report.model.review;
+  const reviewSummary = review?.enabled
+    ? `${review.scored || 0} reviewed, ${review.rejected || 0} rejected`
+    : (review?.error || "not run");
+  const roonSummary = report.roon.error
+    ? report.roon.error
+    : `${report.roon.checked}/${report.roon.limit || report.roon.checked || 0} checked, ${report.roon.rejected} rejected`;
+  const quotaSummary = report.laneQuotas?.enabled
+    ? Object.entries(report.laneQuotas.selected || {})
+      .filter(([, count]) => Number(count || 0) > 0)
+      .map(([bucket, count]) => `${bucket}: ${count}`)
+      .join(", ") || "none selected"
+    : "not run";
+  const quotaAdjustmentSummary = report.laneQuotas?.calibrationAdjustments?.length
+    ? report.laneQuotas.calibrationAdjustments
+      .map((item) => `${item.bucket}: ${item.target}->${item.adjustedTarget}`)
+      .join(", ")
+    : "";
+  const lastfmSummary = report.lastfm.checked
+    ? `${report.lastfm.returned || 0} scrobbles, ${report.lastfm.topArtistsReturned || 0} top artists${report.lastfm.topArtistPeriod ? ` (${report.lastfm.topArtistPeriod})` : ""}${report.lastfm.topArtistsError ? `; top artists: ${report.lastfm.topArtistsError}` : ""}`
+    : (report.lastfm.error || report.lastfm.reason || "not checked");
+  const queryYieldSummary = report.queryYield.recordCount
+    ? `${report.queryYield.attempted || 0} queries, ${report.queryYield.accepted || 0} accepted, ${Number(report.queryYield.seoRejects || 0) + Number(report.queryYield.genreRejects || 0)} sludge`
+    : (report.queryYield.enabled ? "no search queries recorded" : "run-only until server tracker records data");
+
+  return `
+    <div class="sourceReportCard">
+      <div class="intentDebugHead">
+        <span>Candidate Source Report</span>
+        <strong>${escapeHtml(autoSummary)}</strong>
+      </div>
+      <div class="sourceReportMetrics">
+        ${report.metrics.map(([label, value]) => `
+          <p>
+            <span>${escapeHtml(label)}</span>
+            <b>${escapeHtml(value)}</b>
+          </p>
+        `).join("")}
+      </div>
+      <div class="sourceReportColumns">
+        <section>
+          <h3>Kept sources</h3>
+          <div class="sourceReportGrid">${sourceReportGridHtml(report.sources, "No kept tracks")}</div>
+        </section>
+        <section>
+          <h3>Discovery lanes</h3>
+          <div class="sourceReportGrid">${sourceReportGridHtml(report.lanes, "No lanes")}</div>
+        </section>
+        <section>
+          <h3>Rejected buckets</h3>
+          <div class="sourceReportGrid">${sourceReportGridHtml(report.rejectionBuckets, "No discarded candidates")}</div>
+        </section>
+      </div>
+      <div class="sourceReportNotes">
+        <p><span>Roon</span><b>${escapeHtml(roonSummary)}</b></p>
+        <p><span>Model plan</span><b>${escapeHtml(modelSummary)}</b></p>
+        <p><span>Model review</span><b>${escapeHtml(reviewSummary)}</b></p>
+        <p><span>Lane quotas</span><b>${escapeHtml(quotaSummary)}</b></p>
+        ${quotaAdjustmentSummary ? `<p><span>Quota dampening</span><b>${escapeHtml(quotaAdjustmentSummary)}</b></p>` : ""}
+        <p><span>Last.fm</span><b>${escapeHtml(lastfmSummary)}</b></p>
+        <p><span>Query yield</span><b>${escapeHtml(queryYieldSummary)}</b></p>
+        ${yieldRetrySummary ? `<p><span>Yield retry</span><b>${escapeHtml(yieldRetrySummary)}</b></p>` : ""}
+      </div>
+      ${feedbackCalibrationHtml(report.calibration)}
+      ${modelReviewAuditHtml(review?.audit)}
+      ${queryYieldHtml(report.queryYield)}
+      ${autoLanes.length ? `
+        <details>
+          <summary>Auto-broaden passes</summary>
+          <ol>
+            ${autoLanes.map((lane) => `
+              <li>
+                <strong>${escapeHtml(lane.label || lane.lane || "Broadened search")}</strong>
+                <span>${escapeHtml(`${lane.added || 0} added from ${lane.generated || 0} generated. ${lane.reason || ""}`)}</span>
+              </li>
+            `).join("")}
+          </ol>
+        </details>
+      ` : ""}
+    </div>
+  `;
+}
+
+function showSourceReport(result = null) {
+  const panel = $("#sourceReport");
+  if (!panel) return;
+  if (!result) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  panel.hidden = false;
+  panel.innerHTML = sourceReportHtml(result);
+}
+
+function rejectedDebugHtml(result = {}) {
+  const discarded = Array.isArray(result.discarded) ? result.discarded : [];
+  if (!discarded.length) return "";
+  const groups = discardedReasonSummary(discarded);
+  return `
+    <div class="rejectedDebugCard">
+      <div class="intentDebugHead">
+        <span>Rejected / discarded</span>
+        <strong>${escapeHtml(discarded.length)} candidates</strong>
+      </div>
+      <div class="rejectedGroups">
+        ${groups.map(([reason, count]) => `
+          <p>
+            <b>${escapeHtml(count)}</b>
+            <span>${escapeHtml(reason)}</span>
+          </p>
+        `).join("")}
+      </div>
+      <details>
+        <summary>Show examples</summary>
+        <ol>
+          ${discarded.slice(0, 80).map((item) => `
+            <li>
+              <strong>${escapeHtml([item.artist, item.title].filter(Boolean).join(" - ") || item.query || "Unknown candidate")}</strong>
+              <span>${escapeHtml(item.reason || "No reason provided")}</span>
+            </li>
+          `).join("")}
+        </ol>
+      </details>
+    </div>
+  `;
+}
+
+function updateRejectedDebug() {
+  const panel = $("#rejectedDebug");
+  const button = $("#toggleRejected");
+  if (!panel || !button) return;
+  const discarded = Array.isArray(state.lastResult?.discarded) ? state.lastResult.discarded : [];
+  button.disabled = !discarded.length;
+  button.textContent = discarded.length ? `Rejected (${discarded.length})` : "Rejected";
+  if (!discarded.length || !state.rejectedDebugOpen) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  panel.hidden = false;
+  panel.innerHTML = rejectedDebugHtml(state.lastResult);
+}
+
 function intentListValue(value, fallback = "not specified") {
   if (Array.isArray(value)) return value.length ? value.join(", ") : fallback;
   const text = String(value || "").trim();
@@ -1015,8 +1776,10 @@ function intentDebugHtml(intent = {}) {
   const rows = [
     ["Requested genre", intent.requestedGenre || "open-ended"],
     ["Requested vibe", intent.requestedVibe || "not specified"],
+    ["Vibe source", intent.requestedVibeSource || "not specified"],
     ["Era / date range", intent.requestedEraDateRange || "not specified"],
     ["Requested length", intent.requestedLength || "not specified"],
+    ["Characteristics", intentListValue(intent.requestedCharacteristics, "not specified")],
     ["Artist seed", intentListValue(intent.requestedArtists, "none selected")],
     ["Labels", intentListValue(intent.requestedLabels, "none selected")],
     ["Scoring mode", intent.scoringModeLabel || "Taste Guided"],
@@ -1098,6 +1861,7 @@ function emptyResultHtml(reason, verification = {}) {
 function trackCardHtml(track, index) {
   const label = track.label || track.tidal?.label || "";
   const saved = isSavedCandidate(track);
+  const tidalUrl = safeHttpUrl(track.tidal?.tidalUrl);
   const meta = [
     track.artist,
     track.releaseDate || track.tidal?.releaseDate || track.year || "",
@@ -1114,13 +1878,18 @@ function trackCardHtml(track, index) {
         ${whyMatchedHtml(track)}
         <p class="sourceLine">Source: <strong>${escapeHtml(track.discoverySource || "TIDAL search")}</strong></p>
         ${statusChecksHtml(track)}
-        ${track.tidal ? `<p class="muted">TIDAL: ${track.tidal.tidalUrl ? `<a href="${escapeHtml(track.tidal.tidalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(track.tidal.title || track.title)}</a>` : escapeHtml(track.tidal.title || track.title)}${track.tidal.artist ? ` - ${escapeHtml(track.tidal.artist)}` : ""}</p>` : ""}
+        ${track.tidal ? `<p class="muted">TIDAL: ${tidalUrl ? `<a href="${escapeHtml(tidalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(track.tidal.title || track.title)}</a>` : escapeHtml(track.tidal.title || track.title)}${track.tidal.artist ? ` - ${escapeHtml(track.tidal.artist)}` : ""}</p>` : ""}
         ${track.roon?.match ? `<p class="muted">Roon: ${escapeHtml(track.roon.match.title)}${track.roon.match.subtitle ? ` - ${escapeHtml(track.roon.match.subtitle)}` : ""}</p>` : ""}
         <div class="feedbackButtons" aria-label="Track feedback">${feedbackButtonsHtml(track, index)}</div>
       </div>
       <div class="trackActions">
-        ${track.tidal?.tidalUrl ? `<a class="buttonLink" href="${escapeHtml(track.tidal.tidalUrl)}" target="_blank" rel="noreferrer">TIDAL</a>` : ""}
-        <button data-save-track='${escapeHtml(JSON.stringify(track))}' ${saved ? "disabled" : ""}>${saved ? "Saved" : "Save"}</button>
+        ${tidalUrl ? `<a class="buttonLink" href="${escapeHtml(tidalUrl)}" target="_blank" rel="noreferrer">TIDAL</a>` : ""}
+        <div class="candidateSaveGroup" data-active-saved="${saved ? "true" : "false"}">
+          <select data-save-list aria-label="Candidate list">
+            ${savedListOptionsHtml()}
+          </select>
+          <button data-save-track='${escapeHtml(JSON.stringify(track))}' ${saved ? "disabled" : ""}>${saved ? "Saved" : "Add"}</button>
+        </div>
         <button data-queue-next='${escapeHtml(JSON.stringify(track))}'>Add Next</button>
         <button data-track='${escapeHtml(JSON.stringify(track))}'>Play Roon</button>
       </div>
@@ -1138,6 +1907,7 @@ function renderResults(result = {}) {
   $("#queueAllNext").disabled = !state.lastTracks.length;
   $("#copyList").disabled = !state.lastTracks.length;
   $("#exportCsv").disabled = !state.lastTracks.length;
+  updateRejectedDebug();
 
   const discarded = state.lastResult.verification?.discarded || 0;
   const generated = state.lastResult.verification?.generated || state.lastTracks.length;
@@ -1147,6 +1917,10 @@ function renderResults(result = {}) {
   const minScore = Number(state.lastResult.verification?.minScore || 0);
   const minimumLabel = state.lastResult.verification?.minScoreLabel || minimumScoreLabel(minScore);
   const filteredByScore = Number(state.lastResult.verification?.scoreFiltered || 0);
+  const belowMinimumKept = Number(state.lastResult.verification?.belowMinimumKept || 0);
+  const aboveMinimumKept = minScore
+    ? Number(state.lastResult.verification?.aboveMinimumKept ?? Math.max(0, state.lastTracks.length - belowMinimumKept))
+    : state.lastTracks.length;
   const emptyReason = state.lastResult.verification?.discoveryError
     ? `Generation ran, but discovery did not finish cleanly. ${state.lastResult.verification.discoveryError}`
     : state.lastResult.verification?.roonVerificationError
@@ -1158,11 +1932,15 @@ function renderResults(result = {}) {
     : strictRoon
       ? "TIDAL found candidates, but none passed strict Roon verification for the selected output zone. Broaden the prompt or try a different Roon zone."
       : minScore
-        ? `No tracks reached ${minimumLabel}. Lower the Minimum match picker or broaden the seed/year range.`
+        ? `No queueable tracks were close enough to the request. Lower the Minimum match picker or broaden the seed/year range.`
         : `No tracks survived ${verifierLabel} catalogue filters. Try a broader year range or seed around a known artist/label.`;
 
-  const titlePrefix = minScore ? `${state.lastTracks.length} ${minimumScoreLabel(minScore)} ${queueableLabel} tracks` : `${state.lastTracks.length} ${queueableLabel} tracks`;
-  const filterSuffix = filteredByScore ? `, ${filteredByScore} below minimum` : "";
+  const titlePrefix = minScore && belowMinimumKept
+    ? `${state.lastTracks.length} ${queueableLabel} tracks`
+    : (minScore ? `${state.lastTracks.length} ${minimumScoreLabel(minScore)} ${queueableLabel} tracks` : `${state.lastTracks.length} ${queueableLabel} tracks`);
+  const filterSuffix = minScore && belowMinimumKept
+    ? `, ${aboveMinimumKept} ${minimumLabel}, ${belowMinimumKept} below minimum kept`
+    : (filteredByScore ? `, ${filteredByScore} below minimum considered` : "");
   $("#resultTitle").textContent = discarded
     ? `${titlePrefix} (${discarded} discarded from ${generated}${filterSuffix})`
     : titlePrefix;
@@ -1171,6 +1949,8 @@ function renderResults(result = {}) {
     : emptyResultHtml(emptyReason, state.lastResult.verification || {});
   showQueueReport(null);
   showIntentDebug(state.lastResult.verification?.intent || null);
+  showSourceReport(state.lastResult);
+  updateRejectedDebug();
   cleanRenderedArtifacts($("#tracks"));
   updateNowDiscoveryTools(activeZone());
 }
@@ -1187,6 +1967,13 @@ function applySession(session = {}) {
     }
   }
 
+  for (const field of ["reference", "genres", "years", "mood", "language", "count", "scoringMode", "minScore", "releasePreset", "releaseExactDate", "releaseStartDate", "releaseEndDate"]) {
+    const element = document.querySelector(`[name="${field}"]`) || $(`#${field}`);
+    if (!element) continue;
+    const value = options[field];
+    element.value = typeof value === "object" || value === undefined || value === null ? "" : value;
+  }
+
   if (session.result?.verification?.roonQueueable) {
     renderResults(session.result);
   } else if (session.result) {
@@ -1199,6 +1986,7 @@ function applySession(session = {}) {
     $("#tracks").innerHTML = "<p class=\"muted\">Generate again to rebuild this list with strict TIDAL plus Roon verification. Old TIDAL-only session results are hidden so they do not look playable.</p>";
     showQueueReport(null);
     showIntentDebug(null);
+    showSourceReport(null);
   }
 }
 
@@ -1207,8 +1995,27 @@ async function refreshSession() {
   applySession(session);
 }
 
+async function recoverGeneratedSession(startedAt = Date.now()) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await sleep(attempt < 2 ? 1200 : 1800);
+    try {
+      const session = await getJson("/api/session");
+      const updatedAt = Date.parse(session.updatedAt || "");
+      if (session.result && Number.isFinite(updatedAt) && updatedAt >= startedAt - 2000) {
+        applySession(session);
+        renderResults(session.result);
+        return true;
+      }
+    } catch {
+      // Keep polling briefly; the server may be restarting or finishing the request.
+    }
+  }
+  return false;
+}
+
 function applyAppState(app = {}) {
   if (!app) return;
+  state.appStatus = app;
   state.memory = app.memory || state.memory;
   renderMemoryStatus();
 
@@ -1222,6 +2029,8 @@ function applyAppState(app = {}) {
   if (!state.llmStatus && llm.label) {
     renderLlmStatus({ ...llm, checking: true });
   }
+
+  applyCalibration(app.taste?.calibration || null);
 
   const feedbackMap = feedbackMapFromServer(app.feedback || {});
   const feedbackVersion = Object.entries(feedbackMap)
@@ -1238,11 +2047,13 @@ function applyAppState(app = {}) {
     state.historyNeedsRefresh = true;
   }
 
-  const saved = applyFeedbackToTracks(app.saved || []);
-  const savedVersion = savedVersionFor(saved);
+  const savedSnapshot = normalizeSavedSnapshot(app.saved || []);
+  const savedVersion = savedSnapshotVersion({
+    ...savedSnapshot,
+    tracks: applyFeedbackToTracks(savedSnapshot.tracks || [])
+  });
   if (savedVersion !== state.savedVersion) {
-    state.savedTracks = saved;
-    state.savedVersion = savedVersion;
+    applySavedSnapshot(savedSnapshot);
     renderSaved();
     if (state.lastResult) renderResults(state.lastResult);
   }
@@ -1251,6 +2062,7 @@ function applyAppState(app = {}) {
   if (session.updatedAt && session.updatedAt !== state.sessionUpdatedAt) {
     applySession(session);
   }
+  renderSystemHealth();
 }
 
 function renderLlmStatus(status = {}) {
@@ -1267,6 +2079,7 @@ function renderLlmStatus(status = {}) {
   pill.textContent = online
     ? `${label}${model}`
     : (status.reachable && status.loaded === false ? `${label}: model not loaded` : `${label}: offline`);
+  renderSystemHealth();
 }
 
 function setCoverImage(cover, urls = []) {
@@ -1322,6 +2135,10 @@ async function refreshLlmStatus() {
 
 function renderState(payload) {
   state.zones = payload.zones || [];
+  state.connectionStatus = {
+    connected: Boolean(payload.connected),
+    coreName: payload.core?.name || ""
+  };
   if (!state.zones.some((zone) => zone.zone_id === state.selectedZoneId)) {
     state.selectedZoneId = state.zones[0]?.zone_id || "";
   }
@@ -1330,7 +2147,7 @@ function renderState(payload) {
     ? `Connected to ${payload.core.name}`
     : "Enable this extension in Roon Settings > Extensions";
 
-  const phoneUrl = (payload.urls || []).find((url) => !url.includes("localhost"));
+  const phoneUrl = safeHttpUrl((payload.urls || []).find((url) => !url.includes("localhost")));
   $("#phoneAccess").innerHTML = phoneUrl
     ? `<span class="phoneLabel">Phone</span><a href="${escapeHtml(phoneUrl)}">${escapeHtml(phoneUrl)}</a>`
     : "";
@@ -1382,6 +2199,7 @@ function renderState(payload) {
   }
   updateNowDiscoveryTools(zone);
   updateJumpTopVisibility();
+  renderSystemHealth();
 }
 
 async function refresh() {
@@ -1485,35 +2303,74 @@ async function refreshPlaylists() {
 
 async function refreshSaved() {
   const result = await getJson("/api/saved");
-  state.savedTracks = applyFeedbackToTracks(result.tracks || []);
-  state.savedVersion = savedVersionFor(state.savedTracks);
+  applySavedSnapshot(result);
   renderSaved();
   if (state.lastResult) renderResults(state.lastResult);
+  updateNowDiscoveryTools(activeZone());
+}
+
+function applySavedChange(result = {}) {
+  applySavedSnapshot(result);
+  renderSaved();
+  if (state.lastResult) renderResults(state.lastResult);
+  updateNowDiscoveryTools(activeZone());
+  const listNameInput = $("#savedListName");
+  if (listNameInput) listNameInput.value = activeSavedList().name;
 }
 
 function renderSaved() {
-  $("#savedTitle").textContent = `${state.savedTracks.length} playlist candidate${state.savedTracks.length === 1 ? "" : "s"}`;
+  const selectedList = activeSavedList();
+  const listSelect = $("#savedListSelect");
+  if (listSelect) {
+    listSelect.innerHTML = state.savedLists.map((list) => `
+      <option value="${escapeHtml(list.id)}" ${list.id === state.activeSavedListId ? "selected" : ""}>
+        ${escapeHtml(list.name)} (${Number(list.count || 0)})
+      </option>
+    `).join("");
+  }
+  const listNameInput = $("#savedListName");
+  if (listNameInput && document.activeElement !== listNameInput && !listNameInput.value.trim()) {
+    listNameInput.value = selectedList.name;
+  }
+  updateNowCandidateSaveState(state.nowTrack);
+
+  $("#savedTitle").textContent = `${selectedList.name}: ${state.savedTracks.length} playlist candidate${state.savedTracks.length === 1 ? "" : "s"}`;
   $("#queueSaved").disabled = !state.savedTracks.length;
   $("#queueSavedNext").disabled = !state.savedTracks.length;
   $("#copySaved").disabled = !state.savedTracks.length;
   $("#exportSaved").disabled = !state.savedTracks.length;
-  $("#savedTracks").innerHTML = state.savedTracks.length ? state.savedTracks.map((track, index) => `
-    <div class="track savedCandidate" id="saved-track-${index}">
-      <div class="trackMain">
-        <strong class="trackTitle">${index + 1}. ${escapeHtml(track.title)}</strong>
-        <span class="trackMeta">${escapeHtml(track.artist)}${track.releaseDate || track.year ? ` - ${escapeHtml(track.releaseDate || track.year)}` : ""}${track.durationMs ? ` - ${escapeHtml(formatDuration(track.durationMs))}` : ""}</span>
-        ${track.score ? compactScoreBadgeHtml(track) : ""}
-        ${track.tidal?.tidalUrl ? `<p class="muted">TIDAL: <a href="${escapeHtml(track.tidal.tidalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(track.tidal.title || track.title)}</a></p>` : ""}
+  const deleteListButton = $("#deleteSavedList");
+  if (deleteListButton) deleteListButton.disabled = state.savedLists.length <= 1;
+  $("#savedTracks").innerHTML = state.savedTracks.length ? state.savedTracks.map((track, index) => {
+    const key = track.key || trackKeyFor(track);
+    const moveOptions = savedMoveOptionsHtml(selectedList.id);
+    const tidalUrl = safeHttpUrl(track.tidal?.tidalUrl);
+    return `
+      <div class="track savedCandidate" id="saved-track-${index}">
+        <div class="trackMain">
+          <strong class="trackTitle">${index + 1}. ${escapeHtml(track.title)}</strong>
+          <span class="trackMeta">${escapeHtml(track.artist)}${track.releaseDate || track.year ? ` - ${escapeHtml(track.releaseDate || track.year)}` : ""}${track.durationMs ? ` - ${escapeHtml(formatDuration(track.durationMs))}` : ""}</span>
+          ${track.score ? compactScoreBadgeHtml(track) : ""}
+          ${tidalUrl ? `<p class="muted">TIDAL: <a href="${escapeHtml(tidalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(track.tidal.title || track.title)}</a></p>` : ""}
+        </div>
+        <div class="trackActions">
+          ${tidalUrl ? `<a class="buttonLink" href="${escapeHtml(tidalUrl)}" target="_blank" rel="noreferrer">TIDAL</a>` : ""}
+          <button data-queue-saved="${index}">Queue</button>
+          <button data-queue-next-saved="${index}">Add Next</button>
+          <button data-play-saved="${index}">Play Roon</button>
+          ${moveOptions ? `
+            <div class="savedMoveGroup">
+              <select data-move-list aria-label="Move to candidate list">
+                ${moveOptions}
+              </select>
+              <button data-move-saved="${escapeHtml(key)}">Move</button>
+            </div>
+          ` : ""}
+          <button data-remove-saved="${escapeHtml(key)}">Remove</button>
+        </div>
       </div>
-      <div class="trackActions">
-        ${track.tidal?.tidalUrl ? `<a class="buttonLink" href="${escapeHtml(track.tidal.tidalUrl)}" target="_blank" rel="noreferrer">TIDAL</a>` : ""}
-        <button data-queue-saved="${index}">Queue</button>
-        <button data-queue-next-saved="${index}">Add Next</button>
-        <button data-play-saved="${index}">Play Roon</button>
-        <button data-remove-saved="${escapeHtml(track.key)}">Remove</button>
-      </div>
-    </div>
-  `).join("") : "<p class=\"muted\">Save from the Current Rabbit Hole list to build playlist candidates here. Searches can change freely without clearing this pile.</p>";
+    `;
+  }).join("") : `<p class="muted">Save from the Current Rabbit Hole list to build ${escapeHtml(selectedList.name)}. Searches can change freely without clearing other candidate lists.</p>`;
 }
 
 function metricCardHtml(label, value, note = "") {
@@ -1531,7 +2388,8 @@ function reportRowHtml(item = {}, index = 0, mode = "artist") {
   const subtitle = mode === "track"
     ? [item.artist, `${item.plays || 0} play${item.plays === 1 ? "" : "s"}`, formatHours(item.totalSeconds)].filter(Boolean).join(" - ")
     : [`${item.plays || 0} play${item.plays === 1 ? "" : "s"}`, formatHours(item.totalSeconds)].filter(Boolean).join(" - ");
-  const art = item.imageUrl ? `<img src="${escapeHtml(item.imageUrl)}" alt="">` : `<span class="rowIndex">${index + 1}</span>`;
+  const imageUrl = safeHttpUrl(item.imageUrl);
+  const art = imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="">` : `<span class="rowIndex">${index + 1}</span>`;
 
   return `
     <div class="reportRow">
@@ -1545,7 +2403,8 @@ function reportRowHtml(item = {}, index = 0, mode = "artist") {
 }
 
 function recentPlayHtml(play = {}) {
-  const art = play.imageUrl ? `<img src="${escapeHtml(play.imageUrl)}" alt="">` : "<span class=\"rowIndex\">></span>";
+  const imageUrl = safeHttpUrl(play.imageUrl);
+  const art = imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="">` : "<span class=\"rowIndex\">></span>";
   return `
     <div class="reportRow">
       ${art}
@@ -1572,12 +2431,13 @@ function renderHistoryReport(report = {}) {
   state.historyReport = report;
   state.historyNeedsRefresh = false;
   const metrics = report.metrics || {};
+  const ignoredRadio = Number(metrics.ignoredRadioPlays || 0);
   $("#tasteNarrative").textContent = report.tasteNarrative || "No taste report yet.";
   $("#historyMetrics").innerHTML = [
-    metricCardHtml("Observed plays", metrics.observedPlays || 0, "Recorded while this app is running"),
+    metricCardHtml("Observed plays", metrics.observedPlays || 0, ignoredRadio ? `${ignoredRadio} radio placeholders ignored` : "Recorded while this app is running"),
     metricCardHtml("Listening time", formatHours(metrics.knownDurationSeconds), "Known track durations"),
     metricCardHtml("Active days", metrics.activeDays || 0),
-    metricCardHtml("Feedback", metrics.feedbackCount || 0, "Love, Good, OK, Skip, Never Again signals"),
+    metricCardHtml("Feedback", metrics.feedbackCount || 0, "Love, Good, OK, Wrong Genre, Skip, Never Again signals"),
     metricCardHtml("Discovery pool", metrics.discoveryCount || 0, "Previously suggested tracks")
   ].join("");
 
@@ -1631,10 +2491,48 @@ function applyPlayerMaximized() {
   updateJumpTopVisibility();
 }
 
+function playerFullscreenElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+
+function applyPlayerFullscreenState() {
+  const player = document.querySelector(".player");
+  const button = $("#togglePlayerFull");
+  if (!player || !button) return;
+  const full = playerFullscreenElement() === player;
+  player.classList.toggle("isFullWindow", full);
+  document.body.classList.toggle("playerFullWindow", full);
+  button.textContent = full ? "Exit Full Window" : "Full Window";
+  button.setAttribute("aria-pressed", String(full));
+}
+
 function setPlayerMaximized(value) {
   state.playerMaximized = Boolean(value);
   localStorage.setItem("playerMaximized", state.playerMaximized ? "1" : "0");
   applyPlayerMaximized();
+}
+
+async function setPlayerFullWindow(value) {
+  const player = document.querySelector(".player");
+  if (!player) return;
+  const full = playerFullscreenElement() === player;
+  if (value && !full) {
+    setPlayerMaximized(true);
+    const request = player.requestFullscreen || player.webkitRequestFullscreen;
+    if (!request) return alert("This browser does not allow full-window mode from a web page. Use Add to Home Screen or browser fullscreen if available.");
+    try {
+      await request.call(player, { navigationUI: "hide" });
+    } catch {
+      await request.call(player);
+    }
+    applyPlayerFullscreenState();
+    return;
+  }
+  if (!value && full) {
+    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    if (exit) await exit.call(document);
+  }
+  applyPlayerFullscreenState();
 }
 
 function setActiveView(view) {
@@ -1662,6 +2560,8 @@ $("#jumpToNowTrack").addEventListener("click", () => {
   if (state.nowMatchIndex >= 0) scrollToDiscoveryTrack(state.nowMatchIndex);
   else if (state.nowSavedIndex >= 0) scrollToSavedTrack(state.nowSavedIndex);
 });
+
+$("#jumpToCandidatesList").addEventListener("click", scrollToCandidatesList);
 
 $("#openRabbitHole").addEventListener("click", () => {
   const panel = $("#rabbitHolePanel");
@@ -1710,24 +2610,43 @@ $("#rabbitHolePanel").addEventListener("click", (event) => {
   setRabbitPrompt(node.prompt || rabbitHoleTextFor({ artist: node.name, title: "" }));
 });
 
-$("#saveNowCandidate").addEventListener("click", async (event) => {
+async function saveNowCandidateToList(listId, button = $("#saveNowCandidate")) {
   const track = state.nowTrack;
   if (!track) return;
-  const button = event.currentTarget;
   const originalText = button.textContent;
+  const list = candidateListById(listId);
   button.disabled = true;
-  button.textContent = "Saving...";
+  button.textContent = `Saving to ${list.name}...`;
   try {
-    await api("/api/saved/add", { track });
-    button.textContent = "In candidates";
-    await refreshSaved();
-    updateNowDiscoveryTools(activeZone());
+    const result = await api("/api/saved/add", {
+      track,
+      listId: list.id
+    });
+    button.textContent = result.added === false ? "Already saved" : `Added to ${list.name}`;
+    toggleNowCandidateListMenu(false);
+    applySavedChange(result);
   } catch (error) {
     button.textContent = originalText;
     alert(error.message);
   } finally {
-    button.disabled = isSavedCandidate(track);
+    setTimeout(() => updateNowCandidateSaveState(track), 700);
   }
+}
+
+$("#saveNowCandidate").addEventListener("click", () => {
+  if (!state.nowTrack) return;
+  const lists = state.savedLists.length ? state.savedLists : [activeSavedList()];
+  if (lists.length <= 1) {
+    saveNowCandidateToList(lists[0]?.id || state.activeSavedListId).catch((error) => alert(error.message));
+    return;
+  }
+  toggleNowCandidateListMenu();
+});
+
+$("#nowCandidateListMenu").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-now-candidate-list]");
+  if (!button) return;
+  saveNowCandidateToList(button.dataset.nowCandidateList, $("#saveNowCandidate")).catch((error) => alert(error.message));
 });
 
 $("#jumpTop").addEventListener("click", () => {
@@ -1737,6 +2656,14 @@ $("#jumpTop").addEventListener("click", () => {
 $("#togglePlayerMax").addEventListener("click", () => {
   setPlayerMaximized(!state.playerMaximized);
 });
+
+$("#togglePlayerFull").addEventListener("click", () => {
+  const player = document.querySelector(".player");
+  setPlayerFullWindow(playerFullscreenElement() !== player).catch((error) => alert(error.message));
+});
+
+document.addEventListener("fullscreenchange", applyPlayerFullscreenState);
+document.addEventListener("webkitfullscreenchange", applyPlayerFullscreenState);
 
 $("#nowFeedback").addEventListener("click", async (event) => {
   const button = event.target.closest("[data-now-feedback]");
@@ -1751,7 +2678,8 @@ $("#nowFeedback").addEventListener("click", async (event) => {
   track.feedback = rating;
   setFeedbackButtonsActive($("#nowFeedback"), rating);
   try {
-    await api("/api/feedback", { track, rating });
+    const result = await api("/api/feedback", { track, rating });
+    applyFeedbackResponse(result);
     state.feedbackByKey[trackKeyFor(track)] = rating;
     if (state.nowMatchIndex >= 0 && state.lastResult?.tracks?.[state.nowMatchIndex]) {
       state.lastResult.tracks[state.nowMatchIndex].feedback = rating;
@@ -1948,17 +2876,23 @@ $("#playlistForm").addEventListener("submit", async (event) => {
   body.zoneId = zone?.zone_id || "";
   body.nowPlaying = summarizeNowPlaying(zone);
   body.requireRoonQueueable = "true";
+  const generateStartedAt = Date.now();
   if (submitButton) submitButton.disabled = true;
   $("#busy").textContent = "Searching Roon + TIDAL...";
   $("#resultTitle").textContent = "Building rabbit hole...";
   $("#tracks").innerHTML = "";
   state.lastTracks = [];
   state.lastResult = null;
+  state.rejectedDebugOpen = false;
   $("#queueAll").disabled = true;
   $("#queueAllNext").disabled = true;
   $("#copyList").disabled = true;
   $("#exportCsv").disabled = true;
+  updateRejectedDebug();
   showIntentDebug(null);
+  showSourceReport(null);
+  $("#rejectedDebug").hidden = true;
+  $("#rejectedDebug").innerHTML = "";
   $("#tracks").innerHTML = `
     <div class="emptyState isWorking">
       <strong>Searching Roon first, then TIDAL metadata.</strong>
@@ -1970,8 +2904,21 @@ $("#playlistForm").addEventListener("submit", async (event) => {
     const result = await api("/api/ai/playlist", body);
     renderResults(result);
   } catch (error) {
+    if (isFetchDrop(error)) {
+      $("#resultTitle").textContent = "Connection dropped";
+      $("#tracks").innerHTML = `
+        <div class="emptyState isWorking">
+          <strong>Checking whether the search finished...</strong>
+          <p>The phone lost the request to Rabbit Hole. If the server completed the run, this will recover the saved result automatically.</p>
+        </div>
+      `;
+      if (await recoverGeneratedSession(generateStartedAt)) return;
+    }
     $("#resultTitle").textContent = "Generation failed";
     $("#tracks").innerHTML = emptyResultHtml(error.message, {});
+    showSourceReport(null);
+    state.rejectedDebugOpen = false;
+    updateRejectedDebug();
   } finally {
     $("#busy").textContent = "";
     if (submitButton) submitButton.disabled = false;
@@ -1990,6 +2937,11 @@ $("#exportCsv").addEventListener("click", () => {
   downloadCsv("roon-local-ai-discovery.csv", state.lastTracks);
 });
 
+$("#toggleRejected").addEventListener("click", () => {
+  state.rejectedDebugOpen = !state.rejectedDebugOpen;
+  updateRejectedDebug();
+});
+
 $("#queueAll").addEventListener("click", () => {
   queueTrackList(state.lastTracks, $("#queueAll"), {
     alternates: state.lastResult?.alternates || [],
@@ -2005,6 +2957,87 @@ $("#queueAllNext").addEventListener("click", () => {
   });
 });
 
+$("#savedListSelect").addEventListener("change", async (event) => {
+  try {
+    const result = await api("/api/saved/list/select", { listId: event.target.value });
+    applySavedChange(result);
+  } catch (error) {
+    alert(error.message);
+    await refreshSaved();
+  }
+});
+
+$("#createSavedList").addEventListener("click", async (event) => {
+  const input = $("#savedListName");
+  const name = input?.value?.trim() || "New candidates";
+  const button = event.currentTarget;
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Creating...";
+  try {
+    const result = await api("/api/saved/list/create", { name });
+    applySavedChange(result);
+    button.textContent = "Created";
+  } catch (error) {
+    button.textContent = originalText;
+    alert(error.message);
+  } finally {
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.disabled = false;
+    }, 900);
+  }
+});
+
+$("#renameSavedList").addEventListener("click", async (event) => {
+  const input = $("#savedListName");
+  const name = input?.value?.trim();
+  if (!name) return alert("Enter a candidate list name first.");
+  const button = event.currentTarget;
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Renaming...";
+  try {
+    const result = await api("/api/saved/list/rename", {
+      listId: state.activeSavedListId,
+      name
+    });
+    applySavedChange(result);
+    button.textContent = "Renamed";
+  } catch (error) {
+    button.textContent = originalText;
+    alert(error.message);
+  } finally {
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.disabled = false;
+    }, 900);
+  }
+});
+
+$("#deleteSavedList").addEventListener("click", async (event) => {
+  const selectedList = activeSavedList();
+  if (state.savedLists.length <= 1) return alert("Create another candidate list before deleting this one.");
+  if (!confirm(`Delete candidate list "${selectedList.name}"? Tracks in that list will be removed from Rabbit Hole candidates.`)) return;
+  const button = event.currentTarget;
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Deleting...";
+  try {
+    const result = await api("/api/saved/list/delete", { listId: selectedList.id });
+    applySavedChange(result);
+    button.textContent = "Deleted";
+  } catch (error) {
+    button.textContent = originalText;
+    alert(error.message);
+  } finally {
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.disabled = false;
+    }, 900);
+  }
+});
+
 $("#copySaved").addEventListener("click", async () => {
   await navigator.clipboard.writeText(plainList(state.savedTracks));
   $("#copySaved").textContent = "Copied";
@@ -2014,7 +3047,7 @@ $("#copySaved").addEventListener("click", async () => {
 });
 
 $("#exportSaved").addEventListener("click", () => {
-  downloadCsv("rabbit-hole-playlist-candidates.csv", state.savedTracks);
+  downloadCsv(savedListFilename("csv"), state.savedTracks);
 });
 
 $("#queueSaved").addEventListener("click", () => {
@@ -2028,7 +3061,7 @@ $("#queueSavedNext").addEventListener("click", () => {
 });
 
 $("#purgeMemory").addEventListener("click", async (event) => {
-  if (!confirm("Purge remembered discovery scores and track memory? Your Love/Good/OK/Skip/Never Again taste profile stays intact.")) return;
+  if (!confirm("Purge remembered discovery scores and track memory? Your Love/Good/OK/Wrong Genre/Skip/Never Again taste profile stays intact.")) return;
   const button = event.currentTarget;
   const originalText = button.textContent;
   button.disabled = true;
@@ -2060,7 +3093,8 @@ $("#tracks").addEventListener("click", async (event) => {
     feedbackButton.disabled = true;
     feedbackButton.textContent = "Saving...";
     try {
-      await api("/api/feedback", { track, rating });
+      const result = await api("/api/feedback", { track, rating });
+      applyFeedbackResponse(result);
       track.feedback = rating;
       state.feedbackByKey[trackKeyFor(track)] = rating;
       if (state.lastResult?.tracks?.[index]) state.lastResult.tracks[index] = track;
@@ -2074,18 +3108,28 @@ $("#tracks").addEventListener("click", async (event) => {
     return;
   }
 
-  if (event.target.dataset.saveTrack) {
-    event.target.disabled = true;
-    event.target.textContent = "Saving...";
+  const saveTrackButton = event.target.closest("[data-save-track]");
+  if (saveTrackButton) {
+    const saveGroup = saveTrackButton.closest(".candidateSaveGroup");
+    const listId = saveGroup?.querySelector("[data-save-list]")?.value || state.activeSavedListId;
+    const originalText = saveTrackButton.textContent;
+    saveTrackButton.disabled = true;
+    saveTrackButton.textContent = "Saving...";
     try {
-      await api("/api/saved/add", { track: JSON.parse(event.target.dataset.saveTrack) });
-      event.target.textContent = "Saved";
-      await refreshSaved();
+      const result = await api("/api/saved/add", {
+        track: JSON.parse(saveTrackButton.dataset.saveTrack),
+        listId
+      });
+      saveTrackButton.textContent = result.added === false ? "Already saved" : "Added";
+      applySavedChange(result);
     } catch (error) {
-      event.target.textContent = "Failed";
+      saveTrackButton.textContent = "Failed";
       alert(error.message);
     } finally {
-      event.target.disabled = false;
+      setTimeout(() => {
+        saveTrackButton.textContent = originalText;
+        saveTrackButton.disabled = false;
+      }, 900);
     }
     return;
   }
@@ -2100,6 +3144,19 @@ $("#tracks").addEventListener("click", async (event) => {
 
   if (!event.target.dataset.track) return;
   await playTrackInRoon(JSON.parse(event.target.dataset.track), event.target);
+});
+
+$("#tracks").addEventListener("change", (event) => {
+  const listSelect = event.target.closest("[data-save-list]");
+  if (!listSelect) return;
+  const group = listSelect.closest(".candidateSaveGroup");
+  const button = group?.querySelector("[data-save-track]");
+  if (!group || !button) return;
+  const savedInActiveList = group.dataset.activeSaved === "true";
+  const selectedActiveList = listSelect.value === state.activeSavedListId;
+  const savedHere = savedInActiveList && selectedActiveList;
+  button.disabled = savedHere;
+  button.textContent = savedHere ? "Saved" : "Add";
 });
 
 $("#savedTracks").addEventListener("click", async (event) => {
@@ -2124,9 +3181,43 @@ $("#savedTracks").addEventListener("click", async (event) => {
     return;
   }
 
+  if (event.target.dataset.moveSaved) {
+    const button = event.target;
+    const group = button.closest(".savedMoveGroup");
+    const toListId = group?.querySelector("[data-move-list]")?.value || "";
+    if (!toListId) return alert("Choose a destination candidate list first.");
+    const destination = candidateListById(toListId);
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "Moving...";
+    try {
+      const result = await api("/api/saved/move", {
+        key: button.dataset.moveSaved,
+        fromListId: state.activeSavedListId,
+        toListId
+      });
+      applySavedChange(result);
+      $("#busy").textContent = result.duplicate
+        ? `Already in ${destination.name}; removed from current list`
+        : `Moved to ${destination.name}`;
+      setTimeout(() => {
+        $("#busy").textContent = "";
+      }, 1800);
+    } catch (error) {
+      button.textContent = originalText;
+      alert(error.message);
+    } finally {
+      setTimeout(() => {
+        button.textContent = originalText;
+        button.disabled = false;
+      }, 900);
+    }
+    return;
+  }
+
   const key = event.target.dataset.removeSaved;
   if (!key) return;
-  await api("/api/saved/remove", { key });
+  await api("/api/saved/remove", { key, listId: state.activeSavedListId });
   await refreshSaved();
 });
 
@@ -2138,6 +3229,7 @@ events.onmessage = (event) => {
   state.historyNeedsRefresh = true;
 };
 applyPlayerMaximized();
+applyPlayerFullscreenState();
 refresh().catch(() => {});
 refreshLlmStatus().catch(() => {});
 setInterval(() => {

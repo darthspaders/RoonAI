@@ -5,6 +5,10 @@ const RoonApi = require("node-roon-api");
 const RoonApiBrowse = require("node-roon-api-browse");
 const RoonApiStatus = require("node-roon-api-status");
 const RoonApiTransport = require("node-roon-api-transport");
+const {
+  detectGenreTerms: detectOntologyGenreTerms,
+  pruneGenreTerms: pruneOntologyGenreTerms
+} = require("./musicOntology");
 const { extractYearSearchTerms: extractSharedYearSearchTerms } = require("./yearRange");
 
 const STATE_UPDATE_DEBOUNCE_MS = 1000;
@@ -86,6 +90,14 @@ function requestUsesNowPlayingAsSeed(options = {}) {
   const text = normalizeLookupText(`${options.request || ""} ${options.reference || ""}`);
   if (!request && !cleanLookupText(options.genres)) return true;
   return /\b(?:now playing|current roon|current track|current song|what is playing|this track|this song|use current|like this|like what is playing|around what is playing)\b/.test(text);
+}
+
+function positiveIntentText(value = "") {
+  return cleanLookupText(value)
+    .replace(/\b(?:do\s+not|don't|dont|avoid|exclude|without|skip|no)\b[^.?!;\n]*?\bunless\b/gi, " ")
+    .replace(/\b(?:do\s+not|don't|dont|avoid|exclude|without|skip|no)\b[^.?!;,\n]*/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function splitLookupArtists(value) {
@@ -204,20 +216,7 @@ function splitDiscoveryTerms(value) {
 }
 
 function pruneBroadDiscoveryTerms(terms = []) {
-  const normalized = new Set(terms.map(normalizeLookupText));
-  const remove = new Set();
-  function removeTerms(values = []) {
-    for (const value of values) remove.add(normalizeLookupText(value));
-  }
-
-  if (normalized.has("tech house")) removeTerms(["house", "deep house", "melodic house", "organic house"]);
-  if (normalized.has("progressive house")) removeTerms(["house"]);
-  if (normalized.has("melodic house")) removeTerms(["house"]);
-  if (normalized.has("deep house")) removeTerms(["house"]);
-  if (normalized.has("melodic techno")) removeTerms(["techno"]);
-  if (normalized.has("dark ambient")) removeTerms(["ambient", "downtempo"]);
-
-  return terms.filter((term) => !remove.has(normalizeLookupText(term)));
+  return pruneOntologyGenreTerms(terms);
 }
 
 function extractReferenceTracks(value, limit = 80) {
@@ -244,38 +243,9 @@ function extractYearSearchTerms(value) {
 }
 
 function derivedGenreTerms(options = {}) {
-  const text = normalizeLookupText(`${options.request || ""} ${options.genres || ""}`);
-  const terms = splitDiscoveryTerms(options.genres);
-  const knownGenres = [
-    "progressive house",
-    "progressive trance",
-    "melodic house",
-    "melodic techno",
-    "tech house",
-    "minimal tech house",
-    "deep house",
-    "organic house",
-    "dark ambient",
-    "downtempo",
-    "cinematic electronic",
-    "breakbeat",
-    "breaks",
-    "underground breaks",
-    "new wave",
-    "synth pop",
-    "synthwave",
-    "disco",
-    "house",
-    "trance",
-    "techno",
-    "ambient",
-    "rock",
-    "jazz",
-    "80s"
-  ];
-  for (const genre of knownGenres) {
-    if (text.includes(normalizeLookupText(genre))) terms.push(genre);
-  }
+  const text = normalizeLookupText(`${positiveIntentText(options.request || "")} ${options.genres || ""}`);
+  const detected = detectOntologyGenreTerms(text, { includeAliases: true, limit: 24 });
+  const terms = [...splitDiscoveryTerms(options.genres), ...detected.terms];
   if (!terms.length && options.request) terms.push(cleanLookupText(options.request).slice(0, 80));
   return Array.from(new Set(pruneBroadDiscoveryTerms(terms).map(cleanLookupText).filter(Boolean))).slice(0, 8);
 }
@@ -291,17 +261,19 @@ function createRoonDiscoveryQueries(options = {}) {
   const planGenres = Array.isArray(plan.targetGenres) ? plan.targetGenres.map(cleanLookupText).filter(Boolean).slice(0, 12) : [];
   const planVibes = Array.isArray(plan.vibeTerms) ? plan.vibeTerms.map(cleanLookupText).filter(Boolean).slice(0, 12) : [];
   const request = cleanLookupText(options.request);
+  const positiveRequest = positiveIntentText(options.request || "");
   const genres = Array.from(new Set([...planGenres, ...derivedGenreTerms(options)].map(cleanLookupText).filter(Boolean))).slice(0, 12);
   const moods = Array.from(new Set([...planVibes, ...splitDiscoveryTerms(options.mood)].map(cleanLookupText).filter(Boolean))).slice(0, 16);
-  const years = extractYearSearchTerms(options.years || request);
+  const years = extractYearSearchTerms(options.years || positiveRequest || request);
   const references = extractReferenceTracks(options.reference, 100);
   const seedArtists = Array.from(new Set([
     ...planArtists,
     ...(requestUsesNowPlayingAsSeed(options) ? [options.nowPlaying?.artist] : []),
     ...references.map((track) => track.artist)
   ].map(cleanLookupText).filter(Boolean))).slice(0, 18);
-  const progressiveText = normalizeLookupText(`${request} ${genres.join(" ")}`);
-  const wantsProgressive = /\bprogressive\b/.test(progressiveText);
+  const progressiveText = normalizeLookupText(`${positiveRequest} ${genres.join(" ")}`);
+  const wantsPsytrance = /\b(?:psytrance|psy trance|psychedelic trance|progressive psytrance|goa trance)\b/.test(progressiveText);
+  const wantsProgressive = !wantsPsytrance && /\b(?:progressive house|melodic progressive|deep progressive|organic progressive)\b/.test(progressiveText);
   const retroText = normalizeLookupText(`${request} ${moods.join(" ")}`);
   const wantsRetro = /\b(?:80s|eighties|new wave|synth pop|synthwave|retro)\b/.test(retroText);
   const sceneArtists = wantsProgressive ? [
@@ -334,6 +306,37 @@ function createRoonDiscoveryQueries(options = {}) {
     "This Never Happened",
     "Selador"
   ] : [];
+  const psyArtists = wantsPsytrance ? [
+    "Astrix",
+    "Ace Ventura",
+    "Liquid Soul",
+    "Captain Hook",
+    "Perfect Stranger",
+    "Freedom Fighters",
+    "Outsiders",
+    "Symbolic",
+    "Protonica",
+    "Ritmo",
+    "E-Clip",
+    "Flegma",
+    "Zyce",
+    "Sideform",
+    "Atacama",
+    "Egorythmia",
+    "Sonic Species"
+  ] : [];
+  const psyLabels = wantsPsytrance ? [
+    "Iboga Records",
+    "Iono Music",
+    "Nano Records",
+    "Spin Twist Records",
+    "Blue Tunes Records",
+    "Digital Om",
+    "TechSafari Records",
+    "Sacred Technology",
+    "JOOF Recordings",
+    "TesseracTstudio"
+  ] : [];
   const retroTerms = wantsRetro ? ["synthwave", "new wave", "synth pop", "80s", "retro", "nu disco"] : [];
   const queries = [];
 
@@ -360,6 +363,17 @@ function createRoonDiscoveryQueries(options = {}) {
     for (const year of years.slice(0, 2)) add(`${label} ${year}`);
   }
 
+  for (const artist of psyArtists.slice(0, 14)) {
+    for (const genre of genres.slice(0, 3)) add(`${artist} ${genre}`);
+    for (const year of years.slice(0, 2)) add(`${artist} ${year}`);
+  }
+
+  for (const label of psyLabels.slice(0, 10)) {
+    for (const genre of genres.slice(0, 3)) add(`${label} ${genre}`);
+    for (const year of years.slice(0, 2)) add(`${label} ${year}`);
+    add(label);
+  }
+
   for (const label of planLabels.slice(0, 12)) {
     for (const genre of genres.slice(0, 3)) add(`${label} ${genre}`);
     for (const mood of moods.slice(0, 2)) add(`${label} ${mood}`);
@@ -378,8 +392,8 @@ function createRoonDiscoveryQueries(options = {}) {
     add(genre);
   }
 
-  add(request);
-  add(cleanLookupText(`${request} ${options.genres || ""} ${options.mood || ""}`));
+  add(positiveRequest || request);
+  add(cleanLookupText(`${positiveRequest || request} ${options.genres || ""} ${options.mood || ""}`));
 
   return Array.from(new Set(queries.map(cleanLookupText).filter(Boolean))).slice(0, 72);
 }

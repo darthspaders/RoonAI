@@ -25,17 +25,52 @@ function firstImageKey(value) {
   return cleanText(value);
 }
 
+function looksLikeRadioStationPlaceholder(value) {
+  const text = normalize(value);
+  if (!text) return false;
+  return /\b(?:di fm|digitally imported|frisky radio|proton radio|afterhours fm|live radio|radio station|internet radio)\b/.test(text) ||
+    /^(?:progressive|deep house|techno|trance|ambient|chillout|lounge)\s+di fm$/.test(text);
+}
+
+function looksLikeRadioProgramPlaceholder(value) {
+  const text = cleanText(value);
+  if (!text) return false;
+  const monthAndYear = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4}\b/i;
+  return monthAndYear.test(text) ||
+    /\b(?:episode|showcase|takeover|podcast|radio\s+show|guest\s+mix|dj\s+set|live\s+set|live\s+mix|monthly\s+mix|weekly\s+mix|mixed\s+by)\b/i.test(text);
+}
+
+function isNonContributoryPlay(play = {}) {
+  const artist = cleanText(play.artist);
+  const title = cleanText(play.title);
+  const album = cleanText(play.album);
+  const combined = `${artist} ${title} ${album} ${play.zoneName || ""}`;
+  const unknownArtist = /^(?:unknown|unknown artist|various artists?)$/i.test(artist);
+  const stationTitle = looksLikeRadioStationPlaceholder(title);
+  const stationArtist = looksLikeRadioStationPlaceholder(artist);
+  const radioProgram = play.isRadioProgram ||
+    play.catalogEnrichmentAllowed === false ||
+    looksLikeRadioProgramPlaceholder(title) ||
+    looksLikeRadioProgramPlaceholder(artist);
+
+  if (!title || unknownArtist) return true;
+  if (stationTitle || stationArtist) return true;
+  if (looksLikeRadioStationPlaceholder(combined) && radioProgram) return true;
+  return false;
+}
+
 function trackFromZone(zone = {}) {
   if (zone.state !== "playing") return null;
 
   const now = zone.now_playing || {};
+  const lookup = now.radio_lookup || {};
   const enriched = now.radio_enrichment || {};
-  const title = cleanText(enriched.title || now.two_line?.line1 || now.three_line?.line1 || now.one_line?.line1);
-  const artist = cleanText(enriched.artist || now.two_line?.line2 || now.three_line?.line2 || now.one_line?.line2);
-  const album = cleanText(enriched.album || now.three_line?.line3 || "");
+  const title = cleanText(enriched.title || lookup.title || now.two_line?.line1 || now.three_line?.line1 || now.one_line?.line1);
+  const artist = cleanText(enriched.artist || lookup.artist || now.two_line?.line2 || now.three_line?.line2 || now.one_line?.line2);
+  const album = cleanText(enriched.album || lookup.album || now.three_line?.line3 || "");
   if (!title) return null;
 
-  return {
+  const track = {
     key: `${normalize(artist)}|${normalize(title)}`,
     title,
     artist: artist || "Unknown Artist",
@@ -48,8 +83,11 @@ function trackFromZone(zone = {}) {
     zoneId: zone.zone_id || "",
     zoneName: zone.display_name || "",
     state: zone.state || "",
-    seekPosition: Number(now.seek_position || 0)
+    seekPosition: Number(now.seek_position || 0),
+    isRadioProgram: Boolean(lookup.isRadioProgram),
+    catalogEnrichmentAllowed: lookup.catalogEnrichmentAllowed !== false
   };
+  return isNonContributoryPlay(track) ? null : track;
 }
 
 function groupCounts(items, keyFn, extraFn = () => ({})) {
@@ -106,7 +144,9 @@ function normalizeStoredPlay(play = {}) {
     artist,
     artistImageKey: cleanText(play.artistImageKey || firstImageKey(play.artistImageKeys)),
     artistImageKeys: Array.isArray(play.artistImageKeys) ? play.artistImageKeys.map(cleanText).filter(Boolean) : [],
-    key: `${normalize(artist)}|${normalize(title)}`
+    key: `${normalize(artist)}|${normalize(title)}`,
+    isRadioProgram: Boolean(play.isRadioProgram),
+    catalogEnrichmentAllowed: play.catalogEnrichmentAllowed !== false
   };
 }
 
@@ -187,19 +227,21 @@ class ListeningHistory {
   report({ roonState = {}, tasteProfile, discoveryHistory } = {}) {
     this.load();
     const plays = this.data.plays || [];
-    const recentPlays = plays.slice(0, 40);
-    const topArtists = groupCounts(plays, (play) => play.artist, (play, current) => ({
+    const contributoryPlays = plays.filter((play) => !isNonContributoryPlay(play));
+    const ignoredRadioPlays = plays.length - contributoryPlays.length;
+    const recentPlays = contributoryPlays.slice(0, 40);
+    const topArtists = groupCounts(contributoryPlays, (play) => play.artist, (play, current) => ({
       artistImageKey: current.artistImageKey || play.artistImageKey || "",
       imageKey: current.imageKey || play.imageKey || ""
     })).slice(0, 10);
-    const topTracks = groupCounts(plays, (play) => `${play.artist} - ${play.title}`, (play) => ({
+    const topTracks = groupCounts(contributoryPlays, (play) => `${play.artist} - ${play.title}`, (play) => ({
       artist: play.artist,
       title: play.title,
       imageKey: play.imageKey
     })).slice(0, 10);
 
-    const activeDays = new Set(plays.map((play) => new Date(Number(play.playedAt || 0)).toISOString().slice(0, 10))).size;
-    const totalSeconds = plays.reduce((sum, play) => sum + Number(play.lengthSeconds || 0), 0);
+    const activeDays = new Set(contributoryPlays.map((play) => new Date(Number(play.playedAt || 0)).toISOString().slice(0, 10))).size;
+    const totalSeconds = contributoryPlays.reduce((sum, play) => sum + Number(play.lengthSeconds || 0), 0);
     const profile = tasteProfile?.read ? tasteProfile.read() : { feedback: {}, artists: {}, labels: {} };
     const likedArtists = topWeighted(profile.artists, 1, 8);
     const rejectedArtists = topWeighted(profile.artists, -1, 5);
@@ -211,7 +253,8 @@ class ListeningHistory {
     return {
       updatedAt: new Date().toISOString(),
       metrics: {
-        observedPlays: plays.length,
+        observedPlays: contributoryPlays.length,
+        ignoredRadioPlays,
         activeDays,
         uniqueArtists: topArtists.length,
         uniqueTracks: topTracks.length,
@@ -235,7 +278,7 @@ class ListeningHistory {
         topLabels: likedLabels,
         likedArtists,
         likedLabels,
-        plays: plays.length,
+        plays: contributoryPlays.length,
         discoveryCount,
         nowPlaying
       })
@@ -244,5 +287,7 @@ class ListeningHistory {
 }
 
 module.exports = {
-  ListeningHistory
+  ListeningHistory,
+  isNonContributoryPlay,
+  trackFromZone
 };
