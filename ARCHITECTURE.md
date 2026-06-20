@@ -1,5 +1,11 @@
 # The Rabbit Hole - Architecture
 
+Repo directory:
+
+```text
+C:\Users\spade\Documents\Codex\2026-06-07\the-rabbit-hole
+```
+
 ## High-Level Flow
 
 ```text

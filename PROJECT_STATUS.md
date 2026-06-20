@@ -11,6 +11,12 @@ This repo is the local Roon/TIDAL/LLM discovery app called **The Rabbit Hole**. 
 
 Do not commit `.env`. Use `.env.example` for public config examples only.
 
+Current repo directory:
+
+```text
+C:\Users\spade\Documents\Codex\2026-06-07\the-rabbit-hole
+```
+
 ## Current Runtime Setup
 
 The app is currently expected to use LM Studio through an OpenAI-compatible endpoint:
@@ -24,7 +30,7 @@ LLM_API_KEY=
 
 LM Studio should be running on port `1234` with `qwen/qwen3.6-35b-a3b` loaded. The UI calls `/api/llm-status` and should show green only when the local model endpoint is reachable.
 
-Start the app from the repo:
+Start the app from the repo directory above:
 
 ```powershell
 npm start

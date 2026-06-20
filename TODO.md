@@ -1,5 +1,11 @@
 # The Rabbit Hole - TODO
 
+Repo directory:
+
+```text
+C:\Users\spade\Documents\Codex\2026-06-07\the-rabbit-hole
+```
+
 ## Highest Priority
 
 1. Tune discovery pool volume and runtime.
