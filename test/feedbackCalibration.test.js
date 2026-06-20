@@ -79,6 +79,39 @@ test("feedback calibration records liked tracks that the model downranked", () =
   assert.equal(calibration.recent[0].issue, "liked_downranked");
 });
 
+test("reject similar records targeted calibration without artist penalty", () => {
+  const taste = new TasteProfile(tempTasteFile());
+  const result = taste.record({
+    artist: "KAI Music",
+    title: "A New Birth (Emotional Melodic EDM / Progressive House)",
+    label: "Generic Uploads",
+    discoverySource: "TIDAL search",
+    discoveryLane: "expanded",
+    tidalUrl: "https://tidal.com/browse/track/generic-style-title",
+    modelReview: {
+      action: "unchanged",
+      before: 45,
+      after: 45,
+      modelScore: 45,
+      genreConfidence: 35,
+      reason: "Weak prompt fit"
+    }
+  }, "reject_similar", {
+    reason: "Risk: generic genre-title wording; weak prompt match"
+  });
+  const profile = taste.read();
+
+  assert.equal(result.feedback.rating, "reject_similar");
+  assert.equal(result.feedback.artistSignalBlocked, true);
+  assert.equal(result.feedback.calibration.issue, "reject_similar");
+  assert.match(result.feedback.calibration.reason, /generic genre-title/i);
+  assert.equal(profile.calibration.total, 1);
+  assert.equal(profile.calibration.modelMisses, 1);
+  assert.equal(profile.calibration.recent[0].issue, "reject_similar");
+  assert.equal(profile.artists["kai music"], undefined);
+  assert.ok(profile.labels["generic uploads"].score < 0);
+});
+
 test("calibration adjustment is neutral when no bucket matches", () => {
   const taste = new TasteProfile(tempTasteFile());
   const adjustment = taste.calibrationAdjustmentFor({

@@ -4,6 +4,7 @@ const state = {
   zones: [],
   selectedZoneId: localStorage.getItem("zoneId") || "",
   lastTracks: [],
+  displayedTracks: [],
   lastResult: null,
   playlists: [],
   playlistSeedTracks: [],
@@ -21,6 +22,9 @@ const state = {
   memory: null,
   historyReport: null,
   historyNeedsRefresh: true,
+  tidalMixes: null,
+  tidalVisibleMixes: [],
+  tidalMixesNeedsRefresh: true,
   appStatus: null,
   connectionStatus: { connected: false, coreName: "" },
   nowTrack: null,
@@ -32,10 +36,47 @@ const state = {
   isSeeking: false,
   playerMaximized: localStorage.getItem("playerMaximized") === "1",
   llmStatus: null,
-  rejectedDebugOpen: false
+  rejectedDebugOpen: false,
+  resultArtistConfirmedOnly: false
 };
 
 const $ = (selector) => document.querySelector(selector);
+
+const TIDAL_RADIO_RECENT_KEY = "rabbitHole.tidalRadioRecent.v1";
+const TIDAL_RADIO_RECENT_TTL_MS = 24 * 60 * 60 * 1000;
+const TIDAL_RADIO_RECENT_MAX = 160;
+
+let screenWakeLock = null;
+let screenWakeLockDesired = false;
+let screenWakeLockPending = null;
+const screenWakeFallback = {
+  video: null,
+  stream: null,
+  timer: null,
+  canvas: null,
+  flip: false
+};
+
+function setScoringMode(value = "") {
+  const normalized = ["pure", "explore", "similar"].includes(String(value || "")) ? String(value || "") : "";
+  const input = $("#scoringMode") || document.querySelector("[name='scoringMode']");
+  if (input) input.value = normalized;
+
+  document.querySelectorAll("[data-scoring-mode]").forEach((button) => {
+    const active = String(button.dataset.scoringMode || "") === normalized;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-checked", active ? "true" : "false");
+  });
+}
+
+function moveScoringModeSelection(currentButton, direction) {
+  const buttons = Array.from(document.querySelectorAll("[data-scoring-mode]"));
+  if (!buttons.length) return;
+  const currentIndex = Math.max(0, buttons.indexOf(currentButton));
+  const nextButton = buttons[(currentIndex + direction + buttons.length) % buttons.length];
+  setScoringMode(nextButton.dataset.scoringMode || "");
+  nextButton.focus();
+}
 
 const SCORE_MAX = {
   freshness: 19,
@@ -155,7 +196,7 @@ function nowPlayingTrack(zone = activeZone()) {
   if (!now?.title) return null;
   const rawNow = zone?.now_playing;
   const enriched = rawNow?.radio_enrichment;
-  const roonImageUrl = !rawNow?.radio_lookup && rawNow?.image_key
+  const roonImageUrl = rawNow?.image_key && rawNow?.radio_lookup?.catalogEnrichmentAllowed !== false
     ? `/api/roon/image/${encodeURIComponent(rawNow.image_key)}?width=360&height=360`
     : "";
   return withLocalFeedback({
@@ -168,7 +209,7 @@ function nowPlayingTrack(zone = activeZone()) {
     releaseDate: enriched?.releaseDate || "",
     tidal: enriched || null,
     tidalUrl: enriched?.tidalUrl || "",
-    imageUrl: enriched?.imageUrl || roonImageUrl,
+    imageUrl: roonImageUrl || enriched?.imageUrl,
     discoverySource: "Now playing",
     statusChecks: ["Now playing in Roon"],
     roon: {
@@ -200,14 +241,27 @@ function findNowPlayingMatch(zone = activeZone()) {
   const fallback = nowPlayingTrack(zone);
   if (!now?.title) return { index: -1, savedIndex: -1, track: null, source: "" };
 
+  function withLiveNowPlayingMedia(track) {
+    const localTrack = withLocalFeedback(track);
+    if (!localTrack || !fallback) return localTrack;
+    return {
+      ...localTrack,
+      album: fallback.album || localTrack.album || "",
+      durationMs: fallback.durationMs || localTrack.durationMs || null,
+      imageUrl: fallback.imageUrl || localTrack.imageUrl || "",
+      tidal: localTrack.tidal || fallback.tidal || null,
+      tidalUrl: localTrack.tidalUrl || fallback.tidalUrl || ""
+    };
+  }
+
   const index = state.lastTracks.findIndex((track) => trackMatchesNow(track, now));
-  if (index >= 0) return { index, savedIndex: -1, track: withLocalFeedback(state.lastTracks[index]), source: "current" };
+  if (index >= 0) return { index, savedIndex: -1, track: withLiveNowPlayingMedia(state.lastTracks[index]), source: "current" };
 
   const savedIndex = state.savedTracks.findIndex((track) => trackMatchesNow(track, now));
-  if (savedIndex >= 0) return { index: -1, savedIndex, track: withLocalFeedback(state.savedTracks[savedIndex]), source: "saved" };
+  if (savedIndex >= 0) return { index: -1, savedIndex, track: withLiveNowPlayingMedia(state.savedTracks[savedIndex]), source: "saved" };
 
   if (zone?.memoryTrack && trackMatchesNow(zone.memoryTrack, now)) {
-    return { index: -1, savedIndex: -1, track: withLocalFeedback(zone.memoryTrack), source: "memory" };
+    return { index: -1, savedIndex: -1, track: withLiveNowPlayingMedia(zone.memoryTrack), source: "memory" };
   }
 
   return { index: -1, savedIndex: -1, track: fallback, source: "now" };
@@ -334,6 +388,17 @@ function lastFmHealthSummary(app = {}) {
   return { level: "unknown", status: "not checked", detail: "waiting for status" };
 }
 
+function tidalProfileMixesHealthSummary(app = {}) {
+  const mixes = app.tidalProfileMixes || {};
+  if (mixes.enabled === false) return { level: "unknown", status: "disabled", detail: "profile mixes off" };
+  if (!mixes.configured) return { level: "warn", status: "profile token missing", detail: "personal mixes unavailable" };
+  const circuit = mixes.circuit || {};
+  if (circuit.state === "open") return { level: "bad", status: "backing off", detail: circuit.lastError || "profile fetch failed" };
+  if (circuit.state === "half-open") return { level: "warn", status: "retrying", detail: circuit.lastError || "checking recovery" };
+  if (mixes.lastError) return { level: "warn", status: "last fetch empty", detail: mixes.lastError };
+  return { level: "ok", status: "ready", detail: "personal mixes available" };
+}
+
 function healthCardHtml(item = {}) {
   const level = providerHealthClass(item.level);
   return `
@@ -359,6 +424,7 @@ function renderSystemHealth() {
   const radioTidal = circuitHealth(app.radioMetadata || {}, { readyText: "ready" });
   const llm = llmHealthSummary(app);
   const lastfm = lastFmHealthSummary(app);
+  const tidalProfile = tidalProfileMixesHealthSummary(app);
   const updatedAt = app.updatedAt ? `Updated ${formatDateTime(Date.parse(app.updatedAt))}` : "";
 
   container.innerHTML = `
@@ -370,6 +436,7 @@ function renderSystemHealth() {
       ${healthCardHtml(roon)}
       ${healthCardHtml({ label: "TIDAL Search", ...tidal })}
       ${healthCardHtml({ label: "Radio Art TIDAL", ...radioTidal })}
+      ${healthCardHtml({ label: "TIDAL Profile", ...tidalProfile })}
       ${healthCardHtml({ label: "Local Model", ...llm })}
       ${healthCardHtml({ label: "Last.fm", ...lastfm })}
     </div>
@@ -557,6 +624,25 @@ async function api(path, body) {
 
 async function getJson(path) {
   const response = await fetch(path);
+  const text = await response.text();
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`Invalid JSON response from ${path}`);
+    }
+  }
+  if (!response.ok || data.error) throw new Error(data.error || `Request failed: ${response.status}`);
+  return data;
+}
+
+async function deleteJson(path, body) {
+  const response = await fetch(path, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body || {})
+  });
   const text = await response.text();
   let data = {};
   if (text) {
@@ -872,12 +958,127 @@ function compactScoreBadgeHtml(track) {
   return `<span class="scoreBadge ${escapeHtml(band.className)}">Discovery ${escapeHtml(score)} - ${escapeHtml(band.label)}${escapeHtml(suffix)}</span>`;
 }
 
+function trackPayload(track = {}) {
+  const { _resultIndex, ...payload } = track || {};
+  return payload;
+}
+
+function artistCreditConfirmed(track = {}) {
+  const checks = Array.isArray(track.statusChecks) ? track.statusChecks.join(" ") : "";
+  return Boolean(track.roon?.artistCreditConfirmed || /Exact artist credit confirmed/i.test(checks));
+}
+
+function roonVisibleTrack(track = {}) {
+  const source = `${track.discoverySource || ""} ${track.verificationSource || ""}`;
+  return Boolean(track.roon?.verified || /\bRoon\b/i.test(source));
+}
+
+function artistConfirmationBadgeHtml(track = {}) {
+  if (!roonVisibleTrack(track)) return "";
+  if (artistCreditConfirmed(track)) {
+    const artist = track.roon?.artistCreditConfirmed || "";
+    return `<span class="artistCreditBadge exact" title="Roon artist credit matched exactly">${artist ? `Exact artist: ${escapeHtml(artist)}` : "Exact artist"}</span>`;
+  }
+  return `<span class="artistCreditBadge broad" title="Roon found this through broader search, not exact artist crawl">Broader Roon match</span>`;
+}
+
+function displayedResultTracks(tracks = []) {
+  const entries = (tracks || []).map((track, resultIndex) => ({ ...track, _resultIndex: resultIndex }));
+  return state.resultArtistConfirmedOnly
+    ? entries.filter(artistCreditConfirmed)
+    : entries;
+}
+
+function updateResultTrackFeedback(updatedTrack = {}, rating = "") {
+  const key = trackKeyFor(updatedTrack);
+  if (!key) return;
+  const apply = (track) => (trackKeyFor(track) === key ? { ...track, feedback: rating } : track);
+  if (state.lastResult?.tracks) state.lastResult.tracks = state.lastResult.tracks.map(apply);
+  state.lastTracks = state.lastTracks.map(apply);
+  state.displayedTracks = state.displayedTracks.map(apply);
+}
+
+function resultDiagnosticsFor(track = {}) {
+  const breakdown = track.scoreBreakdown || {};
+  const score = Number(track.score || breakdown.total || 0);
+  const promptPercent = Number(breakdown.promptMatch?.percent ?? track.promptMatch?.percent ?? 0);
+  const genreMatch = Number(breakdown.genreMatch ?? 0);
+  const genreInference = breakdown.genreInference || {};
+  const genreConfidence = Number(genreInference.confidence || 0);
+  const kept = [];
+  const risks = [];
+  const checks = Array.isArray(track.statusChecks) ? track.statusChecks.join(" ") : "";
+  const titleAlbum = `${track.title || ""} ${track.album || ""}`;
+  const titleAlbumNormalized = normalizeMatchText(titleAlbum);
+  const label = track.label || track.tidal?.label || "";
+  const durationMs = Number(track.durationMs || track.tidal?.durationMs || 0);
+
+  if (track.roon?.verified || /Roon queue action ready/i.test(checks)) kept.push("Roon queueable");
+  if (track.tidal?.verified || track.tidal?.tidalUrl || track.tidalUrl) kept.push("TIDAL verified");
+  if (track.releaseDate || track.year || track.tidal?.releaseDate || track.tidal?.year) kept.push("date matched");
+  if (label) kept.push(`${label} label metadata`);
+  if (/Not previously suggested/i.test(checks)) kept.push("not previously suggested");
+  if (durationMs) kept.push(`${formatDuration(durationMs)} playable length`);
+  if (genreConfidence >= 45 && genreInference.summary) kept.push(`genre inferred from ${genreInference.summary}`);
+  if (breakdown.tasteAdjustment > 0) kept.push("taste signal boost");
+  if (track.discoveryLane === "adjacent") kept.push("adjacent discovery lane");
+  if (track.autoBroadened) kept.push("broadened search pass");
+  if (artistCreditConfirmed(track)) kept.push("exact artist credit confirmed");
+  if (!kept.length) kept.push(track.discoverySource || "closest catalogue match");
+
+  if (track.belowMinimum) risks.push(`below ${track.minimumScoreLabel || "minimum"} floor`);
+  if (score && score < 60) risks.push("long-shot score");
+  if (promptPercent && promptPercent < 50) risks.push("weak prompt match");
+  if (genreMatch && genreMatch < 12 && genreConfidence < 35) risks.push("weak inferred genre evidence");
+  if (genreInference.weakOfficialGenre && genreConfidence < 45) risks.push("official genre tag is generic");
+  if (!label) risks.push("no trusted label metadata");
+  if (durationMs && durationMs < 240000) risks.push("short track length");
+  if (track.discoveryQuotaRisk) risks.push("feedback calibration risk");
+  if (/Roon verification timed out/i.test(checks)) risks.push("Roon action not verified");
+  if (roonVisibleTrack(track) && !artistCreditConfirmed(track)) risks.push("broader Roon match");
+  if (/\b(?:edm|house|techno|trance|progressive|melodic|deep|vibes?|fusions?|mix 20\d{2}|playlist|hits?)\b/.test(titleAlbumNormalized) &&
+      (titleAlbum.includes("/") || /\b(?:vibes?|fusions?|playlist|hits?|mix 20\d{2})\b/.test(titleAlbumNormalized))) {
+    risks.push("generic genre-title wording");
+  }
+
+  const show = Boolean(
+    track.belowMinimum ||
+    (score && score < 60) ||
+    (promptPercent && promptPercent < 55) ||
+    track.discoveryQuotaRisk ||
+    risks.length >= 2
+  );
+
+  return {
+    show,
+    kept: Array.from(new Set(kept)).slice(0, 4),
+    risks: Array.from(new Set(risks)).slice(0, 4)
+  };
+}
+
+function resultDiagnosticsHtml(track = {}, index = 0) {
+  const diagnostics = resultDiagnosticsFor(track);
+  if (!diagnostics.show) return "";
+  const rejected = normalizeFeedbackValue(track.feedback) === "reject_similar";
+  return `
+    <div class="resultDiagnostics">
+      <div class="resultDiagnosticsHead">
+        <span>Why is this here?</span>
+        <button type="button" data-reject-similar="${index}" ${rejected ? "disabled" : ""}>${rejected ? "Rejected similar" : "Reject similar"}</button>
+      </div>
+      <p><strong>Kept because:</strong> ${escapeHtml(diagnostics.kept.join(", "))}</p>
+      <p><strong>Risk:</strong> ${escapeHtml((diagnostics.risks.length ? diagnostics.risks : ["limited metadata support"]).join(", "))}</p>
+    </div>
+  `;
+}
+
 function normalizeFeedbackValue(value) {
   const rating = String(value || "").toLowerCase();
   if (rating === "love") return "love";
   if (rating === "good" || rating === "up") return "good";
   if (rating === "ok" || rating === "okay") return "ok";
   if (rating === "wrong_genre" || rating === "wrong genre" || rating === "wrong" || rating === "not what i asked for" || rating === "not_asked") return "wrong_genre";
+  if (rating === "reject_similar" || rating === "reject similar" || rating === "similar_bad" || rating === "similar") return "reject_similar";
   if (rating === "skip" || rating === "down") return "skip";
   if (rating === "never" || rating === "never_again" || rating === "never again") return "never";
   return "";
@@ -1197,8 +1398,15 @@ function scoreBreakdownHtml(track) {
     ["Genre Match", breakdown.genreMatch, breakdown.max?.genreMatch || SCORE_MAX.genreMatch]
   ].filter((row) => row[1] !== undefined && row[1] !== null && row[1] !== "");
 
+  if (breakdown.genreInference?.confidence) {
+    rows.push(["Genre Confidence", breakdown.genreInference.confidence, 100]);
+  }
+
   if (breakdown.tasteAdjustment) {
     rows.push(["Taste Adjustment", breakdown.tasteAdjustment, 12]);
+  }
+  if (breakdown.artistDiversityAdjustment) {
+    rows.push(["Artist Diversity Adjustment", breakdown.artistDiversityAdjustment, 12]);
   }
   if (breakdown.calibrationAdjustment) {
     rows.push(["Calibration Adjustment", breakdown.calibrationAdjustment, 10]);
@@ -1296,11 +1504,35 @@ function queueReportHtml(result = {}) {
   const title = `Queued ${result.queuedCount || queued.length}/${result.requested || queued.length + failed.length}`;
   const targetReached = Number(result.queuedCount || queued.length) >= Number(result.requested || 0);
   const backupCount = queued.filter((item) => item.isAlternate).length;
+  const actionText = result.topOfQueue ? "added next after the current track" : "added to the existing Roon queue";
+  const addedTracks = queued.slice(0, 18);
   return `
     <div>
       <strong>${escapeHtml(title)}</strong>
+      ${queued.length ? `<p>${escapeHtml(`${queued.length} Rabbit Hole track${queued.length === 1 ? "" : "s"} ${actionText}. Existing queue items may still appear above them in Roon.`)}</p>` : ""}
       ${backupCount ? `<p>${escapeHtml(backupCount)} backup track${backupCount === 1 ? "" : "s"} used to fill the queue.</p>` : ""}
       ${result.warning ? `<p>${escapeHtml(result.warning)}</p>` : ""}
+      ${addedTracks.length ? `
+        <div class="queueReportAdded">
+          <span>Added tracks</span>
+          <ol>
+            ${addedTracks.map((item) => {
+              const track = item.track || {};
+              const subtitle = [
+                track.artist,
+                track.album,
+                track.year || ""
+              ].filter(Boolean).join(" - ");
+              return `
+                <li>
+                  <strong>${escapeHtml(track.title || "Unknown title")}</strong>
+                  <span>${escapeHtml(subtitle || "Rabbit Hole result")}</span>
+                </li>
+              `;
+            }).join("")}
+          </ol>
+        </div>
+      ` : ""}
       ${failed.length ? `
         <p>${escapeHtml(failed.length)} queue attempt${failed.length === 1 ? "" : "s"} failed${targetReached ? ", but the target count was reached." : ":"}</p>
         <ul>
@@ -1326,6 +1558,33 @@ function showQueueReport(result = null) {
   }
   report.hidden = false;
   report.innerHTML = queueReportHtml(result);
+}
+
+function tidalPlaylistReportHtml(result = {}) {
+  const playlist = result.playlist || {};
+  const url = safeHttpUrl(playlist.url);
+  const skipped = Number(result.skippedCount || 0);
+  const added = Number(result.addedCount || 0);
+  const requested = Number(result.requested || 0);
+  return `
+    <div>
+      <strong>Created TIDAL playlist${playlist.title ? `: ${escapeHtml(playlist.title)}` : ""}</strong>
+      <p>Added ${escapeHtml(added)} of ${escapeHtml(requested)} track${requested === 1 ? "" : "s"} by TIDAL ID${skipped ? `; skipped ${escapeHtml(skipped)} without TIDAL IDs` : ""}.</p>
+      ${url ? `<p><a class="buttonLink" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">Open TIDAL playlist</a></p>` : ""}
+      <p>After TIDAL syncs, refresh Roon playlists if you want to queue the playlist from Roon.</p>
+    </div>
+  `;
+}
+
+function showTidalPlaylistReport(result = null) {
+  const report = $("#queueReport");
+  if (!report) return;
+  if (!result) {
+    showQueueReport(null);
+    return;
+  }
+  report.hidden = false;
+  report.innerHTML = tidalPlaylistReportHtml(result);
 }
 
 function discardedReasonSummary(discarded = []) {
@@ -1384,12 +1643,16 @@ function sourceReportFor(result = {}) {
   const lastfm = verification.lastfm || {};
   const calibration = verification.feedbackCalibration || state.calibration || {};
   const queryYield = verification.queryYield || {};
+  const exactArtistMatches = tracks.filter(artistCreditConfirmed).length;
+  const broaderRoonMatches = tracks.filter((track) => roonVisibleTrack(track) && !artistCreditConfirmed(track)).length;
   const metrics = [
     ["Generated", verification.generated || tracks.length + discarded.length || tracks.length],
     ["Kept", verification.kept ?? tracks.length],
     ["Discarded", verification.discarded ?? discarded.length],
     ["Roon checked", verification.roonChecked || 0],
     ["Roon rejected", verification.roonRejected || 0],
+    ["Exact artist", exactArtistMatches],
+    ["Broader Roon", broaderRoonMatches],
     ["Below floor kept", verification.belowMinimumKept || 0],
     ["Auto-broaden added", autoBroaden.added || 0],
     ["Yield retries", autoBroaden.yieldAware ? (autoBroaden.lanes || []).filter((lane) => lane.yieldAware).length || 1 : 0],
@@ -1397,6 +1660,7 @@ function sourceReportFor(result = {}) {
     ["Last.fm top artists", lastfm.checked ? (lastfm.topArtistsReturned || 0) : "not checked"],
     ["Query accepted", queryYield.accepted || 0],
     ["Query sludge", Number(queryYield.seoRejects || 0) + Number(queryYield.genreRejects || 0)],
+    ["Queries skipped", queryYield.prunedCount || 0],
     ["Model misses", calibration.modelMisses || 0]
   ];
 
@@ -1424,6 +1688,182 @@ function sourceReportFor(result = {}) {
     calibration,
     queryYield
   };
+}
+
+function fallbackPoolDiagnosticsFor(result = {}) {
+  const verification = result.verification || {};
+  const tracks = Array.isArray(result.tracks) ? result.tracks : [];
+  const alternates = Array.isArray(result.alternates) ? result.alternates : [];
+  const discarded = Array.isArray(result.discarded) ? result.discarded : [];
+  const groups = discardedReasonSummary(discarded);
+  return {
+    requested: verification.requested || result.requestedCount || tracks.length,
+    generated: verification.generated || tracks.length + alternates.length + discarded.length,
+    kept: verification.kept ?? tracks.length,
+    alternates: alternates.length,
+    discarded: verification.discarded ?? discarded.length,
+    retainedPool: tracks.length + alternates.length,
+    candidatePoolTarget: verification.candidatePoolTarget || 0,
+    usefulCandidateTarget: verification.usefulCandidateTarget || 0,
+    budgetExhausted: Boolean(verification.budgetExhausted),
+    scoreFiltered: verification.scoreFiltered || 0,
+    previousHeldBack: verification.previouslySuggestedHeldBack || 0,
+    rescueAvailable: verification.belowMinimumRescueAvailable || 0,
+    rescueKept: verification.belowMinimumRescueKept || 0,
+    queryYield: {
+      attempted: verification.queryYield?.attempted || 0,
+      returned: verification.queryYield?.returned || 0,
+      accepted: verification.queryYield?.accepted || 0,
+      rejected: verification.queryYield?.rejected || 0,
+      sludge: Number(verification.queryYield?.seoRejects || 0) + Number(verification.queryYield?.genreRejects || 0),
+      errors: verification.queryYield?.errorCount || 0,
+      pruned: verification.queryYield?.prunedCount || 0,
+      laneBudgetStops: Array.isArray(verification.queryYield?.laneBudgetStops)
+        ? verification.queryYield.laneBudgetStops.length
+        : 0
+    },
+    lanes: {
+      selected: verification.laneQuotas?.selected || {},
+      available: verification.laneQuotas?.available || {},
+      targets: verification.laneQuotas?.targets || {}
+    },
+    buckets: groups.map(([label, count]) => ({
+      label,
+      count,
+      examples: discarded
+        .filter((item) => rejectionBucketFor(item) === label)
+        .slice(0, 3)
+        .map((item) => ({
+          label: [item.artist, item.title].filter(Boolean).join(" - ") || item.query || "Unknown candidate",
+          reason: item.reason || "No reason provided"
+        }))
+    })),
+    notes: [
+      verification.budgetExhausted ? "Runtime budget was exhausted before every crawl/search path could finish." : "",
+      verification.previouslySuggestedHeldBack ? `${verification.previouslySuggestedHeldBack} previously suggested candidate${verification.previouslySuggestedHeldBack === 1 ? "" : "s"} held back for novelty.` : "",
+      verification.belowMinimumRescueAvailable ? `${verification.belowMinimumRescueAvailable} below-floor candidate${verification.belowMinimumRescueAvailable === 1 ? "" : "s"} eligible as branch-out fallback.` : ""
+    ].filter(Boolean)
+  };
+}
+
+function poolDiagnosticsFor(result = {}) {
+  const diagnostics = result.verification?.poolDiagnostics;
+  if (diagnostics && typeof diagnostics === "object") {
+    return {
+      ...fallbackPoolDiagnosticsFor(result),
+      ...diagnostics,
+      queryYield: {
+        ...fallbackPoolDiagnosticsFor(result).queryYield,
+        ...(diagnostics.queryYield || {})
+      },
+      lanes: {
+        ...fallbackPoolDiagnosticsFor(result).lanes,
+        ...(diagnostics.lanes || {})
+      },
+      buckets: Array.isArray(diagnostics.buckets) ? diagnostics.buckets : fallbackPoolDiagnosticsFor(result).buckets,
+      notes: Array.isArray(diagnostics.notes) ? diagnostics.notes : fallbackPoolDiagnosticsFor(result).notes
+    };
+  }
+  return fallbackPoolDiagnosticsFor(result);
+}
+
+function poolBucketRowsHtml(buckets = []) {
+  if (!buckets.length) return `<p class="sourceReportEmpty">No discarded candidates</p>`;
+  return buckets.slice(0, 6).map((bucket) => {
+    const examples = Array.isArray(bucket.examples) ? bucket.examples : [];
+    const firstExample = examples[0];
+    return `
+      <li>
+        <div>
+          <strong>${escapeHtml(bucket.label || "Other discarded")}</strong>
+          <b>${escapeHtml(bucket.count || 0)}</b>
+        </div>
+        ${firstExample ? `<span>${escapeHtml(firstExample.label || "Example")} - ${escapeHtml(firstExample.reason || "")}</span>` : ""}
+      </li>
+    `;
+  }).join("");
+}
+
+function poolLaneRowsHtml(lanes = {}) {
+  const selected = lanes.selected || {};
+  const available = lanes.available || {};
+  const targets = lanes.targets || {};
+  const names = Array.from(new Set([...Object.keys(targets), ...Object.keys(available), ...Object.keys(selected)]))
+    .filter((name) => Number(targets[name] || available[name] || selected[name] || 0) > 0);
+  if (!names.length) return `<p class="sourceReportEmpty">No lane quota data</p>`;
+  return names.slice(0, 8).map((name) => `
+    <p>
+      <span>${escapeHtml(name)}</span>
+      <b>${escapeHtml(`${selected[name] || 0}/${available[name] || 0} kept${targets[name] ? `, target ${targets[name]}` : ""}`)}</b>
+    </p>
+  `).join("");
+}
+
+function poolDiagnosticsHtml(result = {}) {
+  const diagnostics = poolDiagnosticsFor(result);
+  const query = diagnostics.queryYield || {};
+  const summary = `${diagnostics.kept || 0}/${diagnostics.requested || 0} kept, ${diagnostics.discarded || 0} rejected`;
+  const metrics = [
+    ["Generated", diagnostics.generated || 0],
+    ["Retained pool", diagnostics.retainedPool || 0],
+    ["Alternates", diagnostics.alternates || 0],
+    ["Target pool", diagnostics.usefulCandidateTarget || diagnostics.candidatePoolTarget || "n/a"],
+    ["Below-floor considered", diagnostics.scoreFiltered || 0],
+    ["Previous held", diagnostics.previousHeldBack || 0],
+    ["Rescue kept", diagnostics.rescueKept || 0],
+    ["Query sludge", query.sludge || 0],
+    ["Queries skipped", query.pruned || 0]
+  ];
+  const queryLine = [
+    query.attempted ? `${query.attempted} searches` : "",
+    query.returned ? `${query.returned} returned` : "",
+    query.accepted ? `${query.accepted} accepted` : "0 accepted by query-yield",
+    query.pruned ? `${query.pruned} skipped` : "",
+    query.errors ? `${query.errors} errors` : ""
+  ].filter(Boolean).join(", ");
+  return `
+    <div class="poolDiagnosticsCard">
+      <div class="intentDebugHead">
+        <span>Pool Diagnostics</span>
+        <strong>${escapeHtml(summary)}</strong>
+      </div>
+      <div class="sourceReportMetrics poolMetrics">
+        ${metrics.map(([label, value]) => `
+          <p>
+            <span>${escapeHtml(label)}</span>
+            <b>${escapeHtml(value)}</b>
+          </p>
+        `).join("")}
+      </div>
+      <div class="poolDiagnosticsGrid">
+        <section>
+          <h3>Top losses</h3>
+          <ol>${poolBucketRowsHtml(diagnostics.buckets || [])}</ol>
+        </section>
+        <section>
+          <h3>Lane availability</h3>
+          <div class="sourceReportGrid">${poolLaneRowsHtml(diagnostics.lanes || {})}</div>
+        </section>
+      </div>
+      <div class="sourceReportNotes poolNotes">
+        <p><span>Budget</span><b>${diagnostics.budgetExhausted ? "runtime exhausted" : "completed within budget"}</b></p>
+        <p><span>Query yield</span><b>${escapeHtml(queryLine || "no search query data")}</b></p>
+        ${(diagnostics.notes || []).slice(0, 4).map((note) => `<p><span>Note</span><b>${escapeHtml(note)}</b></p>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function showPoolDiagnostics(result = null) {
+  const panel = $("#poolDiagnostics");
+  if (!panel) return;
+  if (!result) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  panel.hidden = false;
+  panel.innerHTML = poolDiagnosticsHtml(result);
 }
 
 function sourceReportGridHtml(items = [], emptyText = "none") {
@@ -1583,7 +2023,8 @@ function queryYieldHtml(queryYield = {}) {
   const hasDetails = Boolean(
     (queryYield.best || []).length ||
     (queryYield.worst || []).length ||
-    (queryYield.adjustments || []).length
+    (queryYield.adjustments || []).length ||
+    (queryYield.pruned || []).length
   );
   if (!hasDetails) return "";
   return `
@@ -1604,6 +2045,10 @@ function queryYieldHtml(queryYield = {}) {
         <section>
           <h3>Memory adjustments</h3>
           <ol>${queryYieldRowsHtml(queryYield.adjustments || [], "No prior query memory used")}</ol>
+        </section>
+        <section>
+          <h3>Skipped before crawl</h3>
+          <ol>${queryYieldRowsHtml(queryYield.pruned || [], "No query families skipped")}</ol>
         </section>
       </div>
     </details>
@@ -1644,7 +2089,7 @@ function sourceReportHtml(result = {}) {
     ? `${report.lastfm.returned || 0} scrobbles, ${report.lastfm.topArtistsReturned || 0} top artists${report.lastfm.topArtistPeriod ? ` (${report.lastfm.topArtistPeriod})` : ""}${report.lastfm.topArtistsError ? `; top artists: ${report.lastfm.topArtistsError}` : ""}`
     : (report.lastfm.error || report.lastfm.reason || "not checked");
   const queryYieldSummary = report.queryYield.recordCount
-    ? `${report.queryYield.attempted || 0} queries, ${report.queryYield.accepted || 0} accepted, ${Number(report.queryYield.seoRejects || 0) + Number(report.queryYield.genreRejects || 0)} sludge`
+    ? `${report.queryYield.attempted || 0} queries, ${report.queryYield.accepted || 0} accepted, ${Number(report.queryYield.seoRejects || 0) + Number(report.queryYield.genreRejects || 0)} sludge, ${report.queryYield.prunedCount || 0} skipped`
     : (report.queryYield.enabled ? "no search queries recorded" : "run-only until server tracker records data");
 
   return `
@@ -1862,16 +2307,22 @@ function trackCardHtml(track, index) {
   const label = track.label || track.tidal?.label || "";
   const saved = isSavedCandidate(track);
   const tidalUrl = safeHttpUrl(track.tidal?.tidalUrl);
+  const resultIndex = Number.isFinite(Number(track._resultIndex)) ? Number(track._resultIndex) : index;
+  const payload = trackPayload(track);
   const meta = [
     track.artist,
     track.releaseDate || track.tidal?.releaseDate || track.year || "",
     track.durationMs ? formatDuration(track.durationMs) : ""
   ].filter(Boolean).join(" - ");
   return `
-    <div class="track" id="track-${index}" data-track-index="${index}">
+    <div class="track" id="track-${resultIndex}" data-track-index="${resultIndex}">
       <div class="trackMain">
         <strong class="trackTitle">${index + 1}. ${escapeHtml(track.title)}</strong>
         <span class="trackMeta">${escapeHtml(meta)}</span>
+        <div class="trackBadges">
+          ${artistConfirmationBadgeHtml(track)}
+          ${track.roon?.queueActionPresumed ? "<span class=\"artistCreditBadge queue\">Queue presumed</span>" : ""}
+        </div>
         <p class="trackLabel">${label ? escapeHtml(label) : "Label unavailable"}</p>
         ${matchSplitHtml(track)}
         ${scoreBreakdownHtml(track)}
@@ -1880,6 +2331,7 @@ function trackCardHtml(track, index) {
         ${statusChecksHtml(track)}
         ${track.tidal ? `<p class="muted">TIDAL: ${tidalUrl ? `<a href="${escapeHtml(tidalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(track.tidal.title || track.title)}</a>` : escapeHtml(track.tidal.title || track.title)}${track.tidal.artist ? ` - ${escapeHtml(track.tidal.artist)}` : ""}</p>` : ""}
         ${track.roon?.match ? `<p class="muted">Roon: ${escapeHtml(track.roon.match.title)}${track.roon.match.subtitle ? ` - ${escapeHtml(track.roon.match.subtitle)}` : ""}</p>` : ""}
+        ${resultDiagnosticsHtml(track, index)}
         <div class="feedbackButtons" aria-label="Track feedback">${feedbackButtonsHtml(track, index)}</div>
       </div>
       <div class="trackActions">
@@ -1888,10 +2340,10 @@ function trackCardHtml(track, index) {
           <select data-save-list aria-label="Candidate list">
             ${savedListOptionsHtml()}
           </select>
-          <button data-save-track='${escapeHtml(JSON.stringify(track))}' ${saved ? "disabled" : ""}>${saved ? "Saved" : "Add"}</button>
+          <button data-save-track='${escapeHtml(JSON.stringify(payload))}' ${saved ? "disabled" : ""}>${saved ? "Saved" : "Add"}</button>
         </div>
-        <button data-queue-next='${escapeHtml(JSON.stringify(track))}'>Add Next</button>
-        <button data-track='${escapeHtml(JSON.stringify(track))}'>Play Roon</button>
+        <button data-queue-next='${escapeHtml(JSON.stringify(payload))}'>Add Next</button>
+        <button data-track='${escapeHtml(JSON.stringify(payload))}'>Play Roon</button>
       </div>
     </div>
   `;
@@ -1903,14 +2355,23 @@ function renderResults(result = {}) {
     tracks: applyFeedbackToTracks(result.tracks || [])
   };
   state.lastTracks = state.lastResult.tracks || [];
-  $("#queueAll").disabled = !state.lastTracks.length;
-  $("#queueAllNext").disabled = !state.lastTracks.length;
-  $("#copyList").disabled = !state.lastTracks.length;
-  $("#exportCsv").disabled = !state.lastTracks.length;
+  state.displayedTracks = displayedResultTracks(state.lastTracks);
+  const filterToggle = $("#artistConfirmedOnly");
+  const exactConfirmedCount = state.lastTracks.filter(artistCreditConfirmed).length;
+  if (filterToggle) {
+    filterToggle.checked = state.resultArtistConfirmedOnly;
+    filterToggle.disabled = !state.lastTracks.length;
+    filterToggle.title = `Audit only: ${exactConfirmedCount}/${state.lastTracks.length} exact artist-confirmed results`;
+  }
+  $("#queueAll").disabled = !state.displayedTracks.length;
+  $("#queueAllNext").disabled = !state.displayedTracks.length;
+  $("#sendTidalQueue").disabled = !state.displayedTracks.length;
+  $("#copyList").disabled = !state.displayedTracks.length;
+  $("#exportCsv").disabled = !state.displayedTracks.length;
   updateRejectedDebug();
 
   const discarded = state.lastResult.verification?.discarded || 0;
-  const generated = state.lastResult.verification?.generated || state.lastTracks.length;
+  const generated = state.lastResult.verification?.generated || state.displayedTracks.length;
   const verifierLabel = state.lastResult.verification?.tidal ? "TIDAL" : "Roon";
   const queueableLabel = state.lastResult.verification?.roonQueueable ? "Roon-queueable" : "verified";
   const strictRoon = Boolean(state.lastResult.verification?.roonQueueable || state.lastResult.verification?.roonStrict);
@@ -1919,8 +2380,8 @@ function renderResults(result = {}) {
   const filteredByScore = Number(state.lastResult.verification?.scoreFiltered || 0);
   const belowMinimumKept = Number(state.lastResult.verification?.belowMinimumKept || 0);
   const aboveMinimumKept = minScore
-    ? Number(state.lastResult.verification?.aboveMinimumKept ?? Math.max(0, state.lastTracks.length - belowMinimumKept))
-    : state.lastTracks.length;
+    ? Number(state.lastResult.verification?.aboveMinimumKept ?? Math.max(0, state.displayedTracks.length - belowMinimumKept))
+    : state.displayedTracks.length;
   const emptyReason = state.lastResult.verification?.discoveryError
     ? `Generation ran, but discovery did not finish cleanly. ${state.lastResult.verification.discoveryError}`
     : state.lastResult.verification?.roonVerificationError
@@ -1935,24 +2396,40 @@ function renderResults(result = {}) {
         ? `No queueable tracks were close enough to the request. Lower the Minimum match picker or broaden the seed/year range.`
         : `No tracks survived ${verifierLabel} catalogue filters. Try a broader year range or seed around a known artist/label.`;
 
+  const titleCount = state.resultArtistConfirmedOnly
+    ? `${state.displayedTracks.length} exact-artist shown from ${state.lastTracks.length}`
+    : `${state.displayedTracks.length}`;
   const titlePrefix = minScore && belowMinimumKept
-    ? `${state.lastTracks.length} ${queueableLabel} tracks`
-    : (minScore ? `${state.lastTracks.length} ${minimumScoreLabel(minScore)} ${queueableLabel} tracks` : `${state.lastTracks.length} ${queueableLabel} tracks`);
+    ? `${titleCount} ${queueableLabel} tracks`
+    : (minScore ? `${titleCount} ${minimumScoreLabel(minScore)} ${queueableLabel} tracks` : `${titleCount} ${queueableLabel} tracks`);
   const filterSuffix = minScore && belowMinimumKept
     ? `, ${aboveMinimumKept} ${minimumLabel}, ${belowMinimumKept} below minimum kept`
     : (filteredByScore ? `, ${filteredByScore} below minimum considered` : "");
   $("#resultTitle").textContent = discarded
     ? `${titlePrefix} (${discarded} discarded from ${generated}${filterSuffix})`
     : titlePrefix;
-  $("#tracks").innerHTML = state.lastTracks.length
-    ? state.lastTracks.map(trackCardHtml).join("")
-    : emptyResultHtml(emptyReason, state.lastResult.verification || {});
+  showPoolDiagnostics(state.lastResult);
+  $("#tracks").innerHTML = state.displayedTracks.length
+    ? state.displayedTracks.map(trackCardHtml).join("")
+    : (state.lastTracks.length && state.resultArtistConfirmedOnly
+      ? emptyResultHtml("No exact artist-confirmed tracks are visible with the current filter. Turn off Exact artists to inspect broader Roon matches.", state.lastResult.verification || {})
+      : emptyResultHtml(emptyReason, state.lastResult.verification || {}));
   showQueueReport(null);
   showIntentDebug(state.lastResult.verification?.intent || null);
   showSourceReport(state.lastResult);
   updateRejectedDebug();
   cleanRenderedArtifacts($("#tracks"));
   updateNowDiscoveryTools(activeZone());
+}
+
+function isLegacyUnverifiedResult(result = {}) {
+  if (!result) return false;
+  const verification = result.verification || {};
+  const tracks = Array.isArray(result.tracks) ? result.tracks : [];
+  if (!tracks.length) return false;
+  if (verification.roonQueueable || verification.roonStrict) return false;
+  if (verification.discoveryError || verification.roonVerificationError || verification.strategy) return false;
+  return true;
 }
 
 function applySession(session = {}) {
@@ -1973,16 +2450,21 @@ function applySession(session = {}) {
     const value = options[field];
     element.value = typeof value === "object" || value === undefined || value === null ? "" : value;
   }
+  setScoringMode(options.scoringMode || "");
 
-  if (session.result?.verification?.roonQueueable) {
+  if (session.result && !isLegacyUnverifiedResult(session.result)) {
     renderResults(session.result);
   } else if (session.result) {
     state.lastResult = null;
     state.lastTracks = [];
+    state.displayedTracks = [];
     $("#queueAll").disabled = true;
+    $("#queueAllNext").disabled = true;
+    $("#sendTidalQueue").disabled = true;
     $("#copyList").disabled = true;
     $("#exportCsv").disabled = true;
     $("#resultTitle").textContent = "Previous results need Roon verification";
+    showPoolDiagnostics(null);
     $("#tracks").innerHTML = "<p class=\"muted\">Generate again to rebuild this list with strict TIDAL plus Roon verification. Old TIDAL-only session results are hidden so they do not look playable.</p>";
     showQueueReport(null);
     showIntentDebug(null);
@@ -2263,6 +2745,202 @@ async function queueTrackList(tracks, button, options = {}) {
   }
 }
 
+async function sendTracksToTidalPlaylist(tracks, button, options = {}) {
+  if (!tracks.length) return alert("There are no tracks to send to TIDAL.");
+  const originalText = button.textContent;
+  const title = options.title || "";
+  button.disabled = true;
+  button.textContent = "Sending...";
+  $("#busy").textContent = `Creating TIDAL playlist from ${tracks.length} track${tracks.length === 1 ? "" : "s"}...`;
+
+  try {
+    const result = await api("/api/tidal/queue-playlist", {
+      tracks,
+      title,
+      description: options.description || "Temporary Rabbit Hole queue. Created by Rabbit Hole so TIDAL/Roon can sync the exact TIDAL tracks."
+    });
+    button.textContent = "Sent to TIDAL";
+    $("#busy").textContent = `TIDAL playlist ready: ${result.addedCount || 0} track${Number(result.addedCount || 0) === 1 ? "" : "s"}`;
+    showTidalPlaylistReport(result);
+    if (state.tidalMixes) state.tidalMixesNeedsRefresh = true;
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.disabled = !tracks.length;
+      $("#busy").textContent = "";
+    }, 2600);
+  } catch (error) {
+    button.textContent = "Failed";
+    $("#busy").textContent = "";
+    alert(error.message);
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.disabled = !tracks.length;
+    }, 1600);
+  }
+}
+
+function tidalMixTrackLimit(mix = {}) {
+  const itemCount = Number(mix.itemCount || 0);
+  if (Number.isFinite(itemCount) && itemCount > 0) {
+    return Math.max(1, Math.min(50, Math.floor(itemCount)));
+  }
+  return 20;
+}
+
+function queuedTrackFromItem(item = {}) {
+  const subtitleParts = String(item.subtitle || "").split(/\s+-\s+/).map((part) => part.trim()).filter(Boolean);
+  return {
+    title: item.title || "",
+    artist: subtitleParts[0] || item.subtitle || "",
+    album: item.album || subtitleParts.slice(1).join(" - ") || "",
+    durationMs: item.length ? Number(item.length) * 1000 : null
+  };
+}
+
+function tidalRadioTrackKey(track = {}) {
+  const tidalId = String(track.tidal?.id || track.tidalId || track.id || "").trim();
+  if (tidalId) return `tidal:${tidalId.toLowerCase()}`;
+  const title = normalizeMatchText(track.title || track.tidal?.title || "");
+  const artist = normalizeMatchText(track.artist || track.tidal?.artist || "");
+  return title && artist ? `${artist}::${title}` : "";
+}
+
+function tidalRadioMemoryKey(mix = {}) {
+  return String(mix.pinnedKey || mix.id || mix.title || "artist-radio").trim();
+}
+
+function readTidalRadioRecent() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TIDAL_RADIO_RECENT_KEY) || "{}");
+    const now = Date.now();
+    const next = {};
+    for (const [key, tracks] of Object.entries(parsed || {})) {
+      const fresh = Array.isArray(tracks)
+        ? tracks.filter((track) => now - Number(track.addedAt || 0) < TIDAL_RADIO_RECENT_TTL_MS)
+        : [];
+      if (fresh.length) next[key] = fresh.slice(0, TIDAL_RADIO_RECENT_MAX);
+    }
+    if (JSON.stringify(parsed) !== JSON.stringify(next)) {
+      localStorage.setItem(TIDAL_RADIO_RECENT_KEY, JSON.stringify(next));
+    }
+    return next;
+  } catch {
+    return {};
+  }
+}
+
+function writeTidalRadioRecent(data = {}) {
+  try {
+    localStorage.setItem(TIDAL_RADIO_RECENT_KEY, JSON.stringify(data));
+  } catch {
+    // Browser storage can be unavailable in private modes; queueing should still work.
+  }
+}
+
+function tidalRadioRecentTracksForMix(mix = {}) {
+  const key = tidalRadioMemoryKey(mix);
+  if (!key) return [];
+  return readTidalRadioRecent()[key] || [];
+}
+
+function rememberTidalRadioTracks(mix = {}, tracks = []) {
+  const key = tidalRadioMemoryKey(mix);
+  if (!key || !Array.isArray(tracks) || !tracks.length) return;
+  const now = Date.now();
+  const recent = readTidalRadioRecent();
+  const existing = recent[key] || [];
+  const byKey = new Map(existing.map((track) => [tidalRadioTrackKey(track), track]).filter(([trackKey]) => trackKey));
+  for (const track of tracks) {
+    const memoryKey = tidalRadioTrackKey(track);
+    if (!memoryKey) continue;
+    byKey.set(memoryKey, {
+      title: track.title || track.tidal?.title || "",
+      artist: track.artist || track.tidal?.artist || "",
+      album: track.album || track.tidal?.album || "",
+      tidalId: track.tidal?.id || track.tidalId || track.id || "",
+      tidalUrl: track.tidalUrl || track.tidal?.tidalUrl || "",
+      addedAt: now
+    });
+  }
+  recent[key] = Array.from(byKey.values())
+    .sort((left, right) => Number(right.addedAt || 0) - Number(left.addedAt || 0))
+    .slice(0, TIDAL_RADIO_RECENT_MAX);
+  writeTidalRadioRecent(recent);
+}
+
+function freshArtistRadioArtistId(mix = {}) {
+  if (!mix?.pinned) return "";
+  if (mix.pinnedKind === "artist-radio" && mix.artistRadio?.artistId) return String(mix.artistRadio.artistId);
+  const match = String(mix.pinnedKey || "").match(/^artist-radio:(.+)$/i);
+  return match?.[1] || "";
+}
+
+function isPinnedArtistRadioMix(mix = {}) {
+  if (!mix?.pinned) return false;
+  const text = `${mix.category || ""} ${mix.subtitle || ""} ${mix.pinnedKind || ""}`;
+  return /artist\s+radio/i.test(text);
+}
+
+function tidalArtistRadioExcludeTracks(zone = activeZone(), mix = {}) {
+  return [
+    nowPlayingTrack(zone),
+    ...displayQueueItems(zone).map(queuedTrackFromItem),
+    ...tidalRadioRecentTracksForMix(mix)
+  ].filter((track) => track?.title && track?.artist);
+}
+
+async function queueTidalMix(mix, button, options = {}) {
+  const zone = activeZone();
+  if (!zone) return alert("Select a Roon zone first.");
+  if (!mix?.id) return alert("This TIDAL mix is missing an id.");
+
+  const limit = tidalMixTrackLimit(mix);
+  const artistRadioId = freshArtistRadioArtistId(mix);
+  const freshArtistRadio = Boolean(artistRadioId);
+  const artistRadioLike = freshArtistRadio || isPinnedArtistRadioMix(mix);
+  const excludeTracks = artistRadioLike ? tidalArtistRadioExcludeTracks(zone, mix) : [];
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Loading...";
+  $("#busy").textContent = artistRadioLike
+    ? `Loading ${mix.title || "Artist Radio"} and skipping current queue repeats...`
+    : `Loading ${limit} track${limit === 1 ? "" : "s"} from ${mix.title || "TIDAL mix"}...`;
+
+  try {
+    const result = await api("/api/tidal/mix-tracks", {
+      mixId: mix.id,
+      limit,
+      freshArtistRadio,
+      artistRadioArtistId: artistRadioId,
+      excludeTracks
+    });
+    const tracks = Array.isArray(result.tracks) ? result.tracks : [];
+    if (!tracks.length) {
+      const excluded = Number(result.excludedCount || 0);
+      throw new Error(excluded
+        ? `TIDAL returned ${excluded} Artist Radio track${excluded === 1 ? "" : "s"}, but they are already in the current queue. Try this radio again later.`
+        : "TIDAL returned this mix, but no playable tracks were found.");
+    }
+    button.textContent = originalText;
+    button.disabled = false;
+    const skipped = Number(result.excludedCount || 0);
+    $("#busy").textContent = `${options.mode === "replace" ? "Playing" : "Queueing"} ${tracks.length} track${tracks.length === 1 ? "" : "s"} from ${result.mix?.title || mix.title || "TIDAL mix"}${skipped ? `, skipped ${skipped} already in queue` : ""}...`;
+    await queueTrackList(tracks, button, {
+      targetCount: tracks.length,
+      mode: options.mode || "append"
+    });
+    if (artistRadioLike) rememberTidalRadioTracks(mix, tracks);
+  } catch (error) {
+    button.textContent = "Failed";
+    $("#busy").textContent = "";
+    alert(error.message);
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.disabled = false;
+    }, 1800);
+  }
+}
+
 async function playTrackInRoon(track, button) {
   const zone = activeZone();
   if (!zone) return alert("Select a Roon zone first.");
@@ -2298,6 +2976,183 @@ async function refreshPlaylists() {
     $("#playlistStatus").textContent = state.playlists.length ? `${state.playlists.length} Roon playlists available` : "No Roon playlists found";
   } catch (error) {
     $("#playlistStatus").textContent = error.message;
+  }
+}
+
+function tidalMixCardHtml(mix = {}, index = 0) {
+  const imageUrl = safeHttpUrl(mix.imageUrl);
+  const externalUrl = safeHttpUrl(mix.url);
+  const prompt = `find discoveries inspired by my TIDAL ${mix.category || "mix"} ${mix.title || ""}`.trim();
+  const itemLabel = Number(mix.itemCount || 0) ? `${Number(mix.itemCount)} tracks` : "";
+  const pinnedKey = mix.pinnedKey || "";
+  return `
+    <article class="tidalMixCard">
+      <div class="tidalMixArt">
+        ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="">` : `<span>${escapeHtml(String(index + 1).padStart(2, "0"))}</span>`}
+      </div>
+      <div class="tidalMixBody">
+        <div class="tidalMixTypeRow">
+          <span class="tidalMixType">${escapeHtml(mix.category || "Mix")}</span>
+          ${mix.pinned ? "<span class=\"tidalPinnedBadge\">Pinned</span>" : ""}
+        </div>
+        <h3>${escapeHtml(mix.title || "Untitled mix")}</h3>
+        ${mix.subtitle ? `<p>${escapeHtml(mix.subtitle)}</p>` : ""}
+        ${mix.rawType || itemLabel ? `<small>${escapeHtml([mix.rawType, itemLabel].filter(Boolean).join(" - "))}</small>` : ""}
+      </div>
+      <div class="tidalMixActions">
+        <button type="button" data-tidal-mix-play="${index}">Play Roon</button>
+        <button type="button" data-tidal-mix-next="${index}">Add Next</button>
+        <button type="button" data-tidal-mix-queue="${index}">Queue</button>
+        <button type="button" data-tidal-mix-prompt="${escapeHtml(prompt)}">Use as prompt</button>
+        ${externalUrl ? `<a class="buttonLink" href="${escapeHtml(externalUrl)}" target="_blank" rel="noreferrer">Open TIDAL</a>` : ""}
+        ${mix.pinned && pinnedKey ? `<button type="button" data-tidal-pinned-remove="${escapeHtml(pinnedKey)}">Remove pin</button>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderTidalMixes(result = state.tidalMixes) {
+  const status = $("#tidalMixStatus");
+  const grid = $("#tidalMixesGrid");
+  const pinnedStatus = $("#tidalPinnedStatus");
+  if (!status || !grid) return;
+  const mixes = Array.isArray(result?.mixes) ? result.mixes : [];
+  const pinnedMixes = Array.isArray(result?.pinnedMixes) ? result.pinnedMixes : [];
+  const pinnedErrors = Array.isArray(result?.pinnedErrors) ? result.pinnedErrors : [];
+  const pinnedItems = Array.isArray(result?.pinnedItems) ? result.pinnedItems : [];
+  state.tidalVisibleMixes = [...pinnedMixes, ...mixes];
+
+  if (!result) {
+    status.textContent = "TIDAL profile mixes have not been loaded yet.";
+    if (pinnedStatus) pinnedStatus.textContent = "";
+    grid.innerHTML = "";
+    return;
+  }
+
+  const fetchedAt = result.fetchedAt ? ` Updated ${formatDateTime(Date.parse(result.fetchedAt))}.` : "";
+  if (result.error && !mixes.length && !pinnedMixes.length) {
+    status.textContent = `${result.error}${fetchedAt}`;
+    if (pinnedStatus) pinnedStatus.textContent = pinnedItems.length ? `${pinnedItems.length} pinned item${pinnedItems.length === 1 ? "" : "s"} could not be refreshed.` : "";
+    grid.innerHTML = `
+      <div class="panel tidalMixEmpty">
+        <strong>No TIDAL profile mixes loaded.</strong>
+        <p>Use Connect TIDAL to authorize Rabbit Hole and save a refreshable profile token locally. Catalog search credentials cannot read personal mixes.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const fullShelfNote = result.fullShelfAvailable === false && result.missingLegacyScope
+    ? (result.artistRadioFallbackAvailable
+      ? ` Added ${Number(result.artistRadioFallbackCount || 0)} Artist Radio fallback${Number(result.artistRadioFallbackCount || 0) === 1 ? "" : "s"}.`
+      : " Full Mixes & Radio needs a TIDAL legacy scope; showing only official TIDAL profile mixes.")
+    : (result.fullShelfAvailable ? " Full Mixes & Radio shelf loaded." : "");
+  const total = mixes.length + pinnedMixes.length;
+  const pinnedNote = pinnedMixes.length
+    ? ` ${pinnedMixes.length} pinned TIDAL item${pinnedMixes.length === 1 ? "" : "s"}.`
+    : "";
+  status.textContent = total
+    ? `${total} mix/radio item${total === 1 ? "" : "s"} found.${pinnedNote}${fullShelfNote}${fetchedAt}`
+    : `${result.warning || "TIDAL responded, but no personal mixes were found."}${fetchedAt}`;
+  if (pinnedStatus) {
+    pinnedStatus.textContent = pinnedErrors.length
+      ? `${pinnedErrors.length} pinned item${pinnedErrors.length === 1 ? "" : "s"} could not be refreshed.`
+      : (pinnedItems.length ? `${pinnedItems.length} pinned item${pinnedItems.length === 1 ? "" : "s"} saved locally.` : "");
+  }
+
+  const pinnedErrorHtml = pinnedErrors.length ? `
+    <div class="panel tidalMixEmpty">
+      <strong>Pinned import warning</strong>
+      <p>${escapeHtml(pinnedErrors.map((entry) => entry.error).filter(Boolean).join(" - "))}</p>
+    </div>
+  ` : "";
+  const pinnedHtml = pinnedMixes.length ? `
+    <section class="tidalMixSection">
+      <div class="tidalSectionTitle">
+        <h3>Pinned TIDAL</h3>
+        <span>${pinnedMixes.length} imported</span>
+      </div>
+      ${pinnedMixes.map((mix, index) => tidalMixCardHtml(mix, index)).join("")}
+    </section>
+  ` : "";
+  const officialHtml = mixes.length ? `
+    <section class="tidalMixSection">
+      <div class="tidalSectionTitle">
+        <h3>Official Profile Mixes</h3>
+        <span>${mixes.length} available</span>
+      </div>
+      ${mixes.map((mix, index) => tidalMixCardHtml(mix, index + pinnedMixes.length)).join("")}
+    </section>
+  ` : "";
+  grid.innerHTML = total || pinnedErrorHtml
+    ? [pinnedErrorHtml, pinnedHtml, officialHtml].filter(Boolean).join("")
+    : `
+      <div class="panel tidalMixEmpty">
+        <strong>No mix or radio cards found in the TIDAL response.</strong>
+        <p>The endpoint is reachable, but Rabbit Hole did not see My Mix, Daily Discovery, New Arrivals, Track Radio, or Artist Radio items.</p>
+      </div>
+    `;
+}
+
+async function importPinnedTidalMix(input, button) {
+  const status = $("#tidalPinnedStatus");
+  const originalText = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Importing...";
+  }
+  if (status) status.textContent = "Importing TIDAL item...";
+  try {
+    state.tidalMixes = await api("/api/tidal/pinned-mixes", { url: input });
+    state.tidalMixesNeedsRefresh = false;
+    renderTidalMixes(state.tidalMixes);
+    if (status) status.textContent = "Pinned TIDAL item saved.";
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText || "Import";
+    }
+  }
+}
+
+async function removePinnedTidalMix(key, button) {
+  const originalText = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Removing...";
+  }
+  try {
+    state.tidalMixes = await deleteJson("/api/tidal/pinned-mixes", { key });
+    renderTidalMixes(state.tidalMixes);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText || "Remove pin";
+    }
+  }
+}
+
+async function refreshTidalMixes({ force = false } = {}) {
+  const button = $("#refreshTidalMixes");
+  const status = $("#tidalMixStatus");
+  const originalText = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Refreshing...";
+  }
+  if (status) status.textContent = "Loading TIDAL profile mixes...";
+  try {
+    state.tidalMixes = await getJson(`/api/tidal/mixes${force ? "?refresh=1" : ""}`);
+    state.tidalMixesNeedsRefresh = false;
+    renderTidalMixes(state.tidalMixes);
+  } catch (error) {
+    state.tidalMixes = { mixes: [], error: error.message };
+    renderTidalMixes(state.tidalMixes);
+  } finally {
+    if (button) {
+      button.textContent = originalText || "Refresh mixes";
+      button.disabled = false;
+    }
   }
 }
 
@@ -2337,6 +3192,7 @@ function renderSaved() {
   $("#savedTitle").textContent = `${selectedList.name}: ${state.savedTracks.length} playlist candidate${state.savedTracks.length === 1 ? "" : "s"}`;
   $("#queueSaved").disabled = !state.savedTracks.length;
   $("#queueSavedNext").disabled = !state.savedTracks.length;
+  $("#sendSavedTidalQueue").disabled = !state.savedTracks.length;
   $("#copySaved").disabled = !state.savedTracks.length;
   $("#exportSaved").disabled = !state.savedTracks.length;
   const deleteListButton = $("#deleteSavedList");
@@ -2495,6 +3351,134 @@ function playerFullscreenElement() {
   return document.fullscreenElement || document.webkitFullscreenElement || null;
 }
 
+function drawScreenWakeFallbackFrame() {
+  const canvas = screenWakeFallback.canvas;
+  const context = canvas?.getContext("2d");
+  if (!canvas || !context) return;
+  screenWakeFallback.flip = !screenWakeFallback.flip;
+  context.fillStyle = screenWakeFallback.flip ? "#12031f" : "#160526";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = screenWakeFallback.flip ? "#c780ff" : "#65f4ff";
+  context.fillRect(0, 0, 1, 1);
+}
+
+function stopScreenWakeFallback() {
+  if (screenWakeFallback.timer) {
+    clearInterval(screenWakeFallback.timer);
+    screenWakeFallback.timer = null;
+  }
+  if (screenWakeFallback.video) {
+    try {
+      screenWakeFallback.video.pause();
+    } catch {
+      // Best effort cleanup; playback state is browser-owned.
+    }
+    screenWakeFallback.video.srcObject = null;
+    screenWakeFallback.video.remove();
+    screenWakeFallback.video = null;
+  }
+  if (screenWakeFallback.stream) {
+    screenWakeFallback.stream.getTracks().forEach((track) => track.stop());
+    screenWakeFallback.stream = null;
+  }
+  screenWakeFallback.canvas = null;
+}
+
+async function startScreenWakeFallback() {
+  if (screenWakeFallback.video && !screenWakeFallback.video.paused) return true;
+  if (!HTMLCanvasElement.prototype.captureStream) return false;
+
+  stopScreenWakeFallback();
+  const canvas = document.createElement("canvas");
+  canvas.width = 2;
+  canvas.height = 2;
+  screenWakeFallback.canvas = canvas;
+  drawScreenWakeFallbackFrame();
+
+  const stream = canvas.captureStream(1);
+  const video = document.createElement("video");
+  video.className = "screenWakeVideo";
+  video.muted = true;
+  video.loop = true;
+  video.playsInline = true;
+  video.setAttribute("playsinline", "");
+  video.setAttribute("aria-hidden", "true");
+  video.srcObject = stream;
+  document.body.append(video);
+
+  screenWakeFallback.stream = stream;
+  screenWakeFallback.video = video;
+  screenWakeFallback.timer = setInterval(drawScreenWakeFallbackFrame, 30_000);
+
+  try {
+    await video.play();
+    return true;
+  } catch {
+    stopScreenWakeFallback();
+    return false;
+  }
+}
+
+async function acquireScreenWakeLock() {
+  screenWakeLockDesired = true;
+  if (document.visibilityState && document.visibilityState !== "visible") return false;
+  if (screenWakeLock) return true;
+  if (screenWakeLockPending) return screenWakeLockPending;
+
+  screenWakeLockPending = (async () => {
+    try {
+      if (navigator.wakeLock?.request) {
+        const lock = await navigator.wakeLock.request("screen");
+        screenWakeLock = lock;
+        stopScreenWakeFallback();
+        lock.addEventListener("release", () => {
+          if (screenWakeLock === lock) screenWakeLock = null;
+          if (screenWakeLockDesired && document.visibilityState === "visible") {
+            setTimeout(() => {
+              acquireScreenWakeLock().catch(() => {});
+            }, 500);
+          }
+        });
+        return true;
+      }
+    } catch {
+      screenWakeLock = null;
+    }
+
+    return startScreenWakeFallback();
+  })();
+
+  try {
+    return await screenWakeLockPending;
+  } finally {
+    screenWakeLockPending = null;
+  }
+}
+
+async function releaseScreenWakeLock() {
+  screenWakeLockDesired = false;
+  stopScreenWakeFallback();
+  const lock = screenWakeLock;
+  screenWakeLock = null;
+  if (lock) {
+    try {
+      await lock.release();
+    } catch {
+      // Already released by the browser.
+    }
+  }
+}
+
+function syncScreenWakeLock() {
+  const player = document.querySelector(".player");
+  const full = player && playerFullscreenElement() === player;
+  if (full) {
+    acquireScreenWakeLock().catch(() => {});
+  } else {
+    releaseScreenWakeLock().catch(() => {});
+  }
+}
+
 function applyPlayerFullscreenState() {
   const player = document.querySelector(".player");
   const button = $("#togglePlayerFull");
@@ -2504,6 +3488,7 @@ function applyPlayerFullscreenState() {
   document.body.classList.toggle("playerFullWindow", full);
   button.textContent = full ? "Exit Full Window" : "Full Window";
   button.setAttribute("aria-pressed", String(full));
+  syncScreenWakeLock();
 }
 
 function setPlayerMaximized(value) {
@@ -2536,15 +3521,21 @@ async function setPlayerFullWindow(value) {
 }
 
 function setActiveView(view) {
-  const target = view === "history" ? "history" : "player";
+  const target = ["history", "tidal"].includes(view) ? view : "player";
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === target);
   });
   $("#playerView").classList.toggle("isActive", target === "player");
   $("#historyView").classList.toggle("isActive", target === "history");
+  $("#tidalView")?.classList.toggle("isActive", target === "tidal");
   if (target === "history" && state.historyNeedsRefresh) {
     refreshHistoryReport().catch((error) => {
       $("#tasteNarrative").textContent = error.message;
+    });
+  }
+  if (target === "tidal" && state.tidalMixesNeedsRefresh) {
+    refreshTidalMixes().catch((error) => {
+      $("#tidalMixStatus").textContent = error.message;
     });
   }
   updateJumpTopVisibility();
@@ -2664,6 +3655,11 @@ $("#togglePlayerFull").addEventListener("click", () => {
 
 document.addEventListener("fullscreenchange", applyPlayerFullscreenState);
 document.addEventListener("webkitfullscreenchange", applyPlayerFullscreenState);
+document.addEventListener("visibilitychange", syncScreenWakeLock);
+window.addEventListener("pageshow", syncScreenWakeLock);
+window.addEventListener("pagehide", () => {
+  releaseScreenWakeLock().catch(() => {});
+});
 
 $("#nowFeedback").addEventListener("click", async (event) => {
   const button = event.target.closest("[data-now-feedback]");
@@ -2705,10 +3701,73 @@ document.querySelectorAll("[data-view]").forEach((button) => {
   button.addEventListener("click", () => setActiveView(button.dataset.view));
 });
 
+document.querySelectorAll("[data-scoring-mode]").forEach((button) => {
+  button.addEventListener("click", () => {
+    setScoringMode(button.dataset.scoringMode || "");
+  });
+  button.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      event.preventDefault();
+      moveScoringModeSelection(button, 1);
+    }
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      event.preventDefault();
+      moveScoringModeSelection(button, -1);
+    }
+  });
+});
+setScoringMode($("#scoringMode")?.value || "");
+
 $("#refreshHistory").addEventListener("click", () => {
   refreshHistoryReport().catch((error) => {
     $("#tasteNarrative").textContent = error.message;
   });
+});
+
+$("#refreshTidalMixes")?.addEventListener("click", () => {
+  refreshTidalMixes({ force: true }).catch((error) => {
+    $("#tidalMixStatus").textContent = error.message;
+  });
+});
+
+$("#tidalPinnedForm")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const input = $("#tidalPinnedInput");
+  const value = input?.value?.trim() || "";
+  const button = event.submitter || event.currentTarget.querySelector("button[type='submit']");
+  importPinnedTidalMix(value, button).then(() => {
+    if (input) input.value = "";
+  }).catch((error) => {
+    $("#tidalPinnedStatus").textContent = error.message;
+  });
+});
+
+$("#tidalMixesGrid")?.addEventListener("click", (event) => {
+  const removeButton = event.target.closest("[data-tidal-pinned-remove]");
+  if (removeButton) {
+    removePinnedTidalMix(removeButton.dataset.tidalPinnedRemove, removeButton).catch((error) => alert(error.message));
+    return;
+  }
+
+  const actionButton = event.target.closest("[data-tidal-mix-play], [data-tidal-mix-next], [data-tidal-mix-queue]");
+  if (actionButton) {
+    const index = Number(actionButton.dataset.tidalMixPlay ?? actionButton.dataset.tidalMixNext ?? actionButton.dataset.tidalMixQueue);
+    const mix = state.tidalVisibleMixes?.[index];
+    if (!mix) return;
+    const mode = actionButton.dataset.tidalMixPlay !== undefined
+      ? "replace"
+      : (actionButton.dataset.tidalMixNext !== undefined ? "next" : "append");
+    queueTidalMix(mix, actionButton, { mode }).catch((error) => alert(error.message));
+    return;
+  }
+
+  const button = event.target.closest("[data-tidal-mix-prompt]");
+  if (!button) return;
+  const request = $("#request");
+  request.value = button.dataset.tidalMixPrompt || "";
+  setScoringMode("");
+  setActiveView("player");
+  request.focus();
 });
 
 $("#tastePrompt").addEventListener("click", () => {
@@ -2716,12 +3775,11 @@ $("#tastePrompt").addEventListener("click", () => {
   const genres = document.querySelector("[name='genres']");
   const mood = document.querySelector("[name='mood']");
   const count = document.querySelector("[name='count']");
-  const scoringMode = document.querySelector("[name='scoringMode']");
   request.value = "find tracks that match my current taste profile, but go deeper, less obvious, and avoid repeats";
   genres.value = "";
   mood.value = "";
   count.value = "";
-  if (scoringMode) scoringMode.value = "";
+  setScoringMode("");
   setActiveView("player");
   request.focus();
 });
@@ -2772,13 +3830,12 @@ document.querySelectorAll("[data-preset]").forEach((button) => {
     const genres = document.querySelector("[name='genres']");
     const mood = document.querySelector("[name='mood']");
     const count = document.querySelector("[name='count']");
-    const scoringMode = document.querySelector("[name='scoringMode']");
     const releasePreset = $("#releasePreset");
 
     if (button.dataset.preset === "now" && now?.title) {
       request.value = `find tracks like ${now.artist} - ${now.title}, but deeper and less obvious`;
       mood.value = "";
-      if (scoringMode) scoringMode.value = "";
+      setScoringMode("");
     }
 
     if (button.dataset.preset === "artist") {
@@ -2787,7 +3844,7 @@ document.querySelectorAll("[data-preset]").forEach((button) => {
         ? `find tracks like ${artist}, but deeper and less obvious`
         : "find music from an artist or scene I can explore";
       mood.value = "";
-      if (scoringMode) scoringMode.value = "";
+      setScoringMode("");
     }
 
     if (button.dataset.preset === "long") {
@@ -2796,7 +3853,7 @@ document.querySelectorAll("[data-preset]").forEach((button) => {
       mood.value = "";
       count.value = "";
       if (releasePreset) releasePreset.value = "";
-      if (scoringMode) scoringMode.value = "";
+      setScoringMode("");
     }
   });
 });
@@ -2875,28 +3932,34 @@ $("#playlistForm").addEventListener("submit", async (event) => {
   const zone = activeZone();
   body.zoneId = zone?.zone_id || "";
   body.nowPlaying = summarizeNowPlaying(zone);
-  body.requireRoonQueueable = "true";
+  body.requireRoonQueueable = "";
   const generateStartedAt = Date.now();
   if (submitButton) submitButton.disabled = true;
-  $("#busy").textContent = "Searching Roon + TIDAL...";
+  $("#busy").textContent = "Searching TIDAL + discovery sources...";
   $("#resultTitle").textContent = "Building rabbit hole...";
   $("#tracks").innerHTML = "";
+  state.resultArtistConfirmedOnly = false;
+  const artistConfirmedToggle = $("#artistConfirmedOnly");
+  if (artistConfirmedToggle) artistConfirmedToggle.checked = false;
   state.lastTracks = [];
+  state.displayedTracks = [];
   state.lastResult = null;
   state.rejectedDebugOpen = false;
   $("#queueAll").disabled = true;
   $("#queueAllNext").disabled = true;
+  $("#sendTidalQueue").disabled = true;
   $("#copyList").disabled = true;
   $("#exportCsv").disabled = true;
   updateRejectedDebug();
   showIntentDebug(null);
+  showPoolDiagnostics(null);
   showSourceReport(null);
   $("#rejectedDebug").hidden = true;
   $("#rejectedDebug").innerHTML = "";
   $("#tracks").innerHTML = `
     <div class="emptyState isWorking">
-      <strong>Searching Roon first, then TIDAL metadata.</strong>
-      <p>Matching to queueable Roon results can take a moment when the prompt is narrow.</p>
+      <strong>Building a TIDAL-first discovery pool.</strong>
+      <p>Rabbit Hole is scoring fresh candidates first; Send to TIDAL can bridge the final list into playback.</p>
     </div>
   `;
 
@@ -2916,6 +3979,7 @@ $("#playlistForm").addEventListener("submit", async (event) => {
     }
     $("#resultTitle").textContent = "Generation failed";
     $("#tracks").innerHTML = emptyResultHtml(error.message, {});
+    showPoolDiagnostics(null);
     showSourceReport(null);
     state.rejectedDebugOpen = false;
     updateRejectedDebug();
@@ -2926,7 +3990,7 @@ $("#playlistForm").addEventListener("submit", async (event) => {
 });
 
 $("#copyList").addEventListener("click", async () => {
-  await navigator.clipboard.writeText(plainList(state.lastTracks));
+  await navigator.clipboard.writeText(plainList(state.displayedTracks.map(trackPayload)));
   $("#copyList").textContent = "Copied";
   setTimeout(() => {
     $("#copyList").textContent = "Copy list";
@@ -2934,7 +3998,7 @@ $("#copyList").addEventListener("click", async () => {
 });
 
 $("#exportCsv").addEventListener("click", () => {
-  downloadCsv("roon-local-ai-discovery.csv", state.lastTracks);
+  downloadCsv("roon-local-ai-discovery.csv", state.displayedTracks.map(trackPayload));
 });
 
 $("#toggleRejected").addEventListener("click", () => {
@@ -2942,18 +4006,33 @@ $("#toggleRejected").addEventListener("click", () => {
   updateRejectedDebug();
 });
 
+$("#artistConfirmedOnly").addEventListener("change", (event) => {
+  state.resultArtistConfirmedOnly = Boolean(event.target.checked);
+  if (state.lastResult) renderResults(state.lastResult);
+});
+
 $("#queueAll").addEventListener("click", () => {
-  queueTrackList(state.lastTracks, $("#queueAll"), {
+  const tracks = state.displayedTracks.map(trackPayload);
+  queueTrackList(tracks, $("#queueAll"), {
     alternates: state.lastResult?.alternates || [],
-    targetCount: state.lastTracks.length
+    targetCount: tracks.length
   });
 });
 
 $("#queueAllNext").addEventListener("click", () => {
-  queueTrackList(state.lastTracks, $("#queueAllNext"), {
+  const tracks = state.displayedTracks.map(trackPayload);
+  queueTrackList(tracks, $("#queueAllNext"), {
     alternates: state.lastResult?.alternates || [],
-    targetCount: state.lastTracks.length,
+    targetCount: tracks.length,
     mode: "next"
+  });
+});
+
+$("#sendTidalQueue").addEventListener("click", () => {
+  const tracks = state.displayedTracks.map(trackPayload);
+  sendTracksToTidalPlaylist(tracks, $("#sendTidalQueue"), {
+    title: `Rabbit Hole Queue - ${new Date().toLocaleString()}`,
+    description: `Rabbit Hole generated queue with ${tracks.length} displayed track${tracks.length === 1 ? "" : "s"}.`
   });
 });
 
@@ -3060,6 +4139,14 @@ $("#queueSavedNext").addEventListener("click", () => {
   });
 });
 
+$("#sendSavedTidalQueue").addEventListener("click", () => {
+  const list = activeSavedList();
+  sendTracksToTidalPlaylist(state.savedTracks, $("#sendSavedTidalQueue"), {
+    title: `Rabbit Hole - ${list.name} - ${new Date().toLocaleString()}`,
+    description: `Rabbit Hole candidate list: ${list.name}.`
+  });
+});
+
 $("#purgeMemory").addEventListener("click", async (event) => {
   if (!confirm("Purge remembered discovery scores and track memory? Your Love/Good/OK/Wrong Genre/Skip/Never Again taste profile stays intact.")) return;
   const button = event.currentTarget;
@@ -3082,22 +4169,55 @@ $("#purgeMemory").addEventListener("click", async (event) => {
 });
 
 $("#tracks").addEventListener("click", async (event) => {
+  const rejectSimilarButton = event.target.closest("[data-reject-similar]");
+  if (rejectSimilarButton) {
+    const index = Number(rejectSimilarButton.dataset.rejectSimilar);
+    const track = state.displayedTracks[index];
+    if (!track) return;
+    const payload = trackPayload(track);
+
+    const diagnostics = resultDiagnosticsFor(track);
+    const reason = [
+      diagnostics.risks.length ? `Risk: ${diagnostics.risks.join(", ")}` : "",
+      diagnostics.kept.length ? `Kept because: ${diagnostics.kept.join(", ")}` : ""
+    ].filter(Boolean).join(" | ");
+    const originalText = rejectSimilarButton.textContent;
+    rejectSimilarButton.disabled = true;
+    rejectSimilarButton.textContent = "Saving...";
+    try {
+      const result = await api("/api/feedback", {
+        track: payload,
+        rating: "reject_similar",
+        reason: reason || "Rejected similar weak discovery result."
+      });
+      applyFeedbackResponse(result);
+      state.feedbackByKey[trackKeyFor(payload)] = "reject_similar";
+      updateResultTrackFeedback(payload, "reject_similar");
+      renderResults(state.lastResult || { tracks: state.lastTracks });
+    } catch (error) {
+      rejectSimilarButton.textContent = originalText;
+      rejectSimilarButton.disabled = false;
+      alert(error.message);
+    }
+    return;
+  }
+
   const feedbackButton = event.target.closest("[data-feedback]");
   if (feedbackButton) {
     const index = Number(feedbackButton.dataset.index);
-    const track = state.lastTracks[index];
+    const track = state.displayedTracks[index];
     if (!track) return;
+    const payload = trackPayload(track);
 
     const rating = normalizeFeedbackValue(feedbackButton.dataset.feedback);
     const originalText = feedbackButton.textContent;
     feedbackButton.disabled = true;
     feedbackButton.textContent = "Saving...";
     try {
-      const result = await api("/api/feedback", { track, rating });
+      const result = await api("/api/feedback", { track: payload, rating });
       applyFeedbackResponse(result);
-      track.feedback = rating;
-      state.feedbackByKey[trackKeyFor(track)] = rating;
-      if (state.lastResult?.tracks?.[index]) state.lastResult.tracks[index] = track;
+      state.feedbackByKey[trackKeyFor(payload)] = rating;
+      updateResultTrackFeedback(payload, rating);
       renderResults(state.lastResult || { tracks: state.lastTracks });
     } catch (error) {
       feedbackButton.textContent = originalText;

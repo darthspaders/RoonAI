@@ -415,7 +415,7 @@ function releaseDateFits(releaseDate, range) {
 function yearFits(year, range, releaseDate = "") {
   if (!range) return true;
   if (range.dateSpecific) return releaseDateFits(releaseDate, range);
-  if (releaseDate && !releaseDateFits(releaseDate, range)) return false;
+  if (releaseDate) return releaseDateFits(releaseDate, range);
   return Number(year) >= range.min && Number(year) <= range.max;
 }
 

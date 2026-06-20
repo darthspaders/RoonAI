@@ -25,6 +25,7 @@
         <nav class="viewTabs" aria-label="App views">
           <button type="button" class="active" data-view="player">Now Playing</button>
           <button type="button" data-view="history">History Report</button>
+          <button type="button" data-view="tidal">TIDAL Mixes</button>
         </nav>
         <div class="topControls">
           <p id="phoneAccess" class="phoneAccess"></p>
@@ -136,15 +137,28 @@
                 </datalist>
                 <label>Language <input name="language" placeholder="any"></label>
                 <label>Tracks <input name="count" type="number" min="1" max="40" placeholder="optional"></label>
-                <label>Scoring mode
-                  <select name="scoringMode" id="scoringMode">
-                    <option value="" selected></option>
-                    <option value="taste-guided">Taste Guided</option>
-                    <option value="pure">Pure Search</option>
-                    <option value="explore">Explore Mode</option>
-                    <option value="similar">Similar Mode</option>
-                  </select>
-                </label>
+                <div class="scoringModeField" role="group" aria-labelledby="scoringModeLabel">
+                  <span id="scoringModeLabel" class="fieldLabel">Scoring mode</span>
+                  <input type="hidden" name="scoringMode" id="scoringMode" value="">
+                  <div class="scoringModeCards" role="radiogroup" aria-labelledby="scoringModeLabel">
+                    <button type="button" class="scoringModeCard active" data-scoring-mode="" role="radio" aria-checked="true">
+                      <strong>Taste Guided</strong>
+                      <span>Prompt first, lightly shaped by your listening taste.</span>
+                    </button>
+                    <button type="button" class="scoringModeCard" data-scoring-mode="pure" role="radio" aria-checked="false">
+                      <strong>Pure Search</strong>
+                      <span>Follow the prompt with minimal personal bias.</span>
+                    </button>
+                    <button type="button" class="scoringModeCard" data-scoring-mode="explore" role="radio" aria-checked="false">
+                      <strong>Explore Mode</strong>
+                      <span>Stay in lane, but push farther outside familiar picks.</span>
+                    </button>
+                    <button type="button" class="scoringModeCard" data-scoring-mode="similar" role="radio" aria-checked="false">
+                      <strong>Similar Mode</strong>
+                      <span>Lean heavily on liked artists, labels, and tracks.</span>
+                    </button>
+                  </div>
+                </div>
                 <label>Release quick filter
                   <select name="releasePreset" id="releasePreset">
                     <option value="">Manual / prompt</option>
@@ -185,16 +199,22 @@
               <span id="busy"></span>
               <button type="button" id="queueAll" disabled>Add all to queue</button>
               <button type="button" id="queueAllNext" disabled>Add all next</button>
+              <button type="button" id="sendTidalQueue" disabled>Send to TIDAL</button>
               <button type="button" id="copyList" disabled>Copy list</button>
               <button type="button" id="exportCsv" disabled>Export CSV</button>
               <button type="button" id="toggleRejected" disabled>Rejected</button>
+              <label class="resultFilterToggle" title="Audit view only: show the current results with exact Roon artist-credit confirmation">
+                <input type="checkbox" id="artistConfirmedOnly">
+                <span>Audit exact artists</span>
+              </label>
             </div>
           </div>
           <div id="queueReport" class="queueReport" hidden></div>
+          <div id="poolDiagnostics" class="poolDiagnostics" hidden></div>
+          <div id="tracks" class="tracks"></div>
           <div id="intentDebug" class="intentDebug" hidden></div>
           <div id="sourceReport" class="sourceReport" hidden></div>
           <div id="rejectedDebug" class="rejectedDebug" hidden></div>
-          <div id="tracks" class="tracks"></div>
         </section>
 
         <section id="candidatesPanel" class="panel saved">
@@ -206,6 +226,7 @@
             <div class="resultActions">
               <button type="button" id="queueSaved" disabled>Add candidates to queue</button>
               <button type="button" id="queueSavedNext" disabled>Add candidates next</button>
+              <button type="button" id="sendSavedTidalQueue" disabled>Send candidates to TIDAL</button>
               <button type="button" id="copySaved" disabled>Copy candidates</button>
               <button type="button" id="exportSaved" disabled>Export candidates</button>
               <button type="button" id="purgeMemory">Purge memory</button>
@@ -260,6 +281,30 @@
             <div id="recentPlays" class="reportList"></div>
           </div>
         </section>
+      </section>
+
+      <section id="tidalView" class="view">
+        <section class="panel tidalMixHero">
+          <div>
+            <p class="eyebrow">TIDAL Profile</p>
+            <h2>Mixes & Radio</h2>
+            <p id="tidalMixStatus" class="tasteNarrative">TIDAL Mixes & Radio has not been loaded yet.</p>
+          </div>
+          <div class="resultActions">
+            <a class="buttonLink" id="authorizeTidalProfile" href="/api/tidal/oauth/start">Connect TIDAL</a>
+            <button type="button" id="refreshTidalMixes">Refresh mixes</button>
+          </div>
+          <form id="tidalPinnedForm" class="tidalImportForm">
+            <label for="tidalPinnedInput">Pinned TIDAL item</label>
+            <div class="tidalImportRow">
+              <input id="tidalPinnedInput" type="text" placeholder="TIDAL mix, radio, or playlist URL" autocomplete="off">
+              <button type="submit">Import</button>
+            </div>
+            <p id="tidalPinnedStatus" class="muted"></p>
+          </form>
+        </section>
+
+        <section id="tidalMixesGrid" class="tidalMixGrid"></section>
       </section>
     </main>
     <button type="button" id="jumpTop" class="jumpTop" hidden>Now Playing</button>

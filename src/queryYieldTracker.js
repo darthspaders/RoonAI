@@ -98,6 +98,23 @@ function displayEntry(entry = {}) {
   };
 }
 
+function shouldPruneEntry(entry = {}, context = {}) {
+  if (!context.prune) return false;
+  const attempts = Number(entry.attempts || 0);
+  const accepted = Number(entry.accepted || 0);
+  const rejected = Number(entry.rejected || 0);
+  const seoRejects = Number(entry.seoRejects || 0);
+  const genreRejects = Number(entry.genreRejects || 0);
+  const errorCount = Number(entry.errorCount || 0);
+  const quality = entryQuality(entry);
+
+  if (accepted > 0) return false;
+  if (attempts < 2) return false;
+  if (quality <= -7 && (seoRejects >= 4 || genreRejects >= 4 || errorCount >= 2)) return true;
+  if (attempts >= 3 && rejected >= attempts * 3 && quality <= -6) return true;
+  return false;
+}
+
 function summarizeRecords(records = [], adjustments = []) {
   const totals = records.reduce((memo, record) => {
     memo.attempted += Number(record.attempts || 0);
@@ -201,6 +218,23 @@ class QueryYieldTracker {
       })
       .sort((left, right) => right.score - left.score || left.index - right.index);
 
+    const pruned = ranked
+      .filter((item) => item.entry && shouldPruneEntry(item.entry, context))
+      .map((item) => ({
+        query: item.query,
+        template: item.template,
+        quality: item.quality,
+        attempts: Number(item.entry.attempts || 0),
+        accepted: Number(item.entry.accepted || 0),
+        seoRejects: Number(item.entry.seoRejects || 0),
+        genreRejects: Number(item.entry.genreRejects || 0),
+        errorCount: Number(item.entry.errorCount || 0)
+      }));
+    const prunedTemplates = new Set(pruned.map((item) => item.template));
+    const usable = context.prune && pruned.length < ranked.length
+      ? ranked.filter((item) => !prunedTemplates.has(item.template))
+      : ranked;
+
     const adjustments = ranked
       .filter((item) => item.score !== 0 && item.entry)
       .slice(0, 10)
@@ -215,8 +249,9 @@ class QueryYieldTracker {
       }));
 
     return {
-      queries: ranked.map((item) => item.query),
-      adjustments
+      queries: usable.map((item) => item.query),
+      adjustments,
+      pruned
     };
   }
 
@@ -299,5 +334,6 @@ module.exports = {
   queryTemplate,
   rejectionBucketForReason,
   entryQuality,
+  shouldPruneEntry,
   summarizeRecords
 };

@@ -2,7 +2,10 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { buildDiscoveryProfile } = require("../src/discoveryEngine");
+const {
+  buildDiscoveryProfile,
+  effectiveDiscoveryCount
+} = require("../src/discoveryEngine");
 
 function profileFor(request, extra = {}) {
   return buildDiscoveryProfile({
@@ -83,4 +86,31 @@ test("psytrance with an explicit vibe keeps that vibe explicit", () => {
   assert.equal(profile.vibeTerms.includes("driving"), true);
   assert.equal(profile.vibeSource, "explicit");
   assert.equal(profile.intent.requestedVibeSource, "explicit");
+});
+
+test("pure search treats lby as by when extracting requested artist", () => {
+  const profile = profileFor("find more tracks lby Rafael Osmo", {
+    scoringMode: "pure"
+  });
+
+  assert.deepEqual(profile.requestedArtists, ["Rafael Osmo"]);
+  assert.deepEqual(profile.seedArtists, ["Rafael Osmo"]);
+  assert.equal(profile.tasteApplication, "not at all");
+});
+
+test("explicit small track counts stay exact in Taste Guided", () => {
+  assert.equal(effectiveDiscoveryCount({
+    request: "find 5 progressive house tracks this year",
+    genres: "progressive house",
+    years: "2026",
+    scoringMode: "taste-guided"
+  }), 5);
+
+  assert.equal(effectiveDiscoveryCount({
+    request: "find progressive house tracks this year",
+    count: "5",
+    genres: "progressive house",
+    years: "2026",
+    scoringMode: "taste-guided"
+  }), 5);
 });

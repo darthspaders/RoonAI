@@ -84,6 +84,22 @@ TIDAL_CLIENT_SECRET=
 TIDAL_ACCESS_TOKEN=
 ```
 
+Optional TIDAL profile mixes page:
+
+```env
+TIDAL_PROFILE_MIXES=true
+TIDAL_PROFILE_CLIENT_ID=
+TIDAL_PROFILE_CLIENT_SECRET=
+TIDAL_PROFILE_REDIRECT_URI=http://127.0.0.1:3777/api/tidal/oauth/callback
+TIDAL_PROFILE_SCOPES=user.read playlists.read playlists.write recommendations.read collection.read search.read
+TIDAL_PROFILE_ACCESS_TOKEN=
+TIDAL_PROFILE_REFRESH_TOKEN=
+TIDAL_PROFILE_MIXES_ENDPOINT=
+TIDAL_PROFILE_ARTIST_RADIO_FALLBACK=false
+```
+
+`TIDAL_PROFILE_ACCESS_TOKEN` must be a user-profile bearer token. The normal catalog/client-credentials token can search tracks, but it cannot read personal mixes such as My Mix, Daily Discovery, New Arrivals, Track Radio, or Artist Radio. TIDAL's full mobile-style Mixes & Radio shelf currently requires a legacy profile scope that normal third-party OAuth may not grant, so Rabbit Hole shows only the official profile mix relationships when that scope is unavailable. For the durable setup, add the redirect URI shown above in the TIDAL developer portal, then open `/api/tidal/oauth/start` from Rabbit Hole. The callback saves the access token and refresh token under `data/tidal-profile-token.json`, which is ignored by Git. `TIDAL_PROFILE_MIXES_ENDPOINT` is optional and can override the default profile page endpoints if TIDAL changes the page route. `TIDAL_PROFILE_ARTIST_RADIO_FALLBACK=true` can synthesize artist radio cards from official mix artists, but leave it false when Rabbit Hole should mirror only what TIDAL returns.
+
 Optional discovery enrichment:
 
 ```env

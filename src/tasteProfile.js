@@ -59,6 +59,7 @@ function normalizeRating(value) {
   if (rating === "good" || rating === "up") return "good";
   if (rating === "ok" || rating === "okay") return "ok";
   if (rating === "wrong_genre" || rating === "wrong genre" || rating === "wrong" || rating === "not what i asked for" || rating === "not_asked") return "wrong_genre";
+  if (rating === "reject_similar" || rating === "reject similar" || rating === "similar_bad" || rating === "similar") return "reject_similar";
   if (rating === "skip" || rating === "down") return "skip";
   if (rating === "never" || rating === "never again" || rating === "never_again") return "never";
   return "good";
@@ -69,6 +70,7 @@ function ratingDelta(value) {
   if (rating === "love") return 3;
   if (rating === "good") return 1;
   if (rating === "ok") return 0.5;
+  if (rating === "reject_similar") return -1;
   if (rating === "skip") return -1;
   if (rating === "never") return -3;
   return 0;
@@ -108,7 +110,7 @@ function feedbackCalibrationEntry(track = {}, rating = "", context = {}) {
   const source = cleanText(track.discoverySource || context.discoverySource || "Unknown source");
   const lane = cleanText(track.discoveryLane || context.discoveryLane || "unknown");
   const label = labelFor(track);
-  const negativeFeedback = ["wrong_genre", "skip", "never"].includes(normalizedRating);
+  const negativeFeedback = ["wrong_genre", "reject_similar", "skip", "never"].includes(normalizedRating);
   const positiveFeedback = ["love", "good"].includes(normalizedRating);
   const modelApproved = ["boosted", "unchanged", "warning"].includes(review.action) || Number(review.modelScore || 0) >= 70;
   const badBoost = negativeFeedback && review.action === "boosted";
@@ -132,11 +134,13 @@ function feedbackCalibrationEntry(track = {}, rating = "", context = {}) {
     missedLike,
     issue: promptMismatch
       ? "wrong_genre"
-      : badBoost
-        ? "bad_boost"
-        : missedLike
-          ? "liked_downranked"
-          : (negativeFeedback && modelApproved ? "negative_model_approved" : ""),
+      : normalizedRating === "reject_similar"
+        ? "reject_similar"
+        : badBoost
+          ? "bad_boost"
+          : missedLike
+            ? "liked_downranked"
+            : (negativeFeedback && modelApproved ? "negative_model_approved" : ""),
     reason: review.reason,
     recordedAt: new Date().toISOString()
   };
@@ -348,7 +352,7 @@ class TasteProfile {
       label: labelFor(track),
       tidalUrl: cleanText(track.tidal?.tidalUrl || track.tidalUrl),
       promptMismatch: normalizedRating === "wrong_genre",
-      artistSignalBlocked: normalizedRating === "wrong_genre" || shouldBlockArtistSignal(track, nextDelta),
+      artistSignalBlocked: normalizedRating === "wrong_genre" || normalizedRating === "reject_similar" || shouldBlockArtistSignal(track, nextDelta),
       calibration: feedbackCalibrationEntry(track, normalizedRating, context),
       updatedAt: new Date().toISOString()
     };

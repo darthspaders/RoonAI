@@ -69,6 +69,22 @@ function candidateIdentityKeys(track = {}) {
   return [tidalUrl, titleArtist].filter((key) => key && key !== "|");
 }
 
+function mergeCandidateLists(...lists) {
+  const merged = [];
+  const seen = new Set();
+  for (const list of lists) {
+    for (const candidate of list || []) {
+      const keys = candidateIdentityKeys(candidate);
+      const key = keys[0] || `${normalize(candidate.artist)}|${normalize(candidate.title)}`;
+      if (!key || seen.has(key)) continue;
+      for (const candidateKey of keys) seen.add(candidateKey);
+      seen.add(key);
+      merged.push(candidate);
+    }
+  }
+  return merged;
+}
+
 function parseRequestedCount(options = {}) {
   const effective = Number(options.effectiveCount || 0);
   if (effective > 0) return Math.min(40, Math.max(1, effective));
@@ -77,7 +93,7 @@ function parseRequestedCount(options = {}) {
   if (explicit > 0) return Math.min(40, Math.max(1, explicit));
 
   const request = cleanText(options.request);
-  const match = request.match(/\b(\d{1,2})\s*(?:track|song|cut|candidate|recommendation)s?\b/i);
+  const match = request.match(/\b(\d{1,2})\s*(?:[a-z][\w-]*\s+){0,6}(?:track|song|cut|candidate|recommendation)s?\b/i);
   return match ? Math.min(40, Math.max(1, Number(match[1]))) : 8;
 }
 
@@ -87,9 +103,14 @@ function hasHardCountLanguage(options = {}) {
     /\b\d{1,2}\s*(?:tracks?|songs?|cuts?|candidates?|recommendations?)\s*(?:only|exactly|max(?:imum)?)\b/i.test(request);
 }
 
+function hasExplicitCountRequest(options = {}) {
+  if (Number(options.count || 0) > 0) return true;
+  return /\b\d{1,2}\s*(?:[a-z][\w-]*\s+){0,6}(?:tracks?|songs?|cuts?|candidates?|recommendations?)\b/i.test(cleanText(options.request));
+}
+
 function effectiveDiscoveryCount(options = {}, profile = null) {
   const requested = parseRequestedCount({ ...options, effectiveCount: 0 });
-  if (requested >= 8 || hasHardCountLanguage(options)) return requested;
+  if (requested >= 8 || hasExplicitCountRequest(options) || hasHardCountLanguage(options)) return requested;
 
   const scoringMode = normalizeScoringMode(options);
   if (!["explore", "taste-guided"].includes(scoringMode)) return requested;
@@ -146,6 +167,7 @@ function allowsNearYearFallback(options = {}, range = parseYearRange(options)) {
   if (range.max < currentYear - 1) return false;
 
   const text = normalize(requestText(options));
+  if (requestHasExplicitReleaseFilter(options) && !/\b(?:near|nearby|around|roughly|approx(?:imately)?|broaden|broader|adjacent years?)\b/.test(text)) return false;
   if (/\b(?:today|yesterday|this week|last week|last 7|this month|last month|exact date|release date)\b/.test(text)) return false;
   if (/\b(?:exact|exactly|only|strict|strictly|must|hard)\b.{0,24}\b(?:19\d{2}|20\d{2})\b/.test(text)) return false;
   if (/\b(?:19\d{2}|20\d{2})\b.{0,16}\b(?:only|exactly|strictly)\b/.test(text)) return false;
@@ -160,6 +182,15 @@ function nearYearFallbackOptions(options = {}, range = parseYearRange(options)) 
     years: `${min}-${range.max}`,
     nearYearFallback: true
   };
+}
+
+function requestHasExplicitReleaseFilter(options = {}) {
+  if (cleanText(options.releasePreset || options.releaseExactDate || options.releaseStartDate || options.releaseEndDate || options.years)) return true;
+  return /\b(?:today|yesterday|this week|last 7 days|last seven days|last 30 days|last thirty days|last 90 days|last ninety days|this year|19\d{2}|20\d{2})\b/.test(normalize(requestText(options)));
+}
+
+function releaseFilterRequiresVerification(options = {}, range = parseYearRange(options)) {
+  return Boolean(range && requestHasExplicitReleaseFilter(options));
 }
 
 function isReissueLike(track = {}) {
@@ -237,7 +268,12 @@ function positiveIntentText(value = "") {
     .trim();
 }
 
-function inferredGenreFor(track = {}, options = {}, profile = buildDiscoveryProfile(options)) {
+function inferredGenreFor(track = {}, options = {}, profile = buildDiscoveryProfile(options), breakdown = {}) {
+  const inference = breakdown.genreInference || {};
+  if (Array.isArray(inference.inferredGenres) && inference.inferredGenres.length) {
+    return titleCase(inference.inferredGenres[0]);
+  }
+
   const metadataText = normalize(`${track.artist} ${track.title} ${track.album} ${labelText(track)} ${track.query}`);
   const requestedText = normalize(`${positiveIntentText(options.request)} ${options.genres} ${options.mood}`);
   const matchedTarget = (profile.targetGenres || []).find((term) => hasAnyTerm(metadataText, [term])) ||
@@ -258,10 +294,15 @@ function promptMatchFor(track = {}, options = {}, breakdown = {}, profile = buil
   const combinedText = normalize(`${metadataText} ${queryText}`);
   const targetGenres = profile.targetGenres || [];
   const vibeTerms = profile.vibeTerms || [];
+  const genreInference = breakdown.genreInference || {};
   const reasons = [];
 
   const genreScore = targetGenres.length
-    ? (hasAnyTerm(metadataText, targetGenres) ? 38 : (hasAnyTerm(queryText, targetGenres) ? 26 : Math.round((Number(breakdown.genreMatch || 0) / SCORE_MAX.genreMatch) * 30)))
+    ? (hasAnyTerm(metadataText, targetGenres)
+      ? 38
+      : (Number(genreInference.confidence || 0) >= 45
+        ? Math.round(clamp(genreInference.confidence, 0, 100) * 0.38)
+        : (hasAnyTerm(queryText, targetGenres) ? 24 : Math.round((Number(breakdown.genreMatch || 0) / SCORE_MAX.genreMatch) * 30))))
     : 24;
   const vibeScore = vibeTerms.length
     ? (hasAnyTerm(combinedText, vibeTerms) ? 18 : Math.round((Number(breakdown.genreMatch || 0) / SCORE_MAX.genreMatch) * 10))
@@ -273,6 +314,9 @@ function promptMatchFor(track = {}, options = {}, breakdown = {}, profile = buil
   const percent = clamp(Math.round(genreScore + vibeScore + entityScore + releaseScore + lengthScore), 0, 100);
 
   if (targetGenres.length) reasons.push(`User requested ${targetGenres[0]}.`);
+  if (genreInference.summary && Number(genreInference.confidence || 0) >= 35) {
+    reasons.push(`Genre inferred from ${genreInference.summary}.`);
+  }
   if (vibeTerms.length && hasAnyTerm(combinedText, vibeTerms)) reasons.push(`Matched the ${vibeTerms[0]} vibe signal.`);
   if (profile.requestedArtists?.length && hasSeedArtistMatch(track, options, profile)) reasons.push("Matched a requested or seeded artist.");
   if (profile.requestedLabels?.length && requestedLabelMatch(track, profile)) reasons.push("Matched a requested label.");
@@ -309,7 +353,7 @@ function tasteMatchFor(track = {}, breakdown = {}, profile = {}) {
 function matchExplanationFor(track = {}, options = {}, breakdown = {}, profile = buildDiscoveryProfile(options)) {
   const prompt = promptMatchFor(track, options, breakdown, profile);
   const taste = tasteMatchFor(track, breakdown, profile);
-  const genre = inferredGenreFor(track, options, profile);
+  const genre = inferredGenreFor(track, options, profile, breakdown);
   const why = [];
 
   why.push(...prompt.reasons.slice(0, 2));
@@ -452,6 +496,25 @@ const PROGRESSIVE_ARTISTS = [
   "Choopie",
   "Nick Muir",
   "Jamie Stevens"
+];
+
+const PROGRESSIVE_FRESH_ANCHORS = [
+  "D-Nox Andre Moret",
+  "D-Nox",
+  "Andre Moret",
+  "Ruben Karapetyan",
+  "Hobin Rude",
+  "Cid Inc.",
+  "Guy J",
+  "Khen",
+  "GMJ Matter",
+  "Kamilo Sanclemente",
+  "Paul Thomas",
+  "Ezequiel Arias",
+  "Sebastian Sellares",
+  "Nicolas Rada",
+  "Forty Cats",
+  "Dmitry Molosh"
 ];
 
 const TRANCE_FORWARD_ARTISTS = [
@@ -983,7 +1046,7 @@ function normalizeEntityCandidate(value) {
 }
 
 function extractPromptArtists(options = {}) {
-  const request = cleanText(options.request);
+  const request = cleanText(options.request).replace(/\blby\b/gi, "by");
   const found = [];
   for (const match of request.matchAll(/\b(?:like|similar to|sounds? like|around|based on|in the vein of|for fans of)\s+(.+?)\s+[-–—]\s+(.+?)(?=,|;|$)/gi)) {
     const artist = normalizeEntityCandidate(match[1]);
@@ -1119,19 +1182,21 @@ function genreArtistAnchors(profile = {}) {
 }
 
 function buildDiscoveryProfile(options = {}) {
+  const scoringMode = normalizeScoringMode(options);
   const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
   const planArtists = uniqueTerms([
     ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
     ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : [])
-  ], 24);
+  ].filter((artist) => !isGenericSeedArtist(artist)), 24);
   const planLabels = uniqueTerms(Array.isArray(plan.candidateLabels) ? plan.candidateLabels : [], 24);
   const requestedArtists = uniqueTerms([
     ...extractPromptArtists(options),
     ...extractSeedArtists(options)
   ], 12);
+  const pureRequestedArtistSearch = scoringMode === "pure" && requestedArtists.length;
   const seedArtists = uniqueTerms([
     ...requestedArtists,
-    ...planArtists.slice(0, 8)
+    ...(pureRequestedArtistSearch ? [] : planArtists.slice(0, 8))
   ], 12);
   const requestedLabels = uniqueTerms([
     ...extractPromptLabels(options),
@@ -1141,6 +1206,7 @@ function buildDiscoveryProfile(options = {}) {
   const vibeResult = detectSeedVibes(options, seedArtists);
   const vibeTerms = vibeResult.terms;
   const trackCharacteristics = detectTrackCharacteristics(options);
+  const releaseRange = parseYearRange(options);
   const explicitTarget = cleanText(options.genres || options.request || "");
   const positiveTargetText = normalize(`${options.genres || ""} ${positiveIntentText(options.request || "")}`);
   const isProgressiveTarget = /\bprogressive house\b|\bmelodic progressive\b|\bdeep progressive\b|\borganic progressive\b/.test(positiveTargetText) ||
@@ -1148,7 +1214,14 @@ function buildDiscoveryProfile(options = {}) {
   const isGenreOnlyTarget = Boolean(targetGenres.length && !isProgressiveTarget && !seedArtists.length);
   const isGenreDiscoveryTarget = Boolean(targetGenres.length && !isProgressiveTarget);
   const primaryTarget = targetGenres[0] || cleanText(options.genres) || cleanText(options.request).replace(/\b(?:make|create|find|give me|recommend|playlist|tracks?|songs?|like|similar|based on|seeded)\b/gi, " ").trim();
-  const scoringMode = normalizeScoringMode(options);
+  const hasExplicitDiscoveryIntent = Boolean(
+    requestedArtists.length ||
+    requestedLabels.length ||
+    targetGenres.length ||
+    vibeResult.explicit.length ||
+    trackCharacteristics.length ||
+    releaseFilterRequiresVerification(options, releaseRange)
+  );
 
   const profile = {
     scoringMode,
@@ -1163,6 +1236,7 @@ function buildDiscoveryProfile(options = {}) {
     trackCharacteristics,
     primaryTarget,
     explicitTarget,
+    hasExplicitDiscoveryIntent,
     isProgressiveTarget,
     isGenreOnlyTarget,
     isGenreDiscoveryTarget,
@@ -1197,6 +1271,16 @@ function wantsProgressiveHouseOnly(options = {}) {
 
 function primaryArtistKey(track = {}) {
   return normalize(splitArtists(track.artist)[0] || track.artist);
+}
+
+function artistKeysForCandidate(track = {}) {
+  const artists = splitArtists(track.artist);
+  const keys = artists.map(normalize).filter(Boolean);
+  if (!keys.length) {
+    const fallback = normalize(track.artist);
+    if (fallback) keys.push(fallback);
+  }
+  return [...new Set(keys)];
 }
 
 function uniqueValues(values) {
@@ -1238,16 +1322,29 @@ function extractSeedArtists(options = {}) {
     if (match) seeds.push(...splitArtists(match[1]));
   }
 
-  return Array.from(new Set(seeds)).slice(0, 8);
+  return Array.from(new Set(seeds))
+    .filter((artist) => !isGenericSeedArtist(artist))
+    .slice(0, 8);
+}
+
+function isGenericSeedArtist(value = "") {
+  const text = normalize(value);
+  if (!text) return true;
+  if (/^(?:various artists?|unknown artist|unknown|n a|na|va|v a|soundtrack)$/i.test(cleanText(value))) return true;
+  if (/^(?:house music|techno music|trance music|psytrance|ambient music|electronic dance music|edm|deep house|progressive house|melodic house|organic house|tech house|dance music)$/i.test(cleanText(value))) return true;
+  const parts = splitArtists(value);
+  if (parts.length >= 3 && /\b(?:house|techno|trance|psytrance|ambient|edm|music)\b/.test(text)) return true;
+  return false;
 }
 
 function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDiscoveryProfile(options)) {
   const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
   const planQueries = uniqueTerms(Array.isArray(plan.searchQueries) ? plan.searchQueries : [], 24);
-  const planArtists = uniqueTerms([
+  const pureRequestedArtistSearch = profile.scoringMode === "pure" && (profile.requestedArtists || []).length;
+  const planArtists = pureRequestedArtistSearch ? [] : uniqueTerms([
     ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
     ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : [])
-  ], 24);
+  ].filter((artist) => !isGenericSeedArtist(artist)), 24);
   const planLabels = uniqueTerms(Array.isArray(plan.candidateLabels) ? plan.candidateLabels : [], 24);
   const planTargetTerms = uniqueTerms(Array.isArray(plan.targetGenres) ? plan.targetGenres : [], 16);
   const planVibeTerms = uniqueTerms(Array.isArray(plan.vibeTerms) ? plan.vibeTerms : [], 16);
@@ -1257,17 +1354,19 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
     ? Array.from({ length: yearRange.max - yearRange.min + 1 }, (_, index) => String(yearRange.min + index))
     : [""];
   const isYearCatalogSearch = Boolean(yearRange && profile.targetGenres.length);
-  const useAnchoredGenreSearch = Boolean(profile.isGenreDiscoveryTarget && !profile.isProgressiveTarget);
+  const useAnchoredGenreSearch = Boolean(profile.isGenreDiscoveryTarget && !profile.isProgressiveTarget && !pureRequestedArtistSearch);
   const artists = uniqueTerms([
     ...planArtists,
     ...buildArtistSeeds(options, isYearCatalogSearch ? 34 : 18, tasteProfile, profile)
   ], isYearCatalogSearch ? 42 : 28);
   const genreSeeds = genreDiscoverySeeds(profile);
-  const targetTerms = planTargetTerms.length
+  const targetTerms = pureRequestedArtistSearch && !profile.targetGenres.length
+    ? [""]
+    : (planTargetTerms.length
     ? uniqueTerms([...planTargetTerms, ...(profile.isProgressiveTarget ? PROGRESSIVE_CATALOG_TARGETS : [])], 18)
     : (profile.targetGenres.length
       ? (profile.isProgressiveTarget ? uniqueTerms([...profile.targetGenres, ...PROGRESSIVE_CATALOG_TARGETS], 18) : profile.targetGenres)
-      : [profile.primaryTarget].filter(Boolean));
+      : [profile.primaryTarget].filter(Boolean)));
   const vibeTerms = uniqueTerms([...planVibeTerms, ...profile.vibeTerms], 24);
   const artistQueries = [];
   const sceneQueries = [];
@@ -1316,7 +1415,7 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
     }
   }
 
-  if (request.includes("trance")) {
+  if (!pureRequestedArtistSearch && request.includes("trance")) {
     for (const artist of ["Solarstone", "Basil O'Glue", "Paul Thomas", "Jerome Isma-Ae", "Forerunners"]) {
       for (const year of yearTerms.slice(-3)) tranceQueries.push(cleanText(`${artist} ${year}`));
     }
@@ -1363,7 +1462,33 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
   const queryLimit = isYearCatalogSearch ? 88 : 42;
   const planQueryLimit = isYearCatalogSearch ? 18 : 12;
   const anchoredQueryLimit = isYearCatalogSearch ? 46 : 18;
+  const progressiveLabelYearQueries = profile.isProgressiveTarget && isYearCatalogSearch
+    ? uniqueTerms([
+      ...catalogYearQueries.filter((query) => PROGRESSIVE_LABELS.some((label) => normalize(query).includes(normalize(label)))),
+      ...labelQueries
+    ], 44)
+    : [];
+  if (pureRequestedArtistSearch) {
+    const requestedKeys = (profile.requestedArtists || []).map(normalize).filter(Boolean);
+    const requestedPlanQueries = planQueries.filter((query) => {
+      const normalizedQuery = normalize(query);
+      return requestedKeys.some((artist) => normalizedQuery.includes(artist));
+    });
+    return Array.from(new Set([
+      ...artistQueries,
+      ...requestedPlanQueries
+    ].map(cleanText).filter(Boolean))).slice(0, queryLimit);
+  }
+  if (options.autoBroadenLane === "yield-retry" && planQueries.length) {
+    return Array.from(new Set([
+      ...planQueries,
+      ...progressiveLabelYearQueries,
+      ...catalogYearQueries,
+      ...sceneQueries
+    ].map(cleanText).filter(Boolean))).slice(0, queryLimit);
+  }
   return Array.from(new Set([
+    ...progressiveLabelYearQueries,
     ...sceneAnchorQueries.slice(0, anchoredQueryLimit),
     ...labelQueries.slice(0, useAnchoredGenreSearch ? (isYearCatalogSearch ? 36 : 18) : 0),
     ...artistQueries.slice(0, useAnchoredGenreSearch ? (isYearCatalogSearch ? 30 : 14) : 0),
@@ -1557,25 +1682,26 @@ function yieldRecoveryQueries(options = {}, profile = buildDiscoveryProfile(opti
   ], 32);
   const anchors = uniqueTerms([
     ...(profile.seedArtists || []),
+    ...(profile.isProgressiveTarget ? PROGRESSIVE_FRESH_ANCHORS : []),
     ...(profile.isProgressiveTarget ? PROGRESSIVE_ARTISTS.slice(0, 24) : genreArtistAnchors(profile).slice(0, 24))
-  ], 34);
+  ], 42);
   const vibes = (profile.vibeTerms || []).slice(0, 4);
   const queries = [];
 
   for (const year of years) {
-    for (const label of labels.slice(0, 22)) {
-      queries.push(cleanText(`${label} ${year}`));
-      for (const target of targets.slice(0, 3)) {
-        queries.push(cleanText(`${label} ${target} ${year}`));
-      }
-    }
-    for (const anchor of anchors.slice(0, 22)) {
+    for (const anchor of anchors.slice(0, 28)) {
       queries.push(cleanText(`${anchor} ${year}`));
       for (const target of targets.slice(0, 3)) {
         queries.push(cleanText(`${anchor} ${target} ${year}`));
       }
       for (const vibe of vibes.slice(0, 2)) {
         queries.push(cleanText(`${anchor} ${vibe} ${year}`));
+      }
+    }
+    for (const label of labels.slice(0, 22)) {
+      queries.push(cleanText(`${label} ${year}`));
+      for (const target of targets.slice(0, 3)) {
+        queries.push(cleanText(`${label} ${target} ${year}`));
       }
     }
     for (const target of targets.slice(0, 4)) {
@@ -1771,23 +1897,43 @@ function buildSceneAnchorRecentQueries(options = {}, tasteProfile = null, profil
 
 function buildArtistSeeds(options = {}, limit = 12, tasteProfile = null, profile = buildDiscoveryProfile(options)) {
   const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
-  const planArtists = uniqueTerms([
+  const pureRequestedArtistSearch = profile.scoringMode === "pure" && (profile.requestedArtists || []).length;
+  const yearRange = parseYearRange(options);
+  const discoveryBranching = Boolean(
+    profile.scoringMode === "taste-guided" &&
+    profile.hasExplicitDiscoveryIntent &&
+    profile.isProgressiveTarget &&
+    yearRange &&
+    parseRequestedCount(options) > 2 &&
+    !(profile.requestedArtists || []).length &&
+    !(profile.seedArtists || extractSeedArtists(options)).length
+  );
+  const planArtists = pureRequestedArtistSearch ? [] : uniqueTerms([
     ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
     ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : [])
   ], limit);
   const seedArtists = profile.seedArtists || extractSeedArtists(options);
   const seedKeys = new Set(seedArtists.map(normalize));
   const useLearnedArtists = profile.scoringMode === "similar" ||
-    (profile.scoringMode === "taste-guided" && (!profile.targetGenres.length || profile.isProgressiveTarget));
-  const learnedLimit = profile.scoringMode === "similar" ? 12 : 5;
+    (profile.scoringMode === "taste-guided" && !profile.hasExplicitDiscoveryIntent);
+  const learnedLimit = profile.scoringMode === "similar" ? 12 : 3;
   const learnedArtists = useLearnedArtists && typeof tasteProfile?.getTopArtists === "function"
     ? tasteProfile.getTopArtists(learnedLimit)
     : [];
-  const sceneArtists = profile.isProgressiveTarget && wantsProgressiveHouseOnly(options)
+  const baseFreshYearAnchors = profile.isProgressiveTarget && yearRange
+    ? PROGRESSIVE_FRESH_ANCHORS
+    : [];
+  const freshYearAnchors = discoveryBranching
+    ? shuffled(baseFreshYearAnchors).slice(0, Math.max(3, Math.ceil(limit * 0.35)))
+    : baseFreshYearAnchors;
+  const sceneArtists = pureRequestedArtistSearch
+    ? []
+    : (profile.isProgressiveTarget && wantsProgressiveHouseOnly(options)
     ? PROGRESSIVE_ARTISTS.filter((artist) => !isTranceForwardArtist(artist))
-    : (profile.isProgressiveTarget ? PROGRESSIVE_ARTISTS : genreArtistAnchors(profile));
-  const rotatedSceneArtists = shuffled(uniqueValues(sceneArtists).filter((artist) => !seedKeys.has(normalize(artist))));
-  return uniqueValues([...planArtists, ...seedArtists, ...learnedArtists, ...rotatedSceneArtists]).slice(0, limit);
+    : (profile.isProgressiveTarget ? PROGRESSIVE_ARTISTS : genreArtistAnchors(profile)));
+  const priorityKeys = new Set([...seedArtists, ...freshYearAnchors].map(normalize));
+  const rotatedSceneArtists = shuffled(uniqueValues(sceneArtists).filter((artist) => !seedKeys.has(normalize(artist)) && !priorityKeys.has(normalize(artist))));
+  return uniqueValues([...planArtists, ...seedArtists, ...learnedArtists, ...freshYearAnchors, ...rotatedSceneArtists]).slice(0, limit);
 }
 
 function requestText(options = {}) {
@@ -1806,13 +1952,289 @@ function allowsPreviousDiscoveryFallback(options = {}) {
   return /\b(?:use previous discovery fallback|allow previous fallback|backfill from history|fill from history|reuse previous suggestions|include previous suggestions|include previously suggested)\b/i.test(requestText(options));
 }
 
+function artistDiversityAdjustmentFor(track = {}, history = null, profile = {}, options = {}) {
+  if (!history || typeof history.artistExposureFor !== "function") return { value: 0, reasons: [] };
+  if (profile.scoringMode === "similar") return { value: 0, reasons: [] };
+  if ((profile.requestedArtists || []).length && artistMatchesRequested(track.artist, profile.requestedArtists)) {
+    return { value: 0, reasons: [] };
+  }
+
+  const exposure = history.artistExposureFor(track);
+  if (!exposure) return { value: 0, reasons: [] };
+
+  const trackCount = Number(exposure.trackCount || 0);
+  const shownCount = Number(exposure.shownCount || 0);
+  if (trackCount < 2 && shownCount < 3) return { value: 0, reasons: [] };
+
+  const explore = profile.scoringMode === "explore";
+  const pure = profile.scoringMode === "pure";
+  const seedMatch = hasSeedArtistMatch(track, options, profile);
+  let penalty = 0;
+
+  if (trackCount >= 8 || shownCount >= 12) penalty = explore ? -11 : -8;
+  else if (trackCount >= 5 || shownCount >= 8) penalty = explore ? -8 : -6;
+  else if (trackCount >= 3 || shownCount >= 5) penalty = explore ? -5 : -4;
+  else penalty = explore ? -3 : -2;
+
+  if (exposure.recent) penalty -= explore ? 2 : 1;
+  if (pure) penalty = Math.max(penalty, -4);
+  if (seedMatch && !explore) penalty = Math.max(penalty, -4);
+
+  const reasons = [
+    `${exposure.artist || splitArtists(track.artist)[0] || "artist"} surfaced ${trackCount} prior track${trackCount === 1 ? "" : "s"}`
+  ];
+  if (shownCount > trackCount) reasons.push(`${shownCount} total prior appearances`);
+  if (exposure.recent) reasons.push("seen recently");
+
+  return {
+    value: clamp(penalty, explore ? -12 : -8, 0),
+    reasons
+  };
+}
+
 function hasAnyTerm(text, terms = []) {
   return terms.some((term) => containsNormalized(text, term));
+}
+
+function isBroadGenreTerm(term = "") {
+  return /^(?:electronic|electronica|dance|edm|club|house|techno|trance|bass|pop|rock|metal|jazz|soul|funk|country|alternative|other|unknown)$/i.test(normalize(term));
+}
+
+function trackGenreValues(track = {}) {
+  function flatten(value) {
+    if (!value) return [];
+    if (Array.isArray(value)) return value.flatMap(flatten);
+    if (typeof value === "object") {
+      return [
+        value.name,
+        value.title,
+        value.value,
+        value.text,
+        value.genre,
+        value.id
+      ].flatMap(flatten);
+    }
+    return [cleanText(value)];
+  }
+
+  return uniqueTerms([
+    ...flatten(track.genre),
+    ...flatten(track.genres),
+    ...flatten(track.tidal?.genre),
+    ...flatten(track.tidal?.genres),
+    ...flatten(track.tidal?.artistGenre),
+    ...flatten(track.tidal?.artistGenres)
+  ], 12);
+}
+
+function genreTermMatchesTarget(term = "", targets = []) {
+  const key = normalize(term);
+  if (!key) return false;
+  return targets.some((target) => {
+    const targetKey = normalize(target);
+    if (!targetKey) return false;
+    if (key === targetKey) return true;
+    if (isBroadGenreTerm(key)) return targetKey === key;
+    if (key.includes(targetKey) && !isBroadGenreTerm(targetKey)) return true;
+    return false;
+  });
+}
+
+function ontologyGenreTermsForText(text = "", limit = 16) {
+  const detected = detectOntologyGenreTerms(text, { includeAliases: true, limit });
+  return uniqueTerms(detected.terms || [], limit);
 }
 
 function genreLabelSeeds(profile = {}) {
   const artistKeys = new Set(genreArtistAnchors(profile).map(normalize));
   return genreDiscoverySeeds(profile).filter((seed) => !artistKeys.has(normalize(seed)));
+}
+
+function tasteGenreEvidenceFor(track = {}, tasteProfile = null) {
+  if (typeof tasteProfile?.read !== "function") return [];
+  let profile;
+  try {
+    profile = tasteProfile.read();
+  } catch {
+    return [];
+  }
+
+  const evidence = [];
+  const label = labelText(track);
+  const labelEntry = label && profile.labels?.[normalize(label)];
+  if (labelEntry?.score) {
+    const score = Number(labelEntry.score || 0);
+    evidence.push({
+      source: "darth-rating",
+      label: `${labelEntry.name || label} label rating`,
+      weight: clamp(score * 1.5, -5, 5),
+      corroborating: false
+    });
+  }
+
+  for (const artist of splitArtists(track.artist)) {
+    const entry = profile.artists?.[normalize(artist)];
+    if (!entry?.score) continue;
+    const score = Number(entry.score || 0);
+    evidence.push({
+      source: "darth-rating",
+      label: `${entry.name || artist} artist rating`,
+      weight: clamp(score, -4, 4),
+      corroborating: false
+    });
+  }
+
+  return evidence;
+}
+
+function topGenreEvidence(evidence = [], limit = 3) {
+  return evidence
+    .filter((item) => item.weight > 0 && !item.queryOnly && item.source !== "darth-rating")
+    .sort((left, right) => right.weight - left.weight)
+    .slice(0, limit);
+}
+
+function genreInferenceFor(track = {}, query = "", options = {}, profile = buildDiscoveryProfile(options), tasteProfile = null) {
+  const targetGenres = profile.targetGenres || [];
+  const adjacentTerms = adjacentLaneTerms(profile, options);
+  const label = labelText(track);
+  const metadataText = normalize(`${track.artist} ${track.title} ${track.album} ${label}`);
+  const queryText = normalize(query || track.query);
+  const sourceText = normalize(`${track.discoverySource || ""} ${track.discoveryLane || ""}`);
+  const officialGenreValues = trackGenreValues(track);
+  const officialGenreText = officialGenreValues.join(" ");
+  const officialTerms = ontologyGenreTermsForText(officialGenreText, 12);
+  const metadataTerms = ontologyGenreTermsForText(metadataText, 16);
+  const inferredGenres = [];
+  const evidence = [];
+
+  function add(source, labelTextValue, weight, detail = {}) {
+    const cleanLabel = cleanText(labelTextValue);
+    if (!cleanLabel || !weight) return;
+    evidence.push({
+      source,
+      label: cleanLabel,
+      weight: Number(weight),
+      genre: cleanText(detail.genre || ""),
+      corroborating: detail.corroborating !== false,
+      queryOnly: Boolean(detail.queryOnly),
+      weak: Boolean(detail.weak)
+    });
+    if (detail.genre) inferredGenres.push(detail.genre);
+  }
+
+  const metadataTargets = metadataTerms.filter((term) => genreTermMatchesTarget(term, targetGenres));
+  for (const term of metadataTargets.slice(0, 3)) {
+    add("metadata", `${term} metadata`, isBroadGenreTerm(term) ? 18 : 34, { genre: term });
+  }
+
+  const metadataAdjacent = metadataTerms.filter((term) => genreTermMatchesTarget(term, adjacentTerms));
+  for (const term of metadataAdjacent.slice(0, 2)) {
+    add("metadata", `${term} adjacent metadata`, isBroadGenreTerm(term) ? 8 : 18, { genre: term });
+  }
+
+  if (profile.isProgressiveTarget) {
+    const sceneLabel = matchingSceneLabel(label);
+    const sceneArtist = matchingSceneArtist(track.artist);
+    if (sceneLabel) add("label", `${sceneLabel} label scene`, 38, { genre: "progressive house" });
+    if (sceneArtist) add("artist", `${sceneArtist} artist scene`, sceneLabel || metadataTargets.length ? 22 : 14, {
+      genre: "progressive house",
+      corroborating: Boolean(sceneLabel || metadataTargets.length)
+    });
+    if (hasAnyTerm(metadataText, PROGRESSIVE_CATALOG_TARGETS)) {
+      add("metadata", "progressive catalogue terms", 22, { genre: "progressive house" });
+    }
+  }
+
+  if (requestedLabelMatch(track, profile)) {
+    add("requested-label", `${requestedLabelMatch(track, profile)} requested label`, 32, { genre: targetGenres[0] || "" });
+  }
+
+  const labelSeed = genreLabelSeeds(profile).find((seed) => containsEntityTerm(label, seed)) || "";
+  if (labelSeed) add("label", `${labelSeed} scene label`, 36, { genre: targetGenres[0] || "" });
+
+  const artistAnchor = genreArtistAnchors(profile).find((seed) => splitArtists(track.artist).some((artist) => normalize(artist) === normalize(seed))) || "";
+  if (artistAnchor) {
+    const hasSceneSupport = Boolean(labelSeed || metadataTargets.length || metadataAdjacent.length || requestedLabelMatch(track, profile));
+    add("artist", `${artistAnchor} genre anchor`, hasSceneSupport ? 28 : 12, {
+      genre: targetGenres[0] || "",
+      corroborating: hasSceneSupport
+    });
+  }
+
+  if (hasSeedArtistMatch(track, options, profile)) {
+    add("seed-artist", "requested artist seed", profile.scoringMode === "pure" ? 14 : 10, {
+      genre: targetGenres[0] || "",
+      corroborating: false
+    });
+  }
+
+  for (const term of officialTerms.slice(0, 3)) {
+    if (genreTermMatchesTarget(term, targetGenres)) {
+      add("official-genre", `${term} official genre`, isBroadGenreTerm(term) ? 4 : 12, {
+        genre: term,
+        weak: isBroadGenreTerm(term)
+      });
+    } else if (genreTermMatchesTarget(term, adjacentTerms)) {
+      add("official-genre", `${term} adjacent official genre`, isBroadGenreTerm(term) ? 2 : 7, {
+        genre: term,
+        weak: true
+      });
+    } else if (isBroadGenreTerm(term)) {
+      add("official-genre", `${term} official genre`, 2, { genre: term, weak: true, corroborating: false });
+    }
+  }
+
+  if (hasAnyTerm(queryText, targetGenres)) {
+    add("query", `${targetGenres.find((term) => containsNormalized(queryText, term)) || targetGenres[0]} search query`, 7, {
+      genre: targetGenres[0] || "",
+      queryOnly: true,
+      corroborating: false
+    });
+  }
+  if (track.discoveryLane === "adjacent" && hasAnyTerm(queryText, adjacentTerms)) {
+    add("query", "adjacent search query", 5, { queryOnly: true, corroborating: false });
+  }
+  if (sourceText && hasAnyTerm(sourceText, targetGenres)) {
+    add("source", "source lane mentions requested genre", 8, { genre: targetGenres[0] || "", corroborating: false });
+  }
+
+  for (const tasteEvidence of tasteGenreEvidenceFor(track, tasteProfile)) {
+    add(tasteEvidence.source, tasteEvidence.label, tasteEvidence.weight, {
+      corroborating: false
+    });
+  }
+
+  const positive = evidence.filter((item) => item.weight > 0);
+  const negative = evidence.filter((item) => item.weight < 0);
+  const total = positive.reduce((sum, item) => sum + item.weight, 0) + negative.reduce((sum, item) => sum + item.weight, 0);
+  const confidence = clamp(Math.round(total), 0, 100);
+  const corroboratingEvidence = evidence.filter((item) => item.corroborating && item.weight >= 10 && !item.queryOnly);
+  const strongNonQueryEvidence = evidence.filter((item) => item.source !== "query" && item.source !== "official-genre" && item.weight >= 18);
+  const queryEvidence = evidence.some((item) => item.queryOnly && item.weight > 0);
+  const nonQueryPositive = positive.some((item) => (
+    !item.queryOnly &&
+    !["official-genre", "darth-rating", "source"].includes(item.source)
+  ));
+  const weakOfficialGenre = officialGenreValues.some(isBroadGenreTerm) || officialTerms.some(isBroadGenreTerm);
+  const summaryItems = topGenreEvidence(evidence).map((item) => item.label);
+
+  return {
+    confidence,
+    inferredGenres: uniqueTerms(inferredGenres.filter((term) => !isBroadGenreTerm(term)), 5),
+    evidence: evidence
+      .sort((left, right) => right.weight - left.weight)
+      .slice(0, 8),
+    summary: summaryItems.join(", "),
+    weakOfficialGenre,
+    queryOnly: queryEvidence && !nonQueryPositive,
+    corroboratesRequested: Boolean(
+      !targetGenres.length ||
+      corroboratingEvidence.length ||
+      strongNonQueryEvidence.length ||
+      (confidence >= 35 && nonQueryPositive && !weakOfficialGenre)
+    )
+  };
 }
 
 function sceneEvidenceFor(track = {}, query = "", options = {}, profile = buildDiscoveryProfile(options)) {
@@ -1842,6 +2264,7 @@ function sceneEvidenceFor(track = {}, query = "", options = {}, profile = buildD
 function metadataCorroboratesRequestedGenre(track = {}, query = "", options = {}, profile = buildDiscoveryProfile(options)) {
   if (!profile.targetGenres?.length) return true;
   const metadataText = normalize(`${track.artist} ${track.title} ${track.album} ${labelText(track)}`);
+  const genreInference = genreInferenceFor(track, query, options, profile);
   const progressiveMetadata = profile.isProgressiveTarget && Boolean(
     matchingSceneArtist(track.artist) ||
     matchingSceneLabel(labelText(track)) ||
@@ -1852,6 +2275,7 @@ function metadataCorroboratesRequestedGenre(track = {}, query = "", options = {}
     progressiveMetadata ||
     requestedLabelMatch(track, profile) ||
     hasSeedArtistMatch(track, options, profile) ||
+    genreInference.corroboratesRequested ||
     scene.labelSeed ||
     (scene.artistAnchor && scene.metadataSceneEvidence) ||
     scene.metadataTarget ||
@@ -1873,17 +2297,18 @@ function sourceQualityReason(track = {}, options = {}, profile = buildDiscoveryP
 
   const query = cleanText(track.query);
   const scene = sceneEvidenceFor(track, query, options, profile);
+  const genreInference = genreInferenceFor(track, query, options, profile);
   const metadataOk = metadataCorroboratesRequestedGenre(track, query, options, profile);
   const targetOnlyInQuery = scene.queryTarget && !metadataOk;
   const adjacentOnlyInQuery = track.discoveryLane === "adjacent" &&
     hasAnyTerm(query, adjacentLaneTerms(profile, options)) &&
     !metadataOk;
 
-  if (targetOnlyInQuery) {
-    return "Requested genre appears only in the search query; TIDAL metadata does not corroborate the requested genre/scene.";
-  }
   if (adjacentOnlyInQuery) {
     return "Adjacent-lane genre appears only in the search query; TIDAL metadata does not corroborate the requested scene.";
+  }
+  if (targetOnlyInQuery || genreInference.queryOnly) {
+    return "Requested genre appears only in the search query; TIDAL metadata does not corroborate the requested genre/scene.";
   }
   if (weakCompilationText(track) && !metadataOk) {
     return "Compilation/playlist-style result lacks artist, label, or metadata corroboration for the requested genre.";
@@ -1926,6 +2351,15 @@ function seoSpamReason(track = {}, options = {}, profile = buildDiscoveryProfile
   const listOrVolume = /\b(?:vol(?:ume)?\.?\s*\d+|top\s*\d+|chart hits?|best\s+(?:of\s+)?|playlist|collection|compilation|dj mix|mix\s*\d+\s*hr|3hr|masters|anthems|essentials?|hits?|selection|selected works|various artists)\b/i.test(raw);
   const lifestyleKeywords = /\b(?:summer nights?|beach vibes?|beach|waves?|grooves?|cocktails?|workout|fitness|party|lounge|rooftop|sessions?|smooth|chill|background music|music for|motivation|focus|study|relaxing|spa|bar|restaurant)\b/i.test(raw);
   const marketingPhrase = /\b(?:this sound|night club energy|havana nights?|desert eyes?|midnight flow|endless city horizon|pulls you in|deep journey|club energy)\b/i.test(raw);
+  const functionalMusicText = /\b(?:music\s+for|for\s+(?:programming|coding|focus|studying|study|sleep|meditation|relaxation|healing|energy balance|cafe|caf[eé]|workout|spa)|programming\s+and\s+coding|coding music|studying music|sleeping music|relaxing music|chakra healing|deep meditation|public domain|background music)\b/i.test(raw);
+  const functionalMusicArtist = /\b(?:programming|coding|studying|sleeping|relaxing|relaxation|focus|meditation|healing|chill\s+house\s+music|music\s+caf[eé]|background music)\b/i.test(rawArtist);
+  const genreStyleParenthetical = rawTitle.match(/\([^)]{8,140}\)/g)?.some((part) => {
+    const normalizedPart = normalize(part);
+    const hasGenre = /\b(?:edm|electronic dance music|deep house|tech house|progressive house|melodic house|organic house|house|melodic techno|progressive techno|techno|progressive trance|psytrance|psy trance|trance|ambient|breaks|breakbeat|dubstep)\b/.test(normalizedPart);
+    const hasDescriptor = /\b(?:emotional|melodic|progressive|deep|organic|uplifting|dark|cinematic|driving|hypnotic|vocal|instrumental|club|dance|edm)\b/.test(normalizedPart);
+    return hasGenre && hasDescriptor && (part.includes("/") || /\bedm\b/.test(normalizedPart));
+  }) || false;
+  const artistLooksLikeMusicChannel = /\b(?:music|official|channel|sounds?|records?|recordings?)\b/i.test(rawArtist);
   const genreYearTag = /\|\s*[^|]*(?:house|techno|trance|ambient|breaks|breakbeat)[^|]*\|\s*(?:19\d{2}|20\d{2})\b/i.test(`${rawTitle} ${rawAlbum}`);
   const titleEqualsAlbum = normalize(rawTitle) && normalize(rawTitle) === normalize(rawAlbum);
   const titleOnlyYear = /^(?:19\d{2}|20\d{2})$/.test(rawTitle);
@@ -1942,6 +2376,10 @@ function seoSpamReason(track = {}, options = {}, profile = buildDiscoveryProfile
   if (distributorLabel && hasTargetGenreInTitle) return "Distributor-label genre upload looks like catalogue filler.";
   if (genreYearTag) return "Title looks like SEO genre/year tagging instead of a real track title.";
   if (shortGenreYearTitle) return "Title is just genre/year keywords, not a real track title.";
+  if (functionalMusicText || functionalMusicArtist) return "Functional/background music result looks like SEO catalogue filler.";
+  if (genreStyleParenthetical && (titleEqualsAlbum || artistLooksLikeMusicChannel || hasTargetGenreInTitle)) {
+    return "Title uses genre/style descriptor keywords like SEO catalogue filler.";
+  }
   if (hasTargetGenreInTitle && /\b(?:rework|genre remix|style remix)\b/i.test(rawTitle)) return "Title uses genre/remix keywords like catalogue filler.";
   if (hasTargetGenreInTitle && embeddedMarketingYear && (dateCode || catalogFillerNoun || romanOrVersionTail) && (shortCatalogCode || normalize(rawTitle).split(/\s+/).length >= 6 || normalize(rawAlbum).split(/\s+/).length >= 6)) {
     return "Title/album looks like SEO genre/date catalogue filler.";
@@ -1957,11 +2395,189 @@ function seoSpamReason(track = {}, options = {}, profile = buildDiscoveryProfile
   return "";
 }
 
+function belowMinimumSoftRejectReason(candidate = {}, profile = {}) {
+  if (!candidate.belowMinimum || !profile.targetGenres?.length) return "";
+  const breakdown = candidate.scoreBreakdown || {};
+  const score = Number(candidate.score || breakdown.total || 0);
+  const minimumScore = Number(candidate.minimumScore || 0);
+  const promptPercent = Number(breakdown.promptMatch?.percent || candidate.promptMatch?.percent || 0);
+  const genreMatch = Number(breakdown.genreMatch || 0);
+  const labelMatch = Number(breakdown.labelMatch || 0);
+  const freshness = Number(breakdown.freshness || 0);
+  const statusText = Array.isArray(candidate.statusChecks) ? candidate.statusChecks.join(" ") : "";
+  const trustedRoonAnchor = Boolean(
+    candidate.roonRescueSceneAnchor ||
+    candidate.roon?.artistCreditConfirmed ||
+    /\b(?:Roon scene anchor|Exact artist credit confirmed|Roon artist page crawl|Roon similar artist crawl)\b/i.test(statusText)
+  );
+  const trustedFreshLabelNearMiss = Boolean(
+    minimumScore &&
+    score >= minimumScore - 5 &&
+    labelMatch >= 15 &&
+    freshness >= 15 &&
+    genreMatch >= 4
+  );
+
+  if (score < 45) return "Below minimum and not close enough to keep as a soft fallback.";
+  if (trustedRoonAnchor && score >= 65) return "";
+  if (trustedFreshLabelNearMiss) return "";
+  if (promptPercent && promptPercent < 45) return "Below minimum with weak prompt match; not kept as a soft fallback.";
+  if (genreMatch < 8) return "Below minimum with weak requested-genre evidence; not kept as a soft fallback.";
+  return "";
+}
+
+function belowMinimumRescueNote(candidate = {}, softRejectReason = "", options = {}, profile = {}, historyEntry = null, allowPreviousSuggestions = false) {
+  if (!candidate.belowMinimum || !softRejectReason || !profile.targetGenres?.length) return "";
+  if (historyEntry && !allowPreviousSuggestions) return "";
+
+  const score = Number(candidate.score || candidate.scoreBreakdown?.total || 0);
+  const breakdown = candidate.scoreBreakdown || {};
+  const promptPercent = Number(breakdown.promptMatch?.percent || candidate.promptMatch?.percent || 0);
+  const freshness = Number(breakdown.freshness || 0);
+  const labelMatch = Number(breakdown.labelMatch || 0);
+  const artistMatch = Number(breakdown.artistMatch || 0);
+  const lengthPreference = Number(breakdown.lengthPreference || 0);
+  const genreMatch = Number(breakdown.genreMatch || 0);
+  const reason = cleanText(softRejectReason);
+  const yearRange = parseYearRange(options);
+  const track = candidate.tidal || candidate;
+
+  if (score < 50) return "";
+  if (/not close enough/i.test(reason) && score < 55) return "";
+  if (/weak prompt match/i.test(reason) && score < 52) return "";
+  if (promptPercent && promptPercent < 35 && score < 52) return "";
+  if (yearRange && !yearFits(track.year || candidate.year, yearRange, track.releaseDate || candidate.releaseDate)) return "";
+
+  const hasBallparkEvidence = Boolean(
+    freshness >= 15 ||
+    labelMatch >= 7 ||
+    artistMatch >= 11 ||
+    lengthPreference >= 15 ||
+    genreMatch >= 6 ||
+    requestedLabelMatch(track, profile) ||
+    hasSeedArtistMatch(track, options, profile)
+  );
+  if (!hasBallparkEvidence) return "";
+
+  return `Below-minimum branch-out fallback: ${reason}`;
+}
+
+function poolDiagnosticBucketFor(item = {}) {
+  const reason = normalize(item.reason || "");
+  if (!reason) return "Other discarded";
+  if (/\b(?:previously suggested|held back|history|already suggested|repeat)\b/.test(reason)) return "Previously suggested";
+  if (/\b(?:release|year|date|outside|range|canonical|reissue|remaster|older)\b/.test(reason)) return "Date/range mismatch";
+  if (/\b(?:seo|catalogue|catalog|filler|functional|background|keyword|genre year|genre date|compilation|chart style|playlist)\b/.test(reason)) return "SEO/catalog sludge";
+  if (/\b(?:below minimum|minimum|weak prompt|not close enough|weak requested genre)\b/.test(reason)) return "Below minimum / weak match";
+  if (/\b(?:outside the requested|genre vibe|requested genre|scene|wrong genre|corroborat|metadata does not confirm|query only)\b/.test(reason)) return "Weak genre/scene evidence";
+  if (/\b(?:search was for|pure search requested|requested .* returned|artist mismatch|same title wrong artist)\b/.test(reason)) return "Artist/search drift";
+  if (/\b(?:roon|queueable|queue action|exact queueable|best result)\b/.test(reason)) return "Roon not queueable";
+  if (/\b(?:tidal|verified|verification|fetch|timeout|timed out|circuit|token)\b/.test(reason)) return "TIDAL/API issue";
+  if (/\b(?:short|radio edit|single edit)\b/.test(reason)) return "Short/edit";
+  if (/\b(?:local model|model candidate|model)\b/.test(reason)) return "Model rejected";
+  return "Other discarded";
+}
+
+function incrementDiagnosticCount(map, label, amount = 1) {
+  const key = cleanText(label) || "Other discarded";
+  map.set(key, (map.get(key) || 0) + Number(amount || 1));
+}
+
+function sortedDiagnosticCounts(map = new Map(), limit = 8) {
+  return [...map.entries()]
+    .sort((left, right) => Number(right[1] || 0) - Number(left[1] || 0) || left[0].localeCompare(right[0]))
+    .slice(0, limit)
+    .map(([label, count]) => ({ label, count }));
+}
+
+function diagnosticExampleFor(item = {}) {
+  return {
+    label: cleanText([item.artist, item.title].filter(Boolean).join(" - ")) || cleanText(item.query) || "Unknown candidate",
+    reason: cleanText(item.reason || "No reason provided")
+  };
+}
+
+function buildPoolDiagnostics({
+  tracks = [],
+  alternates = [],
+  discarded = [],
+  scoreFiltered = [],
+  minimumRescueCandidates = [],
+  previousCandidates = [],
+  requestedCount = 0,
+  generated = 0,
+  candidatePoolTarget = 0,
+  usefulCandidateTarget = 0,
+  budgetExhausted = false,
+  laneSelection = {},
+  queryYield = {}
+} = {}) {
+  const bucketCounts = new Map();
+  const examplesByBucket = new Map();
+  for (const item of discarded) {
+    const bucket = poolDiagnosticBucketFor(item);
+    incrementDiagnosticCount(bucketCounts, bucket);
+    if (!examplesByBucket.has(bucket)) examplesByBucket.set(bucket, []);
+    const examples = examplesByBucket.get(bucket);
+    if (examples.length < 3) examples.push(diagnosticExampleFor(item));
+  }
+
+  const buckets = sortedDiagnosticCounts(bucketCounts, 8).map((bucket) => ({
+    ...bucket,
+    examples: examplesByBucket.get(bucket.label) || []
+  }));
+  const laneQuota = laneSelection?.quota || {};
+  const querySludge = Number(queryYield.seoRejects || 0) + Number(queryYield.genreRejects || 0);
+  const notes = [];
+  if (budgetExhausted) notes.push("Runtime budget was exhausted before every crawl/search path could finish.");
+  if (previousCandidates.length) notes.push(`${previousCandidates.length} previously suggested candidate${previousCandidates.length === 1 ? "" : "s"} held back for novelty.`);
+  if (minimumRescueCandidates.length) notes.push(`${minimumRescueCandidates.length} below-floor candidate${minimumRescueCandidates.length === 1 ? "" : "s"} were eligible as branch-out fallback.`);
+  if (queryYield.recordCount) notes.push(`${queryYield.attempted || 0} TIDAL search quer${queryYield.attempted === 1 ? "y" : "ies"} returned ${queryYield.returned || 0}; ${queryYield.accepted || 0} accepted by query-yield tracking.`);
+  if (querySludge) notes.push(`${querySludge} query-yield reject${querySludge === 1 ? "" : "s"} looked like SEO sludge or genre drift.`);
+  if (queryYield.prunedCount) notes.push(`${queryYield.prunedCount} historically low-yield quer${queryYield.prunedCount === 1 ? "y was" : "ies were"} skipped before spending crawl budget.`);
+  if (Array.isArray(queryYield.laneBudgetStops) && queryYield.laneBudgetStops.length) notes.push("Core search stopped early enough to reserve crawl time for later lanes.");
+  if (laneQuota?.enabled && laneQuota.rescueApplied) notes.push(`${laneQuota.rescueKept || 0} lower-confidence branch-out fallback${laneQuota.rescueKept === 1 ? "" : "s"} kept because the run undershot.`);
+
+  return {
+    requested: Number(requestedCount || 0),
+    generated: Number(generated || 0),
+    kept: tracks.length,
+    alternates: alternates.length,
+    discarded: discarded.length,
+    retainedPool: tracks.length + alternates.length,
+    candidatePoolTarget: Number(candidatePoolTarget || 0),
+    usefulCandidateTarget: Number(usefulCandidateTarget || 0),
+    budgetExhausted: Boolean(budgetExhausted),
+    scoreFiltered: scoreFiltered.length,
+    previousHeldBack: previousCandidates.length,
+    rescueAvailable: minimumRescueCandidates.length,
+    rescueKept: Number(laneQuota.rescueKept || tracks.filter((track) => track.belowMinimumRescue).length || 0),
+    queryYield: {
+      attempted: Number(queryYield.attempted || 0),
+      returned: Number(queryYield.returned || 0),
+      accepted: Number(queryYield.accepted || 0),
+      rejected: Number(queryYield.rejected || 0),
+      sludge: querySludge,
+      errors: Number(queryYield.errorCount || 0),
+      pruned: Number(queryYield.prunedCount || 0),
+      laneBudgetStops: Array.isArray(queryYield.laneBudgetStops) ? queryYield.laneBudgetStops.length : 0
+    },
+    lanes: {
+      selected: laneQuota.selected || {},
+      available: laneQuota.available || {},
+      targets: laneQuota.targets || {}
+    },
+    buckets,
+    notes
+  };
+}
+
 function isLikelySceneCandidate(track = {}, query = "", options = {}, profile = buildDiscoveryProfile(options)) {
   const metadataText = normalize(`${track.artist} ${track.title} ${track.album} ${labelText(track)}`);
   const text = normalize(`${metadataText} ${query}`);
   const wanted = normalize(`${options.request} ${options.genres} ${options.mood}`);
   const artistMatch = Boolean(matchingSceneArtist(track.artist));
+  const genreInference = profile.targetGenres.length ? genreInferenceFor(track, query, options, profile) : {};
 
   if (profile.isProgressiveTarget && wantsProgressiveHouseOnly(options)) {
     if (isTranceForwardArtist(track.artist)) return false;
@@ -1970,11 +2586,15 @@ function isLikelySceneCandidate(track = {}, query = "", options = {}, profile = 
 
   if (profile.isProgressiveTarget && artistMatch) return true;
   if (profile.isProgressiveTarget && wanted.includes("progressive")) {
-    return /\b(?:progressive|melodic|deep|organic|anjuna|anjunadeep|sudbeat|lost found|meanwhile|balance|bedrock|songspire|this never happened)\b/.test(text);
+    if (/\b(?:progressive|melodic|deep|organic|anjuna|anjunadeep|sudbeat|lost found|meanwhile|balance|bedrock|songspire|this never happened)\b/.test(text)) {
+      return true;
+    }
   }
 
   if (profile.targetGenres.length) {
     const scene = sceneEvidenceFor(track, query, options, profile);
+    if (genreInference.queryOnly) return false;
+    if (genreInference.corroboratesRequested && Number(genreInference.confidence || 0) >= 28) return true;
     if (requestedLabelMatch(track, profile)) return true;
     if (hasSeedArtistMatch(track, options, profile)) return true;
     if (scene.artistAnchor && scene.metadataSceneEvidence) return true;
@@ -1994,14 +2614,53 @@ function isLikelySceneCandidate(track = {}, query = "", options = {}, profile = 
   return true;
 }
 
+function artistMatchesRequested(trackArtist = "", requestedArtists = []) {
+  const actualArtists = splitArtists(trackArtist);
+  if (!actualArtists.length || !requestedArtists.length) return false;
+  return requestedArtists.some((requested) => actualArtists.some((actual) => (
+    containsEntityTerm(actual, requested) || containsEntityTerm(requested, actual)
+  )));
+}
+
+function requestedArtistMismatchReason(track = {}, profile = {}) {
+  if (profile.scoringMode !== "pure" || !profile.requestedArtists?.length) return "";
+  if (artistMatchesRequested(track.artist, profile.requestedArtists)) return "";
+  return `Pure Search requested ${profile.requestedArtists.join(", ")}, but TIDAL returned ${track.artist || "unknown artist"}.`;
+}
+
+function sceneCorroboratesArtistDrift(track = {}, options = {}, profile = buildDiscoveryProfile(options)) {
+  if (profile.scoringMode === "pure" || !profile.targetGenres?.length) return false;
+  const query = cleanText(track.query);
+  const scene = sceneEvidenceFor(track, query, options, profile);
+  const inference = genreInferenceFor(track, query, options, profile);
+  return Boolean(
+    requestedLabelMatch(track, profile) ||
+    matchingSceneLabel(labelText(track)) ||
+    scene.labelSeed ||
+    scene.metadataTarget ||
+    scene.metadataAdjacent ||
+    scene.queryLabel ||
+    (inference.corroboratesRequested && Number(inference.confidence || 0) >= 28)
+  );
+}
+
 function rejectReason(track = {}, options = {}, profile = buildDiscoveryProfile(options)) {
   const yearRange = parseYearRange(options);
+  const pureRequestedArtistMatch = Boolean(
+    profile.scoringMode === "pure" &&
+    profile.requestedArtists?.length &&
+    artistMatchesRequested(track.artist, profile.requestedArtists)
+  );
   const targetArtist = queryTargetArtist(track.query);
   if (targetArtist) {
     const target = normalize(targetArtist);
     const matchedTarget = normalize(track.artist).includes(target) || normalize(`${track.title} ${track.album}`).includes(target);
-    if (!matchedTarget) return `Search was for ${targetArtist}, but TIDAL returned ${track.artist}.`;
+    if (!matchedTarget && !sceneCorroboratesArtistDrift(track, options, profile)) {
+      return `Search was for ${targetArtist}, but TIDAL returned ${track.artist}.`;
+    }
   }
+  const requestedMismatch = requestedArtistMismatchReason(track, profile);
+  if (requestedMismatch) return requestedMismatch;
   if (yearRange?.dateSpecific && !track.releaseDate) return `No TIDAL release date for ${yearRange.label}.`;
   if (yearRange?.dateSpecific && !hasCanonicalReleaseForRange(track, yearRange)) return `No canonical TIDAL album/track release date for ${yearRange.label}.`;
   if (yearRange?.dateSpecific && !yearFits(track.year, yearRange, track.releaseDate)) return `TIDAL release date ${track.releaseDate || track.year || "unknown"} is outside ${yearRange.label}.`;
@@ -2013,15 +2672,15 @@ function rejectReason(track = {}, options = {}, profile = buildDiscoveryProfile(
   const seoReason = seoSpamReason(track, options, profile);
   if (seoReason) return seoReason;
   if (isShortEdit(track)) return "Short/radio edit.";
-  if (profile.targetGenres.length) {
+  if (profile.targetGenres.length && !pureRequestedArtistMatch) {
     const scene = sceneEvidenceFor(track, track.query, options, profile);
     if (scene.artistAnchor && !scene.metadataSceneEvidence) {
       return `Artist name matches ${scene.artistAnchor}, but TIDAL metadata does not confirm the requested genre/scene.`;
     }
   }
-  const sourceQuality = sourceQualityReason(track, options, profile);
+  const sourceQuality = pureRequestedArtistMatch ? "" : sourceQualityReason(track, options, profile);
   if (sourceQuality) return sourceQuality;
-  if (!isLikelySceneCandidate(track, track.query, options, profile)) return "Outside the requested genre/vibe lane.";
+  if (!pureRequestedArtistMatch && !isLikelySceneCandidate(track, track.query, options, profile)) return "Outside the requested genre/vibe lane.";
   return "";
 }
 
@@ -2107,6 +2766,8 @@ function lastFmAdjustmentFor(track = {}, scrobbleHistory = null, profile = {}) {
       boost = Math.min(4, boost + 1);
     } else if (profile.scoringMode === "explore") {
       boost = profileSeedArtistMatch(track, profile) ? 0 : -2;
+    } else if (profile.scoringMode === "taste-guided" && profile.hasExplicitDiscoveryIntent) {
+      boost = Math.min(boost, 1);
     } else if (profile.isGenreDiscoveryTarget && !profile.isProgressiveTarget) {
       boost = Math.min(boost, 1);
     }
@@ -2131,6 +2792,9 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
   const sceneArtist = profile.isProgressiveTarget ? matchingSceneArtist(track.artist) : "";
   const sceneLabel = profile.isProgressiveTarget ? matchingSceneLabel(labelText(track)) : "";
   const sceneEvidence = profile.targetGenres.length ? sceneEvidenceFor(track, track.query, options, profile) : {};
+  const genreInference = profile.targetGenres.length
+    ? genreInferenceFor(track, track.query, options, profile, tasteProfile)
+    : { confidence: 0, inferredGenres: [], evidence: [], summary: "", weakOfficialGenre: false, queryOnly: false, corroboratesRequested: true };
   const minutes = durationMinutes(track);
   const currentYear = new Date().getFullYear();
 
@@ -2217,6 +2881,10 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
   if (wanted.includes("hypnotic") && /\b(?:hypnotic|deep|dub|journey|extended)\b/.test(text)) genreMatch += 3;
   if (wanted.includes("driving") && /\b(?:driving|club|extended|peak|energy)\b/.test(text)) genreMatch += 3;
   if (profile.isGenreDiscoveryTarget && hasAnyTerm(text, profile.targetGenres)) genreMatch += 5;
+  if (profile.targetGenres.length) {
+    const inferredPoints = Math.round((Number(genreInference.confidence || 0) / 100) * SCORE_MAX.genreMatch);
+    genreMatch = Math.max(genreMatch, inferredPoints);
+  }
   genreMatch = clamp(genreMatch, 0, SCORE_MAX.genreMatch);
 
   const taste = typeof tasteProfile?.adjustmentFor === "function"
@@ -2233,6 +2901,7 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
     : { value: 0, reasons: [] };
   let tasteMin = profile.isGenreDiscoveryTarget ? -4 : -12;
   let tasteMax = profile.isGenreDiscoveryTarget ? 6 : 12;
+  if (profile.scoringMode === "taste-guided" && profile.hasExplicitDiscoveryIntent) tasteMax = Math.min(tasteMax, 4);
   let tasteAdjustment = clamp(taste.value || 0, tasteMin, tasteMax);
   if (profile.scoringMode === "pure") {
     tasteMin = 0;
@@ -2272,6 +2941,7 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
     artistMatch,
     lengthPreference,
     genreMatch,
+    genreInference,
     tasteAdjustment,
     tasteReasons: [...(taste.reasons || []), ...lastfmTaste.reasons],
     lastfmAdjustment: lastfmTaste.value,
@@ -2307,6 +2977,9 @@ function reasonFor(track = {}, options = {}, breakdown = null, profile = buildDi
   if (releaseValue) parts.push(`${releaseValue} TIDAL release`);
   if (sceneLabel) parts.push(`${sceneLabel} label fit`);
   if (sceneArtist) parts.push(`${sceneArtist} sits in the requested progressive lane`);
+  if (score.genreInference?.summary && Number(score.genreInference.confidence || 0) >= 35) {
+    parts.push(`genre inferred from ${score.genreInference.summary}`);
+  }
   if (!sceneArtist && hasAnyTerm(`${metadataText} ${track.query}`, profile.targetGenres)) parts.push(`${profile.targetGenres[0]} target fit`);
   if (track.discoveryLane === "adjacent") parts.push("adjacent-lane discovery");
   if (track.discoveryLane === "recent") parts.push("recent-year fallback");
@@ -2371,11 +3044,12 @@ function discoveryLaneQuotaPlan(requestedCount = 8, profile = {}) {
   const explore = profile.scoringMode === "explore";
   const similar = profile.scoringMode === "similar";
   const pure = profile.scoringMode === "pure";
+  const smallDiscoveryRequest = count >= 5 && count < 8 && !pure && !similar && Boolean(profile.targetGenres?.length || profile.vibeTerms?.length);
   const targets = {
     core: count >= 8 ? Math.max(2, Math.floor(count * (explore ? 0.35 : 0.45))) : Math.max(1, Math.ceil(count * 0.6)),
-    adjacent: count >= 8 ? Math.max(1, Math.floor(count * (explore ? 0.22 : 0.16))) : (explore && count >= 5 ? 1 : 0),
-    label: count >= 8 ? 1 : 0,
-    taste: !pure && count >= 8 ? Math.max(1, Math.floor(count * (similar ? 0.25 : 0.14))) : 0,
+    adjacent: count >= 8 ? Math.max(1, Math.floor(count * (explore ? 0.22 : 0.16))) : ((explore && count >= 5) || smallDiscoveryRequest ? 1 : 0),
+    label: count >= 8 ? 1 : (smallDiscoveryRequest ? 1 : 0),
+    taste: !pure && count >= 8 ? Math.max(1, Math.floor(count * (similar ? 0.25 : 0.14))) : (smallDiscoveryRequest ? 1 : 0),
     expanded: count >= 12 ? 1 : 0,
     recent: 0
   };
@@ -2556,17 +3230,19 @@ function selectDiscoveryLaneCandidates(candidates = [], requestedCount = 8, opti
     const bucketCount = bucketCounts.get(bucket) || 0;
     if (bucketCount >= bucketCap) return false;
 
-    const artistKey = primaryArtistKey(candidate);
+    const artistKeys = artistKeysForCandidate(candidate);
     const albumKey = normalize(candidate.album);
     const artistCap = caps.artistCap ?? maxPerPrimaryArtist;
     const albumCap = caps.albumCap ?? 1;
-    if (artistKey && (artistCounts.get(artistKey) || 0) >= artistCap) return false;
+    if (artistKeys.some((artistKey) => (artistCounts.get(artistKey) || 0) >= artistCap)) return false;
     if (albumKey && (albumCounts.get(albumKey) || 0) >= albumCap) return false;
 
     const keys = candidateIdentityKeys(candidate);
     for (const key of keys) selectedKeys.add(key);
     selected.push(withQuotaBucket(candidate, bucket, riskFor(candidate)));
-    if (artistKey) artistCounts.set(artistKey, (artistCounts.get(artistKey) || 0) + 1);
+    for (const artistKey of artistKeys) {
+      artistCounts.set(artistKey, (artistCounts.get(artistKey) || 0) + 1);
+    }
     if (albumKey) albumCounts.set(albumKey, (albumCounts.get(albumKey) || 0) + 1);
     bucketCounts.set(bucket, bucketCount + 1);
     return true;
@@ -2691,6 +3367,10 @@ function whyBulletsFor(track = {}, options = {}, breakdown = {}, historyEntry = 
   if (sceneLabel) bullets.push(`${sceneLabel} label match`);
   else if (label) bullets.push(`${label} label metadata`);
 
+  if (breakdown.genreInference?.summary && Number(breakdown.genreInference.confidence || 0) >= 35) {
+    bullets.push(`Genre inferred from ${breakdown.genreInference.summary}`);
+  }
+
   if (sceneArtist) bullets.push("Similar progressive/melodic lane");
   else if (profile.targetGenres.length && hasAnyTerm(text, profile.targetGenres)) bullets.push(`${profile.targetGenres[0]} target genre signal`);
   if (profile.vibeTerms.length && hasAnyTerm(text, profile.vibeTerms)) bullets.push(`${profile.vibeTerms[0]} seed-vibe signal`);
@@ -2738,27 +3418,46 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     throw new Error("TIDAL is not configured. Add TIDAL_CLIENT_ID/TIDAL_CLIENT_SECRET or TIDAL_ACCESS_TOKEN to .env.");
   }
 
+  const startedAt = Date.now();
+  const runtimeMs = Math.max(0, Number(options.discoveryRuntimeMs || options.maxRuntimeMs || 0));
+  const deadlineAt = runtimeMs ? startedAt + runtimeMs : 0;
+  let budgetExhausted = false;
+  function hasBudget(reserveMs = 0) {
+    if (!deadlineAt) return true;
+    return Date.now() + reserveMs < deadlineAt;
+  }
+  function noteBudgetExhausted() {
+    budgetExhausted = true;
+  }
+
   const profile = buildDiscoveryProfile(options);
   const originalRequestedCount = Number(options.originalRequestedCount || 0) || parseRequestedCount({ ...options, effectiveCount: 0 });
   const requestedCount = effectiveDiscoveryCount(options, profile);
   const strictRoonMode = /^(1|true|yes)$/i.test(String(options.requireRoonQueueable || ""));
   const yearRange = parseYearRange(options);
   const isYearCatalogSearch = Boolean(yearRange && profile.targetGenres.length);
+  const smallExactRequest = hasExplicitCountRequest(options) && originalRequestedCount <= 8;
+  const smallExactYearSearch = smallExactRequest && isYearCatalogSearch;
   const candidatePoolTarget = strictRoonMode
     ? (isYearCatalogSearch
       ? Math.min(160, Math.max(Math.ceil(requestedCount * 7), requestedCount + 54))
       : Math.min(650, Math.max(Math.ceil(requestedCount * 18), requestedCount + 260)))
     : (isYearCatalogSearch
-      ? Math.min(140, Math.max(Math.ceil(requestedCount * 7), requestedCount + 48))
+      ? (smallExactYearSearch
+        ? Math.min(180, Math.max(Math.ceil(requestedCount * 18), requestedCount + 95))
+        : Math.min(140, Math.max(Math.ceil(requestedCount * 7), requestedCount + 48)))
       : Math.min(140, Math.max(Math.ceil(requestedCount * 4), requestedCount + 35)));
   const usefulCandidateTarget = isYearCatalogSearch
-    ? Math.min(candidatePoolTarget, Math.max(Math.ceil(requestedCount * (strictRoonMode ? 4 : 3)), requestedCount + (strictRoonMode ? 28 : 18)))
+    ? (smallExactYearSearch
+      ? Math.min(candidatePoolTarget, Math.max(Math.ceil(requestedCount * 8), requestedCount + 36))
+      : Math.min(candidatePoolTarget, Math.max(Math.ceil(requestedCount * (strictRoonMode ? 4 : 3)), requestedCount + (strictRoonMode ? 28 : 18))))
     : candidatePoolTarget;
   const minScore = minimumScoreFor(options);
   const minScoreLabel = minimumScoreLabel(minScore);
   const queries = buildSearchQueries(options, tasteProfile, profile);
   const discarded = [];
   const scoreFiltered = [];
+  const minimumRescueCandidates = [];
   const previousCandidates = [];
   const byKey = new Map();
   const seenCandidateKeys = new Set();
@@ -2766,6 +3465,36 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
   const allowPreviousFallback = allowsPreviousDiscoveryFallback(options);
   const queryYieldRecords = new Map();
   const queryYieldAdjustments = [];
+  const queryYieldPruned = [];
+  const laneBudgetStops = [];
+
+  function searchConcurrencyFor(lane = "core") {
+    if (strictRoonMode) return 2;
+    if (options.autoBroadenLane === "relaxed-vibe") return 1;
+    if (isYearCatalogSearch) return smallExactYearSearch ? 2 : 2;
+    return lane === "recent" ? 1 : 2;
+  }
+
+  function reserveForRemainingLanes(lane = "core") {
+    if (!deadlineAt) return 0;
+    if (options.autoBroaden) return 2_500;
+    if (!profile.isGenreDiscoveryTarget) return 2_500;
+    if (lane === "core") return yearRange ? 10_000 : 6_000;
+    if (lane === "adjacent") return yearRange ? 5_000 : 3_500;
+    return 2_500;
+  }
+
+  function hasLaneBudget(lane = "core") {
+    const reserveMs = reserveForRemainingLanes(lane);
+    if (hasBudget(reserveMs)) return true;
+    noteBudgetExhausted();
+    laneBudgetStops.push({
+      lane,
+      reserveMs,
+      elapsedMs: Date.now() - startedAt
+    });
+    return false;
+  }
 
   function queryYieldRecordFor(query, lane = "core") {
     const text = cleanText(query);
@@ -2796,10 +3525,14 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
         lane,
         scoringMode: profile.scoringMode,
         genres: profile.targetGenres,
-        vibes: profile.vibeTerms
+        vibes: profile.vibeTerms,
+        prune: true
       });
       for (const item of ranked.adjustments || []) {
         queryYieldAdjustments.push({ ...item, lane });
+      }
+      for (const item of ranked.pruned || []) {
+        queryYieldPruned.push({ ...item, lane });
       }
       return ranked.queries || list;
     } catch {
@@ -2853,13 +3586,19 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       return {
         ...summary,
         enabled: Boolean(queryYieldTracker),
-        recordCount: records.length
+        recordCount: records.length,
+        prunedCount: queryYieldPruned.length,
+        pruned: queryYieldPruned.slice(0, 12),
+        laneBudgetStops: laneBudgetStops.slice(0, 8)
       };
     } catch (error) {
       return {
         ...summarizeRecords(records, queryYieldAdjustments),
         enabled: Boolean(queryYieldTracker),
         recordCount: records.length,
+        prunedCount: queryYieldPruned.length,
+        pruned: queryYieldPruned.slice(0, 12),
+        laneBudgetStops: laneBudgetStops.slice(0, 8),
         error: error.message
       };
     }
@@ -2878,7 +3617,17 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       return;
     }
 
-    const scoreBreakdown = scoreBreakdownFor(result, scoringOptions, tasteProfile, scoringProfile, scrobbleHistory);
+    const baseScoreBreakdown = scoreBreakdownFor(result, scoringOptions, tasteProfile, scoringProfile, scrobbleHistory);
+    const artistDiversity = artistDiversityAdjustmentFor(result, history, scoringProfile, scoringOptions);
+    const scoreBreakdown = {
+      ...baseScoreBreakdown,
+      total: clamp(Number(baseScoreBreakdown.total || 0) + Number(artistDiversity.value || 0), 1, 100),
+      artistDiversityAdjustment: artistDiversity.value || 0,
+      artistDiversityReasons: artistDiversity.reasons || []
+    };
+    const artistDiversityChecks = artistDiversity.value
+      ? [`Artist diversity ${artistDiversity.value}: ${artistDiversity.reasons.join("; ")}`]
+      : [];
     const candidate = {
       artist: result.artist,
       title: result.title,
@@ -2894,7 +3643,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       score: scoreBreakdown.total,
       scoreBreakdown,
       tidal: result,
-      statusChecks: discoveryStatusFor(result, historyEntry, false, scrobbleHistory),
+      statusChecks: [...discoveryStatusFor(result, historyEntry, false, scrobbleHistory), ...artistDiversityChecks],
       verificationSource: "tidal"
     };
     candidate.feedback = typeof tasteProfile?.getFeedbackFor === "function" ? tasteProfile.getFeedbackFor(candidate) : "";
@@ -2907,6 +3656,37 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       candidate.minimumScoreLabel = minScoreLabel;
       candidate.reason = `${candidate.reason}; below ${minScoreLabel} floor`;
       candidate.statusChecks = [...candidate.statusChecks, belowMinimumReason];
+      const softRejectReason = belowMinimumSoftRejectReason(candidate, scoringProfile);
+      if (softRejectReason) {
+        const rescueNote = belowMinimumRescueNote(
+          candidate,
+          softRejectReason,
+          scoringOptions,
+          scoringProfile,
+          historyEntry,
+          allowPreviousSuggestions
+        );
+        if (rescueNote) {
+          minimumRescueCandidates.push({
+            ...candidate,
+            belowMinimumRescue: true,
+            belowMinimumReason: softRejectReason,
+            reason: `${candidate.reason}; ${rescueNote}`,
+            why: [
+              ...(candidate.why || []),
+              "Kept as a lower-confidence branch-out fallback because the run undershot the requested count."
+            ],
+            statusChecks: Array.from(new Set([
+              ...(candidate.statusChecks || []),
+              softRejectReason,
+              "Below-minimum branch-out fallback"
+            ]))
+          });
+        }
+        if (context.tracked) recordQueryRejected(context.query, context.lane, softRejectReason);
+        discarded.push({ ...candidate, reason: softRejectReason });
+        return;
+      }
       scoreFiltered.push({
         ...candidate,
         reason: belowMinimumReason
@@ -2955,27 +3735,38 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
   const artistSeedLimit = isYearCatalogSearch
     ? (strictRoonMode
       ? Math.min(42, Math.max(30, requestedCount + 24))
-      : Math.min(26, Math.max(18, requestedCount + 12)))
+      : (smallExactYearSearch ? Math.min(24, Math.max(14, requestedCount + 10)) : Math.min(26, Math.max(18, requestedCount + 12))))
     : (strictRoonMode ? Math.max(12, Math.min(24, requestedCount + 8)) : Math.max(10, Math.min(18, requestedCount + 6)));
   const artistSeeds = buildArtistSeeds(options, artistSeedLimit, tasteProfile, profile);
   const hasGenreArtistAnchors = Boolean(profile.isGenreDiscoveryTarget && genreArtistAnchors(profile).length);
   const wantsDeepArtistCrawl = /\b(?:deep catalog|catalog crawl|discography|albums?|artist deep dive|accuracy|accurate|scrape)\b/i.test(`${options.request || ""} ${options.reference || ""}`);
   const useAlbumExpansion = !options.autoBroaden && (isYearCatalogSearch
-    ? Boolean(profile.isProgressiveTarget || profile.seedArtists.length || hasGenreArtistAnchors || wantsDeepArtistCrawl)
+    ? Boolean(strictRoonMode || profile.seedArtists.length || profile.requestedArtists.length || profile.isProgressiveTarget || hasGenreArtistAnchors || wantsDeepArtistCrawl)
     : (strictRoonMode || requestedCount <= 16 || wantsDeepArtistCrawl));
+  const albumExpansionReserveMs = smallExactYearSearch && runtimeMs
+    ? Math.max(8_000, Math.min(14_000, Math.floor(runtimeMs * 0.4)))
+    : 2_500;
 
   if (useAlbumExpansion) {
     const artistExpansionLimit = isYearCatalogSearch
-      ? (strictRoonMode ? Math.min(36, Math.max(26, requestedCount + 16)) : Math.min(20, Math.max(12, requestedCount + 6)))
+      ? (strictRoonMode
+        ? Math.min(36, Math.max(26, requestedCount + 16))
+        : (smallExactYearSearch
+          ? (requestedCount <= 2 ? Math.min(34, Math.max(24, requestedCount + 20)) : Math.min(12, Math.max(8, requestedCount + 5)))
+          : Math.min(20, Math.max(12, requestedCount + 6))))
       : (strictRoonMode ? (requestedCount >= 20 ? 14 : 10) : (requestedCount >= 20 ? 8 : 6));
     const artistsToExpand = artistSeeds.slice(0, artistExpansionLimit);
-    await mapWithConcurrency(artistsToExpand, isYearCatalogSearch ? 3 : 2, async (artist) => {
+    await mapWithConcurrency(artistsToExpand, isYearCatalogSearch ? (strictRoonMode ? 3 : 2) : 2, async (artist) => {
+      if (!hasBudget(albumExpansionReserveMs)) {
+        noteBudgetExhausted();
+        return;
+      }
       if (byKey.size >= usefulCandidateTarget) return;
       let albums = [];
       try {
         albums = await tidal.getArtistAlbums(artist, {
           limit: isYearCatalogSearch
-            ? (strictRoonMode ? 8 : 5)
+            ? (strictRoonMode ? 10 : 12)
             : (strictRoonMode ? (yearRange ? 12 : 6) : (yearRange ? 6 : 3))
         });
       } catch (error) {
@@ -2985,9 +3776,13 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
 
       let artistAccepted = 0;
       const perArtistLimit = isYearCatalogSearch
-        ? (strictRoonMode ? 3 : 2)
+        ? (strictRoonMode ? 3 : (smallExactYearSearch ? 1 : 2))
         : (strictRoonMode ? (requestedCount >= 20 ? 5 : 3) : (requestedCount >= 20 ? 3 : 2));
       for (const album of albums) {
+        if (!hasBudget(albumExpansionReserveMs)) {
+          noteBudgetExhausted();
+          break;
+        }
         if (artistAccepted >= perArtistLimit || byKey.size >= usefulCandidateTarget) break;
         if (yearRange && (!album.year || !yearFits(album.year, yearRange, album.releaseDate))) {
           discarded.push({
@@ -3001,7 +3796,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
         let tracks = [];
         try {
           tracks = await tidal.getAlbumTracks(album, {
-            limit: isYearCatalogSearch ? (strictRoonMode ? 5 : 3) : (strictRoonMode ? 7 : (yearRange ? 4 : 3))
+            limit: isYearCatalogSearch ? (strictRoonMode ? 5 : (smallExactYearSearch ? 4 : 3)) : (strictRoonMode ? 7 : (yearRange ? 4 : 3))
           });
         } catch (error) {
           discarded.push({ query: `${artist} ${album.title}`, reason: error.message });
@@ -3022,22 +3817,26 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
   }
 
   const searchQueries = isYearCatalogSearch
-    ? queries.slice(0, strictRoonMode ? 28 : 24)
+    ? queries.slice(0, strictRoonMode ? 28 : (smallExactYearSearch ? 28 : Math.min(14, Math.max(8, requestedCount + 6))))
     : queries;
-  const rankedSearchQueries = rankTrackedQueries(searchQueries, options.autoBroadenLane || "core");
-  if (byKey.size < usefulCandidateTarget) await mapWithConcurrency(rankedSearchQueries, 1, async (query) => {
+  const coreLane = options.autoBroadenLane || "core";
+  const rankedSearchQueries = rankTrackedQueries(searchQueries, coreLane);
+  if (byKey.size < usefulCandidateTarget) await mapWithConcurrency(rankedSearchQueries, searchConcurrencyFor(coreLane), async (query) => {
+    if (!hasLaneBudget(coreLane)) {
+      return;
+    }
     if (byKey.size >= usefulCandidateTarget) return;
     let results = [];
     try {
       results = await tidal.searchTracks(query, {
-        limit: strictRoonMode ? (isYearCatalogSearch ? 16 : 16) : (isYearCatalogSearch ? 12 : 6),
+        limit: strictRoonMode ? (isYearCatalogSearch ? 16 : 16) : (isYearCatalogSearch ? (smallExactYearSearch ? 12 : 8) : 6),
         detailLimit: yearRange?.dateSpecific
           ? (strictRoonMode ? 12 : 8)
-          : (yearRange ? (isYearCatalogSearch ? (strictRoonMode ? 5 : 4) : (strictRoonMode ? 5 : 3)) : (strictRoonMode ? 3 : 1))
+          : (yearRange ? (isYearCatalogSearch ? (strictRoonMode ? 5 : (smallExactYearSearch ? 4 : 2)) : (strictRoonMode ? 5 : 3)) : (strictRoonMode ? 3 : 1))
       });
-      recordQueryAttempt(query, options.autoBroadenLane || "core", results.length);
+      recordQueryAttempt(query, coreLane, results.length);
     } catch (error) {
-      recordQueryError(query, options.autoBroadenLane || "core");
+      recordQueryError(query, coreLane);
       discarded.push({ query, reason: error.message });
       return;
     }
@@ -3047,14 +3846,14 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
         ...result,
         discoverySource: cleanText(options.autoBroadenLabel) || discoverySourceForResult(result, options),
         discoveryLane: options.autoBroadenLane === "adjacent" ? "adjacent" : (result.discoveryLane || options.autoBroadenLane || "core")
-      }, options, profile, { query, lane: options.autoBroadenLane || "core", trackYield: true });
+      }, options, profile, { query, lane: coreLane, trackYield: true });
       if (byKey.size >= usefulCandidateTarget) break;
     }
   });
 
   const adjacentCandidateFloor = Math.min(
     usefulCandidateTarget,
-    Math.max(requestedCount + 8, Math.ceil(usefulCandidateTarget * 0.55))
+    Math.max(requestedCount + (smallExactYearSearch ? 12 : 8), Math.ceil(usefulCandidateTarget * (smallExactYearSearch ? 0.7 : 0.55)))
   );
   if (profile.isGenreDiscoveryTarget && byKey.size < adjacentCandidateFloor) {
     const usedQueries = new Set(searchQueries.map(normalize));
@@ -3063,15 +3862,18 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       .slice(0, isYearCatalogSearch ? (strictRoonMode ? 28 : 22) : 16);
     const rankedAdjacentQueries = rankTrackedQueries(adjacentQueries, "adjacent");
 
-    await mapWithConcurrency(rankedAdjacentQueries, 1, async (query) => {
+    await mapWithConcurrency(rankedAdjacentQueries, searchConcurrencyFor("adjacent"), async (query) => {
+      if (!hasLaneBudget("adjacent")) {
+        return;
+      }
       if (byKey.size >= usefulCandidateTarget) return;
       let results = [];
       try {
         results = await tidal.searchTracks(query, {
-          limit: strictRoonMode ? (isYearCatalogSearch ? 16 : 14) : (isYearCatalogSearch ? 12 : 8),
+          limit: strictRoonMode ? (isYearCatalogSearch ? 16 : 14) : (isYearCatalogSearch ? (smallExactYearSearch ? 12 : 8) : 8),
           detailLimit: yearRange?.dateSpecific
             ? (strictRoonMode ? 12 : 8)
-            : (yearRange ? (isYearCatalogSearch ? (strictRoonMode ? 5 : 4) : 3) : 2)
+            : (yearRange ? (isYearCatalogSearch ? (strictRoonMode ? 5 : (smallExactYearSearch ? 4 : 2)) : 3) : 2)
         });
         recordQueryAttempt(query, "adjacent", results.length);
       } catch (error) {
@@ -3100,7 +3902,10 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       .slice(0, strictRoonMode ? 72 : 56);
     const rankedRelaxedQueries = rankTrackedQueries(relaxedQueries, "recent");
 
-    await mapWithConcurrency(rankedRelaxedQueries, 1, async (query) => {
+    await mapWithConcurrency(rankedRelaxedQueries, searchConcurrencyFor("recent"), async (query) => {
+      if (!hasLaneBudget("recent")) {
+        return;
+      }
       if (byKey.size >= usefulCandidateTarget) return;
       let results = [];
       try {
@@ -3129,8 +3934,38 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
   const candidates = Array.from(byKey.values())
     .sort((left, right) => right.score - left.score || (right.durationMs || 0) - (left.durationMs || 0));
   const quotaCalibration = typeof tasteProfile?.read === "function" ? tasteProfile.read().calibration : null;
-  const laneSelection = selectDiscoveryLaneCandidates(candidates, requestedCount, options, profile, quotaCalibration);
-  const tracks = laneSelection.tracks;
+  let laneSelection = selectDiscoveryLaneCandidates(candidates, requestedCount, options, profile, quotaCalibration);
+  let tracks = laneSelection.tracks;
+  let minimumRescueKept = 0;
+
+  if (tracks.length < requestedCount && minimumRescueCandidates.length) {
+    const selectedKeys = new Set(tracks.flatMap(candidateIdentityKeys));
+    const rescuePool = minimumRescueCandidates
+      .filter((candidate) => !candidateIdentityKeys(candidate).some((key) => selectedKeys.has(key)))
+      .sort((left, right) => Number(right.score || 0) - Number(left.score || 0));
+
+    if (rescuePool.length) {
+      const rescuedSelection = selectDiscoveryLaneCandidates(
+        mergeCandidateLists(tracks, rescuePool),
+        requestedCount,
+        options,
+        profile,
+        quotaCalibration
+      );
+      tracks = rescuedSelection.tracks;
+      minimumRescueKept = tracks.filter((candidate) => candidate.belowMinimumRescue).length;
+      laneSelection = {
+        tracks,
+        alternates: mergeCandidateLists(rescuedSelection.alternates, laneSelection.alternates),
+        quota: {
+          ...(rescuedSelection.quota || {}),
+          rescueApplied: minimumRescueKept > 0,
+          rescueAvailable: rescuePool.length,
+          rescueKept: minimumRescueKept
+        }
+      };
+    }
+  }
 
   const fallbackAlternates = [];
   if (allowPreviousFallback && tracks.length < requestedCount && typeof history?.fallbackCandidates === "function") {
@@ -3183,6 +4018,11 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
           candidate.minimumScoreLabel = minScoreLabel;
           candidate.reason = `${candidate.reason}; below ${minScoreLabel} floor`;
           candidate.statusChecks = [...candidate.statusChecks, belowMinimumReason];
+          const softRejectReason = belowMinimumSoftRejectReason(candidate, profile);
+          if (softRejectReason) {
+            discarded.push({ ...candidate, reason: softRejectReason });
+            continue;
+          }
           scoreFiltered.push({
             ...candidate,
             reason: belowMinimumReason
@@ -3205,31 +4045,53 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     .filter((candidate) => !candidateIdentityKeys(candidate).some((key) => selectedKeys.has(key)))
     .concat(fallbackAlternates.filter((candidate) => !candidateIdentityKeys(candidate).some((key) => selectedKeys.has(key))))
     .slice(0, Math.max(160, requestedCount * 14));
+  const finalDiscarded = discarded.filter((candidate) => !candidateIdentityKeys(candidate).some((key) => selectedKeys.has(key)));
   const belowMinimumKept = tracks.filter((candidate) => candidate.belowMinimum).length;
   const belowMinimumAlternates = alternates.filter((candidate) => candidate.belowMinimum).length;
   const aboveMinimumKept = minScore ? Math.max(0, tracks.length - belowMinimumKept) : tracks.length;
+  const generated = tracks.length + alternates.length + finalDiscarded.length;
+  const queryYield = queryYieldSummary();
+  const poolDiagnostics = buildPoolDiagnostics({
+    tracks,
+    alternates,
+    discarded: finalDiscarded,
+    scoreFiltered,
+    minimumRescueCandidates,
+    previousCandidates,
+    requestedCount,
+    generated,
+    candidatePoolTarget,
+    usefulCandidateTarget,
+    budgetExhausted,
+    laneSelection,
+    queryYield
+  });
 
   return {
     requestedCount,
     tracks,
     alternates,
-    discarded,
+    discarded: finalDiscarded,
     verification: {
       enabled: true,
       tidal: true,
       requested: requestedCount,
       originalRequested: originalRequestedCount,
       countExpanded: requestedCount !== originalRequestedCount,
-      generated: tracks.length + alternates.length + discarded.length,
+      generated,
       kept: tracks.length,
-      discarded: discarded.length,
+      discarded: finalDiscarded.length,
+      runtimeMs: Date.now() - startedAt,
+      budgetExhausted,
       minScore,
       minScoreLabel,
-      scoreFiltered: scoreFiltered.length,
+      scoreFiltered: scoreFiltered.length + minimumRescueCandidates.length,
       belowMinimumKept,
       belowMinimumAlternates,
       aboveMinimumKept,
       minScoreSoftFallback: Boolean(minScore && belowMinimumKept),
+      belowMinimumRescueAvailable: minimumRescueCandidates.length,
+      belowMinimumRescueKept: minimumRescueKept || tracks.filter((candidate) => candidate.belowMinimumRescue).length,
       strategy: "tidal-catalog-first",
       novelty: !allowPreviousSuggestions,
       previouslySuggestedAllowed: allowPreviousSuggestions,
@@ -3254,7 +4116,8 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       modelCandidates: modelCandidates.length,
       taste: typeof tasteProfile?.summary === "function" ? tasteProfile.summary() : null,
       lastfm: scrobbleVerificationSummary(scrobbleHistory),
-      queryYield: queryYieldSummary()
+      queryYield,
+      poolDiagnostics
     }
   };
 }
@@ -3275,8 +4138,11 @@ module.exports = {
   scoreBreakdownFor,
   whyBulletsFor,
   buildDiscoveryProfile,
+  belowMinimumSoftRejectReason,
+  releaseFilterRequiresVerification,
   autoBroadenSearchPasses,
   discoveryQuotaBucket,
+  artistDiversityAdjustmentFor,
   selectDiscoveryLaneCandidates,
   normalizeScoringMode
 };

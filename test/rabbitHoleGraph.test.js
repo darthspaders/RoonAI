@@ -61,3 +61,38 @@ test("legacy graph cache entries are ignored after metadata verification tighten
   const graphStore = new RabbitHoleGraph({ file });
   assert.equal(graphStore.cached({ artist: "Abity", title: "Lonely" }), null);
 });
+
+test("similar artist expansion uses Last.fm artist similarity as controlled crawl seeds", async () => {
+  const previousFetch = global.fetch;
+  global.fetch = async (url) => {
+    assert.match(String(url), /method=artist\.getsimilar/);
+    return {
+      ok: true,
+      json: async () => ({
+        similarartists: {
+          artist: [
+            { name: "Related One", match: "0.98" },
+            { name: "Related Two", match: "0.82" },
+            { name: "Seed Artist", match: "0.7" }
+          ]
+        }
+      })
+    };
+  };
+
+  try {
+    const graphStore = new RabbitHoleGraph({ file: tempCacheFile() });
+    const artists = await graphStore.similarArtistsForSeeds(["Seed Artist"], {
+      config: { rabbitHole: { lastfmApiKey: "test-key", musicBrainz: false } }
+    }, {
+      seedLimit: 1,
+      perSeed: 3,
+      limit: 3
+    });
+
+    assert.deepEqual(artists.map((artist) => artist.name), ["Related One", "Related Two"]);
+    assert.equal(artists[0].source, "Last.fm similar");
+  } finally {
+    global.fetch = previousFetch;
+  }
+});

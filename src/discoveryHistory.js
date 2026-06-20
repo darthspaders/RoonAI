@@ -22,11 +22,20 @@ function trackKey(track = {}) {
   return `${normalize(track.artist)}|${normalize(track.title)}`;
 }
 
+function splitArtists(value) {
+  return cleanText(value)
+    .replace(/[â€â€‘â€’â€“â€”âˆ’]/g, "-")
+    .split(/\s*(?:,|;|\/|&|\+|\band\b)\s*/i)
+    .map(cleanText)
+    .filter((part) => part && part.length <= 60);
+}
+
 class DiscoveryHistory {
   constructor(options = {}) {
     this.file = options.file || path.join(__dirname, "..", "data", "discovery-history.json");
     this.maxEntries = Number(options.maxEntries || 800);
     this.recentWindowMs = Number(options.recentWindowMs || 1000 * 60 * 60 * 24 * 3);
+    this.artistRecentWindowMs = Number(options.artistRecentWindowMs || 1000 * 60 * 60 * 24 * 14);
     this.entries = new Map();
     this.load();
   }
@@ -64,6 +73,50 @@ class DiscoveryHistory {
     return [...this.entries.values()]
       .sort((left, right) => Number(right.lastShownAt || 0) - Number(left.lastShownAt || 0))
       .slice(0, Math.max(1, Number(limit || 80)));
+  }
+
+  artistStats() {
+    const stats = new Map();
+    for (const entry of this.entries.values()) {
+      const artists = splitArtists(entry.artist);
+      if (!artists.length) continue;
+      for (const artist of artists) {
+        const key = normalize(artist);
+        if (!key) continue;
+        const previous = stats.get(key) || {
+          artist,
+          trackCount: 0,
+          shownCount: 0,
+          lastShownAt: 0
+        };
+        previous.trackCount += 1;
+        previous.shownCount += Math.max(1, Number(entry.shownCount || 1));
+        previous.lastShownAt = Math.max(previous.lastShownAt, Number(entry.lastShownAt || 0));
+        stats.set(key, previous);
+      }
+    }
+    return stats;
+  }
+
+  artistExposureFor(track = {}, now = Date.now()) {
+    const artistKeys = splitArtists(track.artist).map(normalize).filter(Boolean);
+    if (!artistKeys.length) return null;
+
+    const stats = this.artistStats();
+    const exposures = artistKeys.map((key) => stats.get(key)).filter(Boolean);
+    if (!exposures.length) return null;
+
+    const exposure = exposures
+      .sort((left, right) => (
+        Number(right.shownCount || 0) - Number(left.shownCount || 0) ||
+        Number(right.trackCount || 0) - Number(left.trackCount || 0) ||
+        Number(right.lastShownAt || 0) - Number(left.lastShownAt || 0)
+      ))[0];
+
+    return {
+      ...exposure,
+      recent: Boolean(exposure.lastShownAt && now - Number(exposure.lastShownAt || 0) < this.artistRecentWindowMs)
+    };
   }
 
   record(tracks, now = Date.now()) {

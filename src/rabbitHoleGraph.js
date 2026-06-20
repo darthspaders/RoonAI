@@ -54,6 +54,11 @@ function uniqueBy(values, keyFn = normalize) {
   return result;
 }
 
+function isGenericArtistName(value = "") {
+  const text = normalize(value);
+  return !text || /^(?:various artists?|unknown artist|unknown|n a|na|va|v a|soundtrack|house music|techno music|trance music|psytrance|ambient music|electronic dance music|edm|dance music)$/.test(text);
+}
+
 function topWeighted(items, { limit = 12, key = (item) => item.name } = {}) {
   const map = new Map();
   for (const item of items || []) {
@@ -252,14 +257,14 @@ async function musicBrainzRelatedArtists(artistName, enabled = true) {
     .map((name) => entity("artist", name, { source: "MusicBrainz relation", weight: 5 }));
 }
 
-async function lastFmSimilarArtists(artistName, apiKey) {
+async function lastFmSimilarArtists(artistName, apiKey, limit = 12) {
   if (!apiKey || !artistName) return [];
   const url = new URL("https://ws.audioscrobbler.com/2.0/");
   url.searchParams.set("method", "artist.getsimilar");
   url.searchParams.set("artist", artistName);
   url.searchParams.set("api_key", apiKey);
   url.searchParams.set("format", "json");
-  url.searchParams.set("limit", "12");
+  url.searchParams.set("limit", String(Math.max(1, Math.min(50, Number(limit || 12)))));
   const json = await fetchJson(url.toString());
   return (json?.similarartists?.artist || [])
     .map((artist) => entity("artist", artist.name, { source: "Last.fm similar", weight: Math.round(Number(artist.match || 0) * 10) || 4 }))
@@ -400,6 +405,35 @@ class RabbitHoleGraph {
       return tracks;
     }
     return uniqueBy(tracks.filter((track) => track.artist && track.title), (track) => track.key || trackKey(track));
+  }
+
+  async similarArtistsForSeeds(artists = [], deps = {}, options = {}) {
+    const { config = {} } = deps;
+    const seedLimit = Math.max(1, Math.min(12, Number(options.seedLimit || 4)));
+    const perSeed = Math.max(1, Math.min(20, Number(options.perSeed || 6)));
+    const totalLimit = Math.max(1, Math.min(40, Number(options.limit || 12)));
+    const seedArtists = uniqueBy((Array.isArray(artists) ? artists : [])
+      .map(cleanText)
+      .filter((artist) => artist && !isGenericArtistName(artist)), normalize)
+      .slice(0, seedLimit);
+    const seedKeys = new Set(seedArtists.map(normalize));
+    const signals = [];
+
+    for (const artist of seedArtists) {
+      const lastFmSignals = await lastFmSimilarArtists(artist, config.rabbitHole?.lastfmApiKey, perSeed);
+      for (const item of lastFmSignals) {
+        if (isGenericArtistName(item.name) || seedKeys.has(normalize(item.name))) continue;
+        signals.push({
+          ...item,
+          seedArtist: artist,
+          source: item.source || "Last.fm similar",
+          sources: [...(item.sources || []), item.source || "Last.fm similar"].filter(Boolean)
+        });
+      }
+    }
+
+    return topWeighted(signals, { limit: totalLimit })
+      .filter((item) => !seedKeys.has(normalize(item.name)));
   }
 
   async createGraph(track = {}, deps = {}) {

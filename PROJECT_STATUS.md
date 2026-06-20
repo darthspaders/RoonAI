@@ -1,17 +1,19 @@
 # The Rabbit Hole - Project Status
 
-Last updated: 2026-06-12
+Last updated: 2026-06-20
 
 This repo is the local Roon/TIDAL/LLM discovery app called **The Rabbit Hole**. It runs as a Node.js web app at `http://localhost:3777` and talks to:
 
 - Roon Core via `node-roon-api`
-- TIDAL via configured API credentials
+- TIDAL catalogue APIs and optional TIDAL profile OAuth
 - Local or remote LLM provider via `src/llmClient.js`
 - Optional metadata sources: Last.fm, Discogs, MusicBrainz-style lookups, radio metadata enrichment
 
+Do not commit `.env`. Use `.env.example` for public config examples only.
+
 ## Current Runtime Setup
 
-The app is currently configured to use LM Studio through an OpenAI-compatible endpoint:
+The app is currently expected to use LM Studio through an OpenAI-compatible endpoint:
 
 ```env
 LLM_PROVIDER=openai-compatible
@@ -20,13 +22,9 @@ LLM_MODEL=qwen/qwen3.6-35b-a3b
 LLM_API_KEY=
 ```
 
-The LM Studio local server should be running on port `1234`, with `qwen/qwen3.6-35b-a3b` loaded. The app now checks `/api/llm-status` and should show whether the local model is actually reachable and loaded instead of always showing a green "Local model" indicator.
+LM Studio should be running on port `1234` with `qwen/qwen3.6-35b-a3b` loaded. The UI calls `/api/llm-status` and should show green only when the local model endpoint is reachable.
 
-Do not commit `.env`. Use `.env.example` for public config examples only.
-
-## How To Start
-
-From this folder:
+Start the app from the repo:
 
 ```powershell
 npm start
@@ -40,116 +38,94 @@ http://localhost:3777
 
 For phone/tablet access, use the LAN/Tailscale URL shown in the app. The server listens on `0.0.0.0:3777`.
 
-If port `3777` is already in use, another copy is already running. Either use the running app or stop the listener before restarting.
-
 ## What Works Now
 
-- Roon extension connection and authorization.
-- Roon output zone picker.
-- Roon now-playing display with album art.
-- Roon controls: previous, play/pause, stop, next, seek.
-- Live Roon queue display.
-- Current track is filtered out of the Rabbit Hole queue view when it appears as the now-playing item.
-- Queue actions:
-  - Add all to queue
-  - Add all next / top-ish queue behavior where Roon exposes an Add Next action
-  - Add individual tracks
-  - Add individual tracks next
-- TIDAL search and metadata verification.
-- TIDAL-first discovery with Roon used as verifier/playback engine.
-- Local LLM search-strategy planning for normal discovery searches.
-- Strict year/date catalogue searches avoid LLM hallucinated dates.
-- Release date filters:
-  - Today
-  - Yesterday
-  - Last 7 Days
-  - Last 30 Days
-  - Last 90 Days
-  - This Year
-  - Exact Date
-  - Date Range
-- Discovery scoring with readable badges.
-- Minimum match picker.
-- Taste profile ratings:
-  - Love = +3
-  - Good = +1
-  - OK = +0.5
-  - Skip = -1
-  - Never Again = -3
-- Candidate saves affect taste lightly through the candidate signal system.
-- Persistent track memory and taste memory.
-- Separate generated list ("Current Rabbit Hole") and saved list ("Playlist Candidates").
-- Cross-device UI updates through the event stream.
+- Roon extension connection, authorization, zone picker, now-playing, queue display, transport controls, seek, and album art.
+- Full-screen player mode, phone/tablet layout polish, larger artwork in landscape, and wake-lock support while in full-window player mode.
+- Roon queue actions: queue all, add all next, individual queue/add next/play, and title-first fallback search when an exact Roon match is hard to find.
+- TIDAL catalogue verification, metadata, artwork, release dates, and request timeout/circuit-breaker protection.
+- TIDAL profile OAuth with durable refresh token storage under ignored `data/tidal-profile-token.json`.
+- TIDAL profile Mixes & Radio page for official profile mixes exposed by the current OAuth API.
+- Pinned TIDAL items for hidden/mobile-only mix or radio URLs that the public OAuth API does not expose.
+- TIDAL queue bridge: generated/candidate lists can be sent to a temporary TIDAL playlist for easier queueing/import workflows.
+- Artist radio refresh logic that avoids re-adding the exact same queued/recent tracks where possible.
+- Last.fm public history/taste connection.
+- Candidate lists: multiple named lists, select target list before adding, move/remove entries, and jump-to-candidates controls.
+- Feedback controls: Love, Good, OK, Wrong Genre, Skip, Never Again.
 - Rabbit Hole graph for current tracks, with cached artist/label/related-entity exploration.
-- Radio metadata resolver for live/radio titles.
-- Radio program titles should not be treated as exact catalogue tracks when they look like long shows or station programs.
+- Roon Presence companion improvements: current track appears in Discord presence, local file art fallback is improved, and HQPlayer filter/rate is read conservatively.
 
-## Current LLM Behavior
+## Discovery Pipeline
 
-Normal discovery now asks the configured LLM for a search plan, not final track recommendations. The model returns target genres, vibe terms, seed artists, candidate artists, candidate labels, and search query ideas. The app then searches TIDAL/Roon and only real catalogue results can become output tracks. This is the controlled "give the model access to TIDAL" pattern: the model steers the search, while TIDAL/Roon remain the source of truth.
+The model does not directly invent final tracks. It proposes a search plan, and the app searches/verifies real catalogue results.
 
-The current intended discovery pipeline is:
+Current intended flow:
 
-1. User prompt and explicit filters
-2. LLM search-plan generation
-3. TIDAL catalogue candidate generation
-4. Metadata/semantic filtering
-5. Prompt-match and taste-match scoring
-6. Roon queueability verification
-7. Roon queue/playback actions
+1. User prompt, scoring mode, explicit filters, seed artist/playlist/current track.
+2. Intent parser maps prompt into controlled genre, vibe, era/date, length, artist/label, and track-characteristic fields.
+3. LLM generates a search plan: query ideas, seed artists, adjacent artists, labels, and related lanes.
+4. TIDAL catalogue searches generate candidate pools.
+5. Metadata, SEO, collision, date, duplicate, and wrong-genre filters prune the pool.
+6. Genre inference combines weak official tags with labels, artist relationships, prompt intent, Last.fm/history, and feedback.
+7. Discovery lane quotas keep a blend of core, adjacent, label, taste, and branch-out candidates.
+8. Roon verifies that final results are actually playable/queueable in the selected zone.
+9. The UI shows verified results, rejected counts, pool diagnostics, and queue outcomes.
 
-Roon should not be the primary discovery engine. Roon is the verifier and playback layer.
+Scoring modes:
 
-This should cause LM Studio GPU activity when generating a playlist. If Task Manager only moves when chatting directly in LM Studio but not when pressing Generate, check:
-
-1. `/api/llm-status`
-2. `LLM_PROVIDER`
-3. `LLM_BASE_URL`
-4. `LLM_MODEL`
-5. Response verification fields: `modelPlan`, `modelPlanQueryCount`, `modelProvider`, `modelName`, and `modelError`
-6. Server logs for timeout information
-
-Year/date strict searches still rely on catalogue metadata for release dates. The model can propose search strategy for a date-limited run, but it is not trusted for dates or availability.
+- Taste Guided: default. Prompt first, taste as a soft guide.
+- Pure Search: follow the prompt with minimal taste bias.
+- Explore Mode: intentionally branch outside the known taste cluster.
+- Similar Mode: lean heavily on liked artists/labels/tracks.
 
 ## Recent Important Changes
 
-- Added real LLM health detection instead of static "Local model" green status.
-- Added LM Studio/OpenAI-compatible flow to the discovery pipeline.
-- Replaced LLM track-name generation with LLM search planning so the model cannot hallucinate unavailable tracks into the results.
-- Increased LLM timeout for model planning.
-- Added context/token-limit messaging in the UI for model failures.
-- Added Roon query generation from LLM candidates.
-- Added prompt-vs-taste explanation for result cards:
-  - Prompt Match percentage
-  - Taste Match percentage
-  - Inferred genre/lane
-  - Human-readable reason bullets
-- Added broader genre discovery behavior so non-progressive genres are not punished as hard by a progressive-heavy taste profile.
-- Added release date filters down to exact day.
-- Reduced HQPlayer polling and cached filter/rate to avoid playback pops.
-- Added OK rating.
-- Added "Add Next" style queue controls.
+- Added controlled electronic music ontology so `progressive psytrance`, `psychedelic trance`, `progressive house`, `tech house`, and `melodic techno` do not collapse into the same bucket.
+- Added Intent Parsed debug card with requested genre, vibe, vibe source, era/date, length, characteristics, artist seed, labels, scoring mode, learned taste strength, and progressive-bias state.
+- Added Discovery Lane Quotas so one artist/label/taste source cannot monopolize a run.
+- Added pool diagnostics: generated/kept/discarded, top rejection reasons, lane availability, query yield, skipped/pruned query families, runtime exhaustion, and below-minimum rescue notes.
+- Added query-yield memory so bad query templates are ranked down or pruned on future crawls.
+- Increased strict catalogue crawl runtime modestly and added conservative search parallelism/reserved budget per lane.
+- Added broader artist crawl/branching so discovery can use similar artists without becoming only "more of the same".
+- Added stronger Pure Search behavior so liked artists should not override explicit artist/prompt requests.
+- Added exact artist audit option and better artist-collision handling for names shared by unrelated artists.
+- Added better below-minimum handling: near-miss candidates can be shown when they are in the ballpark, but diagnostics explain why.
+- Added wrong-genre feedback path separate from ordinary dislikes.
+- Added TIDAL OAuth/profile mix tools and pinned TIDAL item import for hidden mobile-only mixes/radios.
 
-## Known Issues
+## Known Issues / Watch Points
 
-- Discovery can still return fewer tracks than requested when strict Roon queueable matching and high minimum score filters are active.
-- Roon/TIDAL matching is still the hardest part. Roon may find a track manually but not expose a queue action through the same Browse API path.
-- Queue count/time can disagree with Roon's own UI, especially around the currently playing item and queue subscription updates.
-- Some generated searches still over-focus on a few artists or labels if the taste profile is narrow.
-- Artist normalization still needs cleanup for names like `D-Nox`; it previously split into `D` and `Nox`.
-- Genre-only searches need more testing across tech house, rock, 80s, trance, and non-progressive genres.
-- Radio metadata is improved but still needs edge-case testing for long DJ shows and station titles.
-- GitHub push failed because the remote repo URL was not found or the repo had not been created yet.
+- Discovery can still return fewer tracks than requested when strict year/date, novelty, Roon queueability, and minimum-score filters all collide.
+- TIDAL/Roon matching remains difficult. Roon may find a track manually but not expose the same queueable action through Browse API search.
+- Some TIDAL mobile-only shelves, especially the full Mixes & Radio shelf, appear to require legacy/private scopes not granted by normal third-party OAuth. Use pinned TIDAL URLs as a practical workaround.
+- Genre inference is improving but still needs real-world tuning. Official genre tags are often just `Electronic`, so label/artist/radio/taste evidence must stay visible in diagnostics.
+- Search can still over-focus on familiar artists if the prompt, seed, and learned taste all point to the same cluster. Lane quotas help but need more tuning.
+- Date filters rely on catalogue metadata, which may reflect album/compilation date rather than original track release date.
+- Roon queue count/time can disagree with Roon's own UI around current-track filtering and queue subscription timing.
+- TIDAL OAuth refresh and playlist write behavior should be monitored after long idle periods.
+
+## Verification Status
+
+Before this handoff pass:
+
+- `npm run check` passed.
+- `npm test` passed with 124 tests.
+- `npm audit --audit-level=moderate` found 0 vulnerabilities.
+
+Run these again after any next change:
+
+```powershell
+npm run check
+npm test
+npm audit --audit-level=moderate
+```
 
 ## Git State
 
-At handoff time, there were modified app files in the worktree. Do not reset or discard them unless the user explicitly asks.
+This handoff is intended to be committed and pushed after the final cleanup/docs update. If a push fails, check the remote:
 
-The initial commit was made earlier, but the remote push failed with:
-
-```text
-remote: Repository not found.
-fatal: repository 'https://github.com/darthspaders/RoonAI.git/' not found
+```powershell
+git remote -v
 ```
 
-Likely next step: create the GitHub repo or correct the remote URL, then push again.
+The old push failure was caused by a missing or incorrect GitHub remote. Do not reset or discard worktree changes unless the user explicitly asks.

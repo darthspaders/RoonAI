@@ -85,6 +85,14 @@ function cleanLookupText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function normalizeScoringMode(options = {}) {
+  const key = normalizeLookupText(options.scoringMode || options.scoring_mode || options.mode || "taste-guided");
+  if (["pure", "pure search", "search only", "unbiased"].includes(key)) return "pure";
+  if (["explore", "explore mode", "outside taste", "outside known taste"].includes(key)) return "explore";
+  if (["similar", "similar mode", "similarity", "liked"].includes(key)) return "similar";
+  return "taste-guided";
+}
+
 function requestUsesNowPlayingAsSeed(options = {}) {
   const request = cleanLookupText(options.request);
   const text = normalizeLookupText(`${options.request || ""} ${options.reference || ""}`);
@@ -98,6 +106,46 @@ function positiveIntentText(value = "") {
     .replace(/\b(?:do\s+not|don't|dont|avoid|exclude|without|skip|no)\b[^.?!;,\n]*/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeEntityCandidate(value) {
+  const text = cleanLookupText(value)
+    .replace(/^(?:the\s+)?(?:artist|band|producer|label|record label)\s+/i, "")
+    .replace(/\s+[-\u2010-\u2015\u2212]\s+.+$/, "")
+    .replace(/\s+\b(?:tracks?|songs?|music|catalogue|catalog|discography|releases?)\b$/i, "")
+    .trim();
+  if (!text || text.length < 2 || text.length > 80) return "";
+  if (/\b(?:what is playing|currently playing|current track|now playing)\b/i.test(text)) return "";
+  if (/^(?:this|that|current|playing|now|music|tracks?|songs?|genre|vibe|style|era)$/i.test(text)) return "";
+  if (/^(?:the\s+)?(?:\d{4}s?|\d0s|19\d0s|20\d0s|2000s|00s|nineties|eighties|seventies|era|decade)$/i.test(text)) return "";
+  return text;
+}
+
+function extractPromptArtists(options = {}) {
+  const request = cleanLookupText(options.request).replace(/\blby\b/gi, "by");
+  const found = [];
+  for (const match of request.matchAll(/\b(?:like|similar to|sounds? like|around|based on|in the vein of|for fans of)\s+(.+?)\s+[-\u2010-\u2015\u2212]\s+(.+?)(?=,|;|$)/gi)) {
+    const artist = normalizeEntityCandidate(match[1]);
+    if (artist) found.push(artist);
+  }
+  const patterns = [
+    /\b(?:like|similar to|sounds? like|around|based on|in the vein of|for fans of)\s+([^,;]+?)(?=\s+\b(?:but|with|from|released|that|who|where|and|or)\b|[,;]|$)/gi,
+    /\b(?:by|from)\s+([^,.;]+?)(?=\s+\b(?:but|with|released|that|who|where|and|or)\b|[,.;]|$)/gi
+  ];
+  for (const pattern of patterns) {
+    for (const match of request.matchAll(pattern)) {
+      const artist = normalizeEntityCandidate(match[1]);
+      if (artist && !/\b(?:label|records|recordings)\b/i.test(artist)) found.push(artist);
+    }
+  }
+  return Array.from(new Set(found.map(cleanLookupText).filter(Boolean))).slice(0, 12);
+}
+
+function requestedArtistSeeds(options = {}) {
+  return Array.from(new Set([
+    ...(Array.isArray(options.requestedArtists) ? options.requestedArtists : []),
+    ...extractPromptArtists(options)
+  ].map(cleanLookupText).filter((artist) => artist && !isGenericDiscoverySeedArtist(artist)))).slice(0, 12);
 }
 
 function splitLookupArtists(value) {
@@ -172,6 +220,7 @@ function createRoonSearchQueries(track = {}) {
   const guestlessTitle = cleanLookupText(stripGuestCredits(title));
   const guestlessVersionlessTitle = cleanLookupText(stripVersionDescriptors(guestlessTitle));
   const album = normalizeLookupText(lookup.album) === normalizeLookupText(title) ? "" : cleanLookupText(lookup.album);
+  const year = cleanLookupText(lookup.year);
   const artists = splitLookupArtistAliases(lookup.artist).slice(0, 4);
   const titles = Array.from(new Set([
     title,
@@ -182,6 +231,30 @@ function createRoonSearchQueries(track = {}) {
     guestlessVersionlessTitle
   ].map(cleanLookupText).filter(Boolean)));
   const searches = [];
+  const primaryArtist = artists[0] || "";
+
+  if (primaryArtist && title) {
+    searches.push(`${primaryArtist} ${title}`);
+    searches.push(`${title} ${primaryArtist}`);
+  }
+  if (primaryArtist && safeTitle && safeTitle !== title) {
+    searches.push(`${primaryArtist} ${safeTitle}`);
+    searches.push(`${safeTitle} ${primaryArtist}`);
+  }
+  if (primaryArtist && versionlessTitle && versionlessTitle !== title && versionlessTitle !== safeTitle) {
+    searches.push(`${primaryArtist} ${versionlessTitle}`);
+    searches.push(`${versionlessTitle} ${primaryArtist}`);
+  }
+  if (primaryArtist && album) {
+    searches.push(`${primaryArtist} ${title} ${album}`);
+    searches.push(`${title} ${primaryArtist} ${album}`);
+    searches.push(`${title} ${album} ${primaryArtist}`);
+    searches.push(`${album} ${title} ${primaryArtist}`);
+  }
+  if (primaryArtist && year) {
+    searches.push(`${primaryArtist} ${title} ${year}`);
+    searches.push(`${title} ${primaryArtist} ${year}`);
+  }
 
   for (const candidateTitle of titles) {
     for (const artist of artists) {
@@ -204,7 +277,7 @@ function createRoonSearchQueries(track = {}) {
   if (title) searches.push(title);
   if (versionlessTitle && versionlessTitle !== title) searches.push(versionlessTitle);
 
-  return Array.from(new Set(searches.map(cleanLookupText).filter(Boolean))).slice(0, 14);
+  return Array.from(new Set(searches.map(cleanLookupText).filter(Boolean))).slice(0, 28);
 }
 
 function splitDiscoveryTerms(value) {
@@ -238,6 +311,16 @@ function extractReferenceTracks(value, limit = 80) {
   return tracks;
 }
 
+function isGenericDiscoverySeedArtist(value = "") {
+  const text = normalizeLookupText(value);
+  if (!text) return true;
+  if (/^(?:various artists?|unknown artist|unknown|n a|na|va|v a|soundtrack)$/i.test(cleanLookupText(value))) return true;
+  if (/^(?:house music|techno music|trance music|psytrance|ambient music|electronic dance music|edm|deep house|progressive house|melodic house|organic house|tech house|dance music)$/i.test(cleanLookupText(value))) return true;
+  const parts = splitLookupArtists(value);
+  if (parts.length >= 3 && /\b(?:house|techno|trance|psytrance|ambient|edm|music)\b/.test(text)) return true;
+  return false;
+}
+
 function extractYearSearchTerms(value) {
   return extractSharedYearSearchTerms(value);
 }
@@ -250,13 +333,117 @@ function derivedGenreTerms(options = {}) {
   return Array.from(new Set(pruneBroadDiscoveryTerms(terms).map(cleanLookupText).filter(Boolean))).slice(0, 8);
 }
 
+const PROGRESSIVE_SCENE_ARTISTS = [
+  "Hernan Cattaneo",
+  "Nick Warren",
+  "Guy J",
+  "Khen",
+  "Dmitry Molosh",
+  "GMJ",
+  "Matter",
+  "Hobin Rude",
+  "Kamilo Sanclemente",
+  "Roger Martinez",
+  "Simone Vitullo",
+  "Simos Tagias",
+  "Ezequiel Arias",
+  "Marsh",
+  "Lane 8",
+  "Joris Voorn"
+];
+
+const PROGRESSIVE_SCENE_LABELS = [
+  "Sudbeat",
+  "Mango Alley",
+  "Movement Recordings",
+  "Proton Music",
+  "Meanwhile",
+  "The Soundgarden",
+  "Bedrock",
+  "Anjunadeep",
+  "This Never Happened",
+  "Selador"
+];
+
+const PSYTRANCE_SCENE_ARTISTS = [
+  "Astrix",
+  "Ace Ventura",
+  "Liquid Soul",
+  "Captain Hook",
+  "Perfect Stranger",
+  "Freedom Fighters",
+  "Outsiders",
+  "Symbolic",
+  "Protonica",
+  "Ritmo",
+  "E-Clip",
+  "Flegma",
+  "Zyce",
+  "Sideform",
+  "Atacama",
+  "Egorythmia",
+  "Sonic Species"
+];
+
+const PSYTRANCE_SCENE_LABELS = [
+  "Iboga Records",
+  "Iono Music",
+  "Nano Records",
+  "Spin Twist Records",
+  "Blue Tunes Records",
+  "Digital Om",
+  "TechSafari Records",
+  "Sacred Technology",
+  "JOOF Recordings",
+  "TesseracTstudio"
+];
+
+function requestedDiscoveryFamilies(options = {}) {
+  const request = cleanLookupText(options.request);
+  const positiveRequest = positiveIntentText(options.request || "");
+  const genres = derivedGenreTerms(options);
+  const text = normalizeLookupText(`${positiveRequest} ${genres.join(" ")}`);
+  return {
+    wantsPsytrance: /\b(?:psytrance|psy trance|psychedelic trance|progressive psytrance|goa trance)\b/.test(text),
+    wantsProgressive: !/\b(?:psytrance|psy trance|psychedelic trance|progressive psytrance|goa trance)\b/.test(text) &&
+      /\b(?:progressive house|melodic progressive|deep progressive|organic progressive)\b/.test(text),
+    wantsRetro: /\b(?:80s|eighties|new wave|synth pop|synthwave|retro)\b/.test(normalizeLookupText(`${request} ${options.mood || ""}`))
+  };
+}
+
+function createRoonCrawlArtists(options = {}, limit = 18) {
+  const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
+  const references = extractReferenceTracks(options.reference, 100);
+  const { wantsPsytrance, wantsProgressive } = requestedDiscoveryFamilies(options);
+  const requestedArtists = requestedArtistSeeds(options);
+  const pureRequestedArtistSearch = normalizeScoringMode(options) === "pure" && requestedArtists.length;
+  const artists = [
+    ...requestedArtists,
+    ...(pureRequestedArtistSearch ? [] : [
+      ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
+      ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : []),
+      ...(requestUsesNowPlayingAsSeed(options) ? [options.nowPlaying?.artist] : []),
+      ...references.map((track) => track.artist),
+      ...(wantsProgressive ? PROGRESSIVE_SCENE_ARTISTS : []),
+      ...(wantsPsytrance ? PSYTRANCE_SCENE_ARTISTS : [])
+    ])
+  ];
+  return Array.from(new Set(artists.map(cleanLookupText).filter((artist) => (
+    artist &&
+    !isGenericDiscoverySeedArtist(artist)
+  )))).slice(0, limit);
+}
+
 function createRoonDiscoveryQueries(options = {}) {
   const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
   const planQueries = Array.isArray(plan.searchQueries) ? plan.searchQueries.map(cleanLookupText).filter(Boolean) : [];
-  const planArtists = Array.from(new Set([
+  const requestedArtists = requestedArtistSeeds(options);
+  const pureRequestedArtistSearch = normalizeScoringMode(options) === "pure" && requestedArtists.length;
+  const planArtists = pureRequestedArtistSearch ? [] : Array.from(new Set([
     ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
-    ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : [])
-  ].map(cleanLookupText).filter(Boolean))).slice(0, 24);
+    ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : []),
+    ...(Array.isArray(options.similarArtistSeeds) ? options.similarArtistSeeds : [])
+  ].map(cleanLookupText).filter((artist) => artist && !isGenericDiscoverySeedArtist(artist)))).slice(0, 24);
   const planLabels = Array.isArray(plan.candidateLabels) ? plan.candidateLabels.map(cleanLookupText).filter(Boolean).slice(0, 24) : [];
   const planGenres = Array.isArray(plan.targetGenres) ? plan.targetGenres.map(cleanLookupText).filter(Boolean).slice(0, 12) : [];
   const planVibes = Array.isArray(plan.vibeTerms) ? plan.vibeTerms.map(cleanLookupText).filter(Boolean).slice(0, 12) : [];
@@ -266,134 +453,111 @@ function createRoonDiscoveryQueries(options = {}) {
   const moods = Array.from(new Set([...planVibes, ...splitDiscoveryTerms(options.mood)].map(cleanLookupText).filter(Boolean))).slice(0, 16);
   const years = extractYearSearchTerms(options.years || positiveRequest || request);
   const references = extractReferenceTracks(options.reference, 100);
+  const useLabelQueries = !pureRequestedArtistSearch && !/^(1|true|yes)$/i.test(String(options.disableRoonLabelQueries || ""));
   const seedArtists = Array.from(new Set([
+    ...requestedArtists,
     ...planArtists,
-    ...(requestUsesNowPlayingAsSeed(options) ? [options.nowPlaying?.artist] : []),
-    ...references.map((track) => track.artist)
-  ].map(cleanLookupText).filter(Boolean))).slice(0, 18);
-  const progressiveText = normalizeLookupText(`${positiveRequest} ${genres.join(" ")}`);
-  const wantsPsytrance = /\b(?:psytrance|psy trance|psychedelic trance|progressive psytrance|goa trance)\b/.test(progressiveText);
-  const wantsProgressive = !wantsPsytrance && /\b(?:progressive house|melodic progressive|deep progressive|organic progressive)\b/.test(progressiveText);
-  const retroText = normalizeLookupText(`${request} ${moods.join(" ")}`);
-  const wantsRetro = /\b(?:80s|eighties|new wave|synth pop|synthwave|retro)\b/.test(retroText);
-  const sceneArtists = wantsProgressive ? [
-    "Hernan Cattaneo",
-    "Nick Warren",
-    "Guy J",
-    "Khen",
-    "Dmitry Molosh",
-    "GMJ",
-    "Matter",
-    "Hobin Rude",
-    "Kamilo Sanclemente",
-    "Roger Martinez",
-    "Simone Vitullo",
-    "Simos Tagias",
-    "Ezequiel Arias",
-    "Marsh",
-    "Lane 8",
-    "Joris Voorn"
-  ] : [];
-  const sceneLabels = wantsProgressive ? [
-    "Sudbeat",
-    "Mango Alley",
-    "Movement Recordings",
-    "Proton Music",
-    "Meanwhile",
-    "The Soundgarden",
-    "Bedrock",
-    "Anjunadeep",
-    "This Never Happened",
-    "Selador"
-  ] : [];
-  const psyArtists = wantsPsytrance ? [
-    "Astrix",
-    "Ace Ventura",
-    "Liquid Soul",
-    "Captain Hook",
-    "Perfect Stranger",
-    "Freedom Fighters",
-    "Outsiders",
-    "Symbolic",
-    "Protonica",
-    "Ritmo",
-    "E-Clip",
-    "Flegma",
-    "Zyce",
-    "Sideform",
-    "Atacama",
-    "Egorythmia",
-    "Sonic Species"
-  ] : [];
-  const psyLabels = wantsPsytrance ? [
-    "Iboga Records",
-    "Iono Music",
-    "Nano Records",
-    "Spin Twist Records",
-    "Blue Tunes Records",
-    "Digital Om",
-    "TechSafari Records",
-    "Sacred Technology",
-    "JOOF Recordings",
-    "TesseracTstudio"
-  ] : [];
-  const retroTerms = wantsRetro ? ["synthwave", "new wave", "synth pop", "80s", "retro", "nu disco"] : [];
+    ...(pureRequestedArtistSearch ? [] : [
+      ...(requestUsesNowPlayingAsSeed(options) ? [options.nowPlaying?.artist] : []),
+      ...references.map((track) => track.artist)
+    ])
+  ].map(cleanLookupText).filter((artist) => artist && !isGenericDiscoverySeedArtist(artist)))).slice(0, 18);
+  const { wantsPsytrance, wantsProgressive, wantsRetro } = requestedDiscoveryFamilies(options);
+  const sceneArtists = !pureRequestedArtistSearch && wantsProgressive ? PROGRESSIVE_SCENE_ARTISTS : [];
+  const sceneLabels = !pureRequestedArtistSearch && wantsProgressive ? PROGRESSIVE_SCENE_LABELS : [];
+  const psyArtists = !pureRequestedArtistSearch && wantsPsytrance ? PSYTRANCE_SCENE_ARTISTS : [];
+  const psyLabels = !pureRequestedArtistSearch && wantsPsytrance ? PSYTRANCE_SCENE_LABELS : [];
+  const retroTerms = !pureRequestedArtistSearch && wantsRetro ? ["synthwave", "new wave", "synth pop", "80s", "retro", "nu disco"] : [];
   const queries = [];
+  const requestedArtistKeys = requestedArtists.map(normalizeLookupText).filter(Boolean);
 
   function add(value) {
     const query = cleanLookupText(value);
     if (query && query.length >= 3) queries.push(query);
   }
 
-  for (const query of planQueries.slice(0, 18)) add(query);
+  const filteredPlanQueries = pureRequestedArtistSearch
+    ? planQueries.filter((query) => {
+      const normalizedQuery = normalizeLookupText(query);
+      return requestedArtistKeys.some((artist) => normalizedQuery.includes(artist));
+    })
+    : planQueries;
+  for (const query of filteredPlanQueries.slice(0, 18)) add(query);
 
   for (const artist of seedArtists.slice(0, 12)) {
     for (const genre of genres.slice(0, 3)) add(`${artist} ${genre}`);
     for (const mood of moods.slice(0, 2)) add(`${artist} ${mood}`);
-    if (!genres.length) add(artist);
+    for (const year of years.slice(0, 3)) add(`${artist} ${year}`);
+    add(artist);
   }
 
   for (const artist of sceneArtists.slice(0, 12)) {
     for (const genre of genres.slice(0, 2)) add(`${artist} ${genre}`);
+    for (const genre of genres.slice(0, 2)) {
+      for (const year of years.slice(0, 2)) add(`${artist} ${genre} ${year}`);
+    }
+    for (const mood of moods.slice(0, 2)) add(`${artist} ${mood}`);
     for (const year of years.slice(0, 2)) add(`${artist} ${year}`);
   }
 
-  for (const label of sceneLabels.slice(0, 10)) {
-    for (const genre of genres.slice(0, 2)) add(`${label} ${genre}`);
-    for (const year of years.slice(0, 2)) add(`${label} ${year}`);
+  if (useLabelQueries) {
+    for (const label of sceneLabels.slice(0, 10)) {
+      for (const genre of genres.slice(0, 2)) add(`${label} ${genre}`);
+      for (const genre of genres.slice(0, 2)) {
+        for (const year of years.slice(0, 2)) add(`${label} ${genre} ${year}`);
+      }
+    }
   }
 
   for (const artist of psyArtists.slice(0, 14)) {
     for (const genre of genres.slice(0, 3)) add(`${artist} ${genre}`);
+    for (const genre of genres.slice(0, 2)) {
+      for (const year of years.slice(0, 2)) add(`${artist} ${genre} ${year}`);
+    }
+    for (const mood of moods.slice(0, 2)) add(`${artist} ${mood}`);
     for (const year of years.slice(0, 2)) add(`${artist} ${year}`);
   }
 
-  for (const label of psyLabels.slice(0, 10)) {
-    for (const genre of genres.slice(0, 3)) add(`${label} ${genre}`);
-    for (const year of years.slice(0, 2)) add(`${label} ${year}`);
-    add(label);
+  if (useLabelQueries) {
+    for (const label of psyLabels.slice(0, 10)) {
+      for (const genre of genres.slice(0, 3)) add(`${label} ${genre}`);
+      for (const genre of genres.slice(0, 2)) {
+        for (const year of years.slice(0, 2)) add(`${label} ${genre} ${year}`);
+      }
+      add(label);
+    }
   }
 
-  for (const label of planLabels.slice(0, 12)) {
-    for (const genre of genres.slice(0, 3)) add(`${label} ${genre}`);
-    for (const mood of moods.slice(0, 2)) add(`${label} ${mood}`);
-    for (const year of years.slice(0, 2)) add(`${label} ${year}`);
-    add(label);
+  if (useLabelQueries) {
+    for (const label of planLabels.slice(0, 12)) {
+      for (const genre of genres.slice(0, 3)) add(`${label} ${genre}`);
+      for (const mood of moods.slice(0, 2)) add(`${label} ${mood}`);
+      if (genres.length) {
+        for (const genre of genres.slice(0, 2)) {
+          for (const year of years.slice(0, 2)) add(`${label} ${genre} ${year}`);
+        }
+      } else {
+        for (const year of years.slice(0, 2)) add(`${label} ${year}`);
+      }
+      add(label);
+    }
   }
 
   for (const track of references.slice(0, 12)) {
     for (const genre of genres.slice(0, 2)) add(`${track.artist || track.title} ${genre}`);
   }
 
-  for (const genre of genres) {
-    for (const mood of moods.slice(0, 4)) add(`${genre} ${mood}`);
-    for (const retro of retroTerms.slice(0, 4)) add(`${genre} ${retro}`);
-    for (const year of years.slice(0, 3)) add(`${genre} ${year}`);
-    add(genre);
-  }
+  if (!pureRequestedArtistSearch) {
+    for (const genre of genres) {
+      for (const mood of moods.slice(0, 4)) add(`${genre} ${mood}`);
+      for (const retro of retroTerms.slice(0, 4)) add(`${genre} ${retro}`);
+      for (const year of years.slice(0, 3)) add(`${genre} ${year}`);
+      add(genre);
+    }
 
-  add(positiveRequest || request);
-  add(cleanLookupText(`${positiveRequest || request} ${options.genres || ""} ${options.mood || ""}`));
+    add(positiveRequest || request);
+    add(cleanLookupText(`${positiveRequest || request} ${options.genres || ""} ${options.mood || ""}`));
+  }
 
   return Array.from(new Set(queries.map(cleanLookupText).filter(Boolean))).slice(0, 72);
 }
@@ -451,22 +615,41 @@ const DISCOVERY_ANCHOR_ARTISTS = [
 function queryAnchorArtistMismatch(track = {}, query = "") {
   const queryText = normalizeLookupText(query);
   if (!queryText) return false;
-  const trackText = normalizeLookupText(`${track.artist || ""} ${track.title || ""} ${track.album || ""}`);
+  const artistParts = splitLookupArtists(track.artist || "").map(normalizeLookupText).filter(Boolean);
   return DISCOVERY_ANCHOR_ARTISTS.some((artist) => {
     const anchor = normalizeLookupText(artist);
-    return queryText.includes(anchor) && !trackText.includes(anchor);
+    const artistMatches = anchor.includes(" ")
+      ? artistParts.some((part) => part === anchor || part.includes(anchor))
+      : artistParts.some((part) => part === anchor);
+    return queryText.includes(anchor) && !artistMatches;
   });
+}
+
+function artistCreditIncludesExact(seedArtist = "", track = {}) {
+  const seedParts = splitLookupArtists(seedArtist).map(normalizeLookupText).filter(Boolean);
+  const creditParts = splitLookupArtists(track.artist || "").map(normalizeLookupText).filter(Boolean);
+  if (!seedParts.length || !creditParts.length) return false;
+  return seedParts.some((seed) => creditParts.some((credit) => credit === seed));
 }
 
 function isRoonDiscoveryNoise(track = {}) {
   const raw = `${track.artist || ""} ${track.title || ""} ${track.album || ""}`;
   const text = normalizeLookupText(raw);
+  const title = normalizeLookupText(track.title);
+  const artist = normalizeLookupText(track.artist);
   const album = normalizeLookupText(track.album);
   if (!track.title || !track.artist) return true;
+  if (isGenericDiscoverySeedArtist(track.artist)) return true;
   if (track.title.length > 150 || track.artist.length > 120) return true;
+  if (/^\d{4}$/.test(title)) return true;
+  if (/^(?:progressive house|deep house|tech house|melodic house|organic house|afro house|trance|progressive trance|psytrance|techno|melodic techno|deep techno|edm|electronic dance music)(?: music)?$/.test(title)) return true;
+  if (/^(?:deep progressive house|dark techno deep house|melodic vocal progressive house|emotional melodic edm progressive house)$/.test(title)) return true;
+  if (/\b(?:progressive house|deep house|tech house|melodic house|organic house|dark techno|edm)\b/.test(title) && (/\b20\d{2}\b/.test(title) || /\b(?:remix|mix|track|music|fusions?|vibes?)\b/.test(title))) return true;
+  if (/\b(?:ibiza dance party|bossa cafe|ibiza lounge club|lounge club|dance party|club music|festival shaker|workout music|background music|study music|sleep music|relaxing music)\b/.test(artist)) return true;
+  if (/\b(?:summer house music|top house music|best house music|progressive house music|deep house music|tech house music)\b/.test(title)) return true;
   if (/\b(?:top\s*\d+|chart hits?|playlist|background music|soundify|workout|motivation|study music|sleep music|relax(?:ing)? music|party mix|dj mix\s*\d+\s*hr|vol\s*\d+|ultimate .* anthems?|best .* hits?)\b/.test(text)) return true;
   if (/^(?:progressive house|deep house|melodic house|organic house|techno house|progressive trance|edm|electronic dance music)\s*(?:20\d{2})?(?:\s*vol(?:ume)?\s*\d+)?$/.test(album)) return true;
-  if (/\b(?:melodic house|deep house|progressive house|electronic dance music|techno house|soundify background music|easy to dance music)\b/.test(normalizeLookupText(track.artist))) return true;
+  if (/\b(?:melodic house|deep house|progressive house|electronic dance music|techno house|soundify background music|easy to dance music)\b/.test(artist)) return true;
   return false;
 }
 
@@ -502,6 +685,80 @@ function searchTrackFromItem(item = {}, query = "") {
   };
 
   if (queryAnchorArtistMismatch(track, query)) return null;
+  return isRoonDiscoveryNoise(track) ? null : track;
+}
+
+function exactArtistItem(artist, items = []) {
+  const key = normalizeLookupText(artist);
+  if (!key) return null;
+  return (items || []).find((item) => (
+    item?.item_key &&
+    item.hint !== "header" &&
+    item.hint !== "action" &&
+    normalizeLookupText(item.title) === key
+  )) || null;
+}
+
+function browseItemLooksLikeTrackContainer(item = {}) {
+  const text = normalizeLookupText(`${item.title || ""} ${item.subtitle || ""}`);
+  return /\b(?:top tracks?|popular tracks?|tracks?|songs?|compositions?)\b/.test(text);
+}
+
+function browseItemLooksLikeAlbumContainer(item = {}) {
+  const text = normalizeLookupText(`${item.title || ""} ${item.subtitle || ""}`);
+  return /\b(?:albums?|singles?|eps?|discography|appears on|featured on)\b/.test(text);
+}
+
+function browseItemLooksLikeSimilarArtists(item = {}) {
+  const text = normalizeLookupText(`${item.title || ""} ${item.subtitle || ""}`);
+  return /\b(?:similar artists?|related artists?|fans also like|recommended artists?)\b/.test(text);
+}
+
+function pageHasOnlyActions(items = []) {
+  const actionable = (items || []).filter((item) => item?.item_key && item.hint !== "header");
+  return actionable.length > 0 && actionable.every((item) => item.hint === "action" || item.hint === "action_list");
+}
+
+function crawlTrackFromItem(item = {}, context = {}) {
+  const title = cleanLookupText(item.title);
+  const subtitle = cleanLookupText(item.subtitle);
+  if (!title || item.hint === "header" || item.hint === "action") return null;
+  if (/^(?:tracks?|songs?|albums?|artists?|compositions?|playlists?|genres?)$/i.test(title)) return null;
+  if (item.hint === "list" && /\b\d+\s+results?\b/i.test(subtitle)) return null;
+
+  let artist = cleanLookupText(context.artist);
+  let album = cleanLookupText(context.album);
+  const parts = subtitle.split(/\s+-\s+/).map(cleanLookupText).filter(Boolean);
+  if (parts.length >= 2) {
+    artist = parts[0] || artist;
+    album = parts.slice(1).join(" - ") || album;
+  } else if (!artist && subtitle && !/^\d+:\d{2}$/.test(subtitle)) {
+    artist = subtitle;
+  }
+
+  const track = {
+    title,
+    artist,
+    album,
+    imageKey: item.image_key || "",
+    query: context.query || artist,
+    discoverySource: context.source || "Roon artist crawl",
+    discoveryLane: context.lane || "artist-crawl",
+    verificationSource: "roon",
+    roon: {
+      verified: true,
+      match: itemSummary(item),
+      sourceQuery: context.query || artist,
+      searchItemKey: item.item_key || "",
+      crawlArtist: context.seedArtist || context.artist || ""
+    },
+    statusChecks: [
+      "Roon artist crawl",
+      "Roon-visible track",
+      "TIDAL enrichment pending"
+    ]
+  };
+
   return isRoonDiscoveryNoise(track) ? null : track;
 }
 
@@ -1145,7 +1402,7 @@ class RoonClient extends EventEmitter {
       hierarchy: "search",
       multi_session_key: session,
       offset: 0,
-      count: 50
+      count: 100
     }, cb));
 
     const firstLevelItems = loaded.items || [];
@@ -1167,7 +1424,7 @@ class RoonClient extends EventEmitter {
         hierarchy: "search",
         multi_session_key: session,
         offset: 0,
-        count: 50
+        count: 100
       }, cb));
     }
 
@@ -1195,7 +1452,7 @@ class RoonClient extends EventEmitter {
       verified,
       session,
       searchedCategory: trackCategory ? itemSummary(trackCategory) : null,
-      candidates: items.slice(0, 10).map(itemSummary)
+      candidates: items.slice(0, 15).map(itemSummary)
     };
   }
 
@@ -1305,11 +1562,355 @@ class RoonClient extends EventEmitter {
     };
   }
 
+  async browseSearchItems(session, zoneId, itemKey = "", count = 80, options = {}) {
+    const zoneOrOutputId = options.omitZone ? "" : this.zoneOrOutputId(zoneId);
+    if (itemKey) {
+      const payload = {
+        hierarchy: "search",
+        multi_session_key: session,
+        item_key: itemKey
+      };
+      if (zoneOrOutputId) payload.zone_or_output_id = zoneOrOutputId;
+      const selected = await callRoon((cb) => this.browse.browse(payload, cb));
+      if (isErrorMessage(selected) || selected.action === "message") {
+        return { items: [], response: selected };
+      }
+    }
+
+    const loaded = await callRoon((cb) => this.browse.load({
+      hierarchy: "search",
+      multi_session_key: session,
+      offset: 0,
+      count: Math.max(20, Math.min(120, Number(count || 80)))
+    }, cb));
+    return {
+      items: loaded.items || [],
+      response: loaded
+    };
+  }
+
+  async browseHierarchyItems(hierarchy, session, zoneId, itemKey = "", count = 80, options = {}) {
+    const zoneOrOutputId = options.omitZone ? "" : this.zoneOrOutputId(zoneId);
+    if (itemKey) {
+      const payload = {
+        hierarchy,
+        multi_session_key: session,
+        item_key: itemKey
+      };
+      if (zoneOrOutputId) payload.zone_or_output_id = zoneOrOutputId;
+      const selected = await callRoon((cb) => this.browse.browse(payload, cb));
+      if (isErrorMessage(selected) || selected.action === "message") {
+        return { items: [], response: selected };
+      }
+    }
+
+    const loaded = await callRoon((cb) => this.browse.load({
+      hierarchy,
+      multi_session_key: session,
+      offset: 0,
+      count: Math.max(20, Math.min(120, Number(count || 80)))
+    }, cb));
+    return {
+      items: loaded.items || [],
+      response: loaded
+    };
+  }
+
+  async resolveArtistHierarchyPage(artist, zoneId, options = {}) {
+    const query = cleanLookupText(artist);
+    if (!query || isGenericDiscoverySeedArtist(query)) return null;
+    const session = `artist-hierarchy-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    await callRoon((cb) => this.browse.browse({
+      hierarchy: "artists",
+      multi_session_key: session,
+      input: query,
+      pop_all: true
+    }, cb));
+
+    const first = await this.browseHierarchyItems("artists", session, zoneId, "", options.count || 80, { omitZone: true });
+    const artistItem = exactArtistItem(query, first.items);
+    if (!artistItem?.item_key) return null;
+    const page = await this.browseHierarchyItems("artists", session, zoneId, artistItem.item_key, options.count || 80, { omitZone: true });
+    return {
+      artist: query,
+      session,
+      hierarchy: "artists",
+      artistItem: itemSummary(artistItem),
+      items: page.items || []
+    };
+  }
+
+  async resolveArtistSearchPageOnly(artist, zoneId, options = {}) {
+    const query = cleanLookupText(artist);
+    if (!query || isGenericDiscoverySeedArtist(query)) return null;
+
+    const session = `artist-crawl-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const zoneOrOutputId = options.omitZone ? "" : this.zoneOrOutputId(zoneId);
+    const payload = {
+      hierarchy: "search",
+      multi_session_key: session,
+      input: query,
+      pop_all: true
+    };
+    if (zoneOrOutputId) payload.zone_or_output_id = zoneOrOutputId;
+    await callRoon((cb) => this.browse.browse(payload, cb));
+
+    const browseOptions = { omitZone: true };
+    const first = await this.browseSearchItems(session, zoneId, "", options.count || 80, browseOptions);
+    const artistCategory = first.items.find((item) => (
+      item.item_key &&
+      item.hint !== "header" &&
+      /\bartists?\b/i.test(`${item.title || ""} ${item.subtitle || ""}`)
+    ));
+    const artistItems = artistCategory
+      ? (await this.browseSearchItems(session, zoneId, artistCategory.item_key, options.count || 80, browseOptions)).items
+      : first.items;
+    const artistItem = exactArtistItem(query, artistItems);
+    if (!artistItem?.item_key) return null;
+
+    const page = await this.browseSearchItems(session, zoneId, artistItem.item_key, options.count || 80, browseOptions);
+    return {
+      artist: query,
+      session,
+      hierarchy: "search",
+      artistItem: itemSummary(artistItem),
+      items: page.items || []
+    };
+  }
+
+  async resolveArtistSearchPage(artist, zoneId, options = {}) {
+    if (!this.browse) throw new Error("Roon browse service is not connected.");
+    const hierarchyPage = await this.resolveArtistHierarchyPage(artist, zoneId, options).catch(() => null);
+    if (hierarchyPage && !pageHasOnlyActions(hierarchyPage.items)) return hierarchyPage;
+    const searchPage = await this.resolveArtistSearchPageOnly(artist, zoneId, options);
+    if (searchPage && !pageHasOnlyActions(searchPage.items)) return searchPage;
+    return hierarchyPage || searchPage;
+  }
+
+  async crawlAlbumItem(session, zoneId, albumItem, context = {}, settings = {}) {
+    if (!albumItem?.item_key) return [];
+    const hierarchy = context.hierarchy || "search";
+    const page = hierarchy === "search"
+      ? await this.browseSearchItems(session, zoneId, albumItem.item_key, settings.trackLoadCount || 80, { omitZone: true })
+      : await this.browseHierarchyItems(hierarchy, session, zoneId, albumItem.item_key, settings.trackLoadCount || 80, { omitZone: true });
+    return (page.items || [])
+      .map((item) => crawlTrackFromItem(item, {
+        ...context,
+        album: albumItem.title || context.album || "",
+        query: `${context.query || context.artist || ""} album crawl`.trim(),
+        source: context.source || "Roon artist album crawl"
+      }))
+      .filter(Boolean);
+  }
+
+  async crawlArtistPageTracks(page, zoneId, settings = {}) {
+    const session = page?.session;
+    const hierarchy = page?.hierarchy || "search";
+    const artist = cleanLookupText(page?.artist);
+    if (!session || !artist) return { tracks: [], similarArtists: [], crawledContainers: 0 };
+
+    const tracks = [];
+    const similarArtists = [];
+    let crawledContainers = 0;
+    const items = page.items || [];
+    const trackContainers = items
+      .filter((item) => item.item_key && browseItemLooksLikeTrackContainer(item))
+      .slice(0, settings.trackContainersPerArtist || 2);
+    const albumContainers = items
+      .filter((item) => item.item_key && browseItemLooksLikeAlbumContainer(item))
+      .slice(0, settings.albumContainersPerArtist || 2);
+    const similarContainers = items
+      .filter((item) => item.item_key && browseItemLooksLikeSimilarArtists(item))
+      .slice(0, settings.similarContainersPerArtist || 1);
+
+    for (const container of trackContainers) {
+      const loaded = hierarchy === "search"
+        ? await this.browseSearchItems(session, zoneId, container.item_key, settings.trackLoadCount || 80, { omitZone: true })
+        : await this.browseHierarchyItems(hierarchy, session, zoneId, container.item_key, settings.trackLoadCount || 80, { omitZone: true });
+      crawledContainers += 1;
+      for (const item of loaded.items || []) {
+        const track = crawlTrackFromItem(item, {
+          artist,
+          seedArtist: page.artist,
+          query: `${artist} ${container.title || "tracks"}`,
+          source: "Roon artist track crawl"
+        });
+        if (track) tracks.push(track);
+      }
+    }
+
+    for (const container of albumContainers) {
+      const loaded = hierarchy === "search"
+        ? await this.browseSearchItems(session, zoneId, container.item_key, settings.albumLoadCount || 40, { omitZone: true })
+        : await this.browseHierarchyItems(hierarchy, session, zoneId, container.item_key, settings.albumLoadCount || 40, { omitZone: true });
+      crawledContainers += 1;
+      const albumItems = (loaded.items || [])
+        .filter((item) => item.item_key && item.hint !== "header" && item.hint !== "action")
+        .slice(0, settings.albumsPerArtist || 4);
+      for (const albumItem of albumItems) {
+        const albumTracks = await this.crawlAlbumItem(session, zoneId, albumItem, {
+          artist,
+          seedArtist: page.artist,
+          hierarchy,
+          query: `${artist} ${albumItem.title || "album"}`,
+          source: "Roon artist album crawl"
+        }, settings);
+        tracks.push(...albumTracks);
+      }
+    }
+
+    for (const container of similarContainers) {
+      const loaded = hierarchy === "search"
+        ? await this.browseSearchItems(session, zoneId, container.item_key, settings.similarLoadCount || 30, { omitZone: true })
+        : await this.browseHierarchyItems(hierarchy, session, zoneId, container.item_key, settings.similarLoadCount || 30, { omitZone: true });
+      crawledContainers += 1;
+      for (const item of loaded.items || []) {
+        const name = cleanLookupText(item.title);
+        if (!name || isGenericDiscoverySeedArtist(name)) continue;
+        if (normalizeLookupText(name) === normalizeLookupText(artist)) continue;
+        if (!item.item_key || item.hint === "header" || item.hint === "action") continue;
+        similarArtists.push(name);
+        if (similarArtists.length >= Number(settings.similarArtistsPerSeed || 3)) break;
+      }
+    }
+
+    return {
+      tracks,
+      similarArtists,
+      crawledContainers
+    };
+  }
+
+  async fallbackArtistTrackSearch(artist, zoneId, settings = {}) {
+    const result = await this.searchTrackCandidates(artist, zoneId, {
+      limit: settings.artistFallbackSearchLimit || 80
+    });
+    return (result.tracks || [])
+      .filter((track) => artistCreditIncludesExact(artist, track))
+      .map((track) => ({
+      ...track,
+      discoverySource: "Roon artist search crawl",
+      discoveryLane: "artist-crawl",
+      roon: {
+        ...(track.roon || {}),
+        artistCreditConfirmed: artist
+      },
+      statusChecks: Array.from(new Set([
+        ...(track.statusChecks || []),
+        "Roon artist search crawl",
+        "Roon-visible track",
+        "Exact artist credit confirmed"
+      ]))
+    }));
+  }
+
+  async discoverArtistCrawlTracks(options = {}, zoneId, settings = {}) {
+    if (!zoneId) throw new Error("Select a Roon output zone first.");
+    const seedLimit = Math.max(1, Math.min(24, Number(settings.artistSeedLimit || 8)));
+    const seeds = createRoonCrawlArtists(options, seedLimit);
+    const includeSimilar = settings.includeSimilarArtists !== false;
+    const maxSimilarSeeds = Math.max(0, Math.min(16, Number(settings.maxSimilarSeeds || 8)));
+    const explicitSimilarSeeds = Array.from(new Set((Array.isArray(options.similarArtistSeeds) ? options.similarArtistSeeds : [])
+      .map(cleanLookupText)
+      .filter((artist) => artist && !isGenericDiscoverySeedArtist(artist) && !seeds.map(normalizeLookupText).includes(normalizeLookupText(artist)))))
+      .slice(0, maxSimilarSeeds);
+    const candidateLimit = Math.max(20, Math.min(600, Number(settings.candidateLimit || 160)));
+    const maxCrawlMs = Math.max(1500, Math.min(20_000, Number(settings.maxCrawlMs || 8000)));
+    const startedAt = Date.now();
+    const tracks = [];
+    const discarded = [];
+    const visited = new Set();
+    const similarQueue = [];
+    const summaries = [];
+    let timedOut = false;
+
+    const crawlOne = async (artist, depth = 0) => {
+      if (Date.now() - startedAt > maxCrawlMs) {
+        timedOut = true;
+        return;
+      }
+      const key = normalizeLookupText(artist);
+      if (!key || visited.has(key) || tracks.length >= candidateLimit) return;
+      visited.add(key);
+      try {
+        const page = await this.resolveArtistSearchPage(artist, zoneId, settings);
+        if (!page) {
+          discarded.push({ artist, reason: "Roon artist crawl did not find an exact artist page." });
+          return;
+        }
+        const crawled = await this.crawlArtistPageTracks(page, zoneId, settings);
+        if (!crawled.tracks.length && pageHasOnlyActions(page.items)) {
+          crawled.tracks.push(...await this.fallbackArtistTrackSearch(page.artist, zoneId, settings));
+        }
+        for (const track of crawled.tracks) {
+          if (tracks.length >= candidateLimit) break;
+          tracks.push({
+            ...track,
+            discoverySource: depth ? "Roon similar artist crawl" : track.discoverySource,
+            discoveryLane: depth ? "similar-artist-crawl" : track.discoveryLane,
+            statusChecks: Array.from(new Set([
+              ...(track.statusChecks || []),
+              depth ? "Roon similar artist crawl" : "Roon artist page crawl"
+            ]))
+          });
+        }
+        if (includeSimilar && depth === 0) {
+          for (const similar of crawled.similarArtists) {
+            if (similarQueue.length >= maxSimilarSeeds) break;
+            if (!visited.has(normalizeLookupText(similar))) similarQueue.push(similar);
+          }
+        }
+        summaries.push({
+          artist: page.artist,
+          depth,
+          tracks: crawled.tracks.length,
+          similarArtists: crawled.similarArtists.slice(0, 6),
+          containers: crawled.crawledContainers,
+          pageItems: (page.items || []).slice(0, 12).map(itemSummary)
+        });
+      } catch (error) {
+        discarded.push({ artist, reason: error.message || "Roon artist crawl failed." });
+      }
+    };
+
+    for (const seed of seeds) {
+      if (tracks.length >= candidateLimit || timedOut) break;
+      await crawlOne(seed, 0);
+    }
+    for (const similarSeed of explicitSimilarSeeds) {
+      if (!includeSimilar || tracks.length >= candidateLimit || timedOut) break;
+      await crawlOne(similarSeed, 1);
+    }
+    while (includeSimilar && similarQueue.length && tracks.length < candidateLimit && !timedOut) {
+      await crawlOne(similarQueue.shift(), 1);
+    }
+
+    return {
+      tracks,
+      discarded,
+      verification: {
+        enabled: true,
+        roonArtistCrawl: true,
+        seeds,
+        seedCount: seeds.length,
+        similarArtistSeeds: explicitSimilarSeeds,
+        similarArtistSeedCount: explicitSimilarSeeds.length,
+        visitedArtists: visited.size,
+        similarArtistsQueued: similarQueue.length,
+        timedOut,
+        elapsedMs: Date.now() - startedAt,
+        candidates: tracks.length,
+        summaries: summaries.slice(0, 24)
+      }
+    };
+  }
+
   async discoverQueueableTracks(options = {}, zoneId, settings = {}) {
     if (!zoneId) throw new Error("Select a Roon output zone first.");
     const targetCount = Math.max(1, Math.min(80, Number(settings.targetCount || options.count || 12)));
+    const candidateLimitMax = Math.max(80, Math.min(1500, Number(settings.candidateLimitMax || 1500)));
     const candidateLimit = Math.min(
-      500,
+      candidateLimitMax,
       Math.max(
         targetCount + 20,
         targetCount * 3,
@@ -1320,10 +1921,41 @@ class RoonClient extends EventEmitter {
       .slice(0, Math.max(0, Math.min(80, Number(settings.modelQueryLimit || 40))));
     const fallbackQueries = createRoonDiscoveryQueries(options);
     const queries = Array.from(new Set([...modelQueries, ...fallbackQueries].map(cleanLookupText).filter(Boolean)))
-      .slice(0, Math.max(4, Math.min(120, Number(settings.maxQueries || 28))));
+      .slice(0, Math.max(4, Math.min(160, Number(settings.maxQueries || 28))));
     const byKey = new Map();
     const discarded = [];
     const searchSummaries = [];
+    const searchSummaryLimit = Math.max(18, Math.min(80, Number(settings.searchSummaryLimit || 18)));
+    let artistCrawl = null;
+
+    if (settings.enableArtistCrawl) {
+      try {
+        artistCrawl = await this.discoverArtistCrawlTracks(options, zoneId, {
+          artistSeedLimit: settings.artistCrawlSeedLimit || 8,
+          candidateLimit: settings.artistCrawlCandidateLimit || Math.min(candidateLimit, Math.max(targetCount * 20, 120)),
+          trackContainersPerArtist: settings.artistCrawlTrackContainers || 2,
+          albumContainersPerArtist: settings.artistCrawlAlbumContainers || 2,
+          albumsPerArtist: settings.artistCrawlAlbumsPerArtist || 4,
+          includeSimilarArtists: settings.includeSimilarArtists !== false,
+          maxSimilarSeeds: settings.artistCrawlSimilarSeeds || 8,
+          similarArtistsPerSeed: settings.artistCrawlSimilarPerSeed || 3,
+          trackLoadCount: settings.artistCrawlTrackLoadCount || 80,
+          albumLoadCount: settings.artistCrawlAlbumLoadCount || 40,
+          similarLoadCount: settings.artistCrawlSimilarLoadCount || 30,
+          artistFallbackSearchLimit: settings.artistFallbackSearchLimit || 80,
+          maxCrawlMs: settings.artistCrawlMaxMs || 8000
+        });
+        for (const track of artistCrawl.tracks || []) {
+          const key = roonDiscoveryKey(track);
+          if (!key || byKey.has(key)) continue;
+          byKey.set(key, track);
+          if (byKey.size >= candidateLimit) break;
+        }
+        discarded.push(...(artistCrawl.discarded || []));
+      } catch (error) {
+        discarded.push({ source: "Roon artist crawl", reason: error.message || "Roon artist crawl failed." });
+      }
+    }
 
     for (const query of queries) {
       if (byKey.size >= candidateLimit) break;
@@ -1381,7 +2013,12 @@ class RoonClient extends EventEmitter {
           roonStrict: true,
           requested: targetCount,
           searches: queries.length,
-          searchSummaries: searchSummaries.slice(0, 18),
+          searchSummaries: searchSummaries.slice(0, searchSummaryLimit),
+          searchSummaryLimit,
+          candidateLimit,
+          searchLimit: settings.searchLimit || 90,
+          maxQueries: Math.max(4, Math.min(160, Number(settings.maxQueries || 28))),
+          artistCrawl: artistCrawl?.verification || null,
           candidates: candidates.length,
           roonChecked: 0,
           roonRejected: discarded.length,
@@ -1454,7 +2091,12 @@ class RoonClient extends EventEmitter {
         roonStrict: true,
         requested: targetCount,
         searches: queries.length,
-        searchSummaries: searchSummaries.slice(0, 18),
+        searchSummaries: searchSummaries.slice(0, searchSummaryLimit),
+        searchSummaryLimit,
+        candidateLimit,
+        searchLimit: settings.searchLimit || 90,
+        maxQueries: Math.max(4, Math.min(160, Number(settings.maxQueries || 28))),
+        artistCrawl: artistCrawl?.verification || null,
         candidates: candidates.length,
         roonChecked: checked,
         roonRejected: discarded.length,

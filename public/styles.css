@@ -974,8 +974,55 @@ label {
   font-size: 13px;
 }
 
+.fieldLabel {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .wideField {
   grid-column: span 2;
+}
+
+.scoringModeField {
+  display: grid;
+  grid-column: span 2;
+  gap: 8px;
+  min-width: 0;
+}
+
+.scoringModeCards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.scoringModeCard {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-height: 72px;
+  padding: 10px;
+  text-align: left;
+}
+
+.scoringModeCard strong {
+  display: block;
+  font-size: 14px;
+  line-height: 1.12;
+}
+
+.scoringModeCard span {
+  color: rgba(238, 228, 252, 0.72);
+  font-size: 12px;
+  line-height: 1.28;
+}
+
+.scoringModeCard.active,
+.scoringModeCard[aria-checked="true"] {
+  background:
+    linear-gradient(135deg, rgba(217, 179, 255, 0.24), rgba(255, 115, 216, 0.18) 46%, rgba(8, 4, 17, 0.86)) padding-box,
+    linear-gradient(135deg, rgba(143, 240, 255, 0.82), rgba(255, 115, 216, 0.68), rgba(217, 179, 255, 0.8)) border-box;
+  box-shadow: var(--inner-light), 0 0 0 1px rgba(217, 179, 255, 0.2), 0 0 24px rgba(143, 240, 255, 0.12);
 }
 
 input {
@@ -1183,6 +1230,172 @@ input {
   min-height: 260px;
 }
 
+.tidalMixHero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.tidalImportForm {
+  display: grid;
+  gap: 8px;
+  min-width: min(100%, 360px);
+}
+
+.tidalImportForm label,
+.tidalSectionTitle span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.tidalImportRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.tidalImportRow input {
+  min-width: 0;
+}
+
+.tidalMixSection {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+}
+
+.tidalSectionTitle {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.tidalSectionTitle h3 {
+  margin: 0;
+  color: #fff;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.tidalMixGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.tidalMixCard {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  min-height: 100%;
+  padding: 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgba(20, 9, 38, 0.82), rgba(9, 4, 18, 0.92)) padding-box,
+    linear-gradient(135deg, rgba(217, 179, 255, 0.28), rgba(143, 240, 255, 0.13), rgba(255, 115, 216, 0.18)) border-box;
+  box-shadow: var(--inner-light), 0 18px 42px rgba(2, 0, 8, 0.34);
+}
+
+.tidalMixArt {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background:
+    linear-gradient(135deg, rgba(143, 240, 255, 0.18), rgba(255, 115, 216, 0.12)),
+    url("/assets/rabbit-hole-fallback.jpg") center / cover;
+}
+
+.tidalMixArt img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tidalMixArt span {
+  color: rgba(250, 246, 255, 0.84);
+  font-size: 34px;
+  font-weight: 850;
+}
+
+.tidalMixBody {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tidalMixType {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.tidalMixTypeRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.tidalPinnedBadge {
+  padding: 3px 7px;
+  border: 1px solid rgba(143, 240, 255, 0.28);
+  border-radius: 999px;
+  color: #8ff0ff;
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.tidalMixBody h3 {
+  margin: 0;
+  color: #fff;
+  font-size: 20px;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+}
+
+.tidalMixBody p,
+.tidalMixBody small,
+.tidalMixEmpty p {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.tidalMixBody small {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.tidalMixActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tidalMixActions button,
+.tidalMixActions .buttonLink {
+  flex: 1 1 120px;
+}
+
+.tidalMixEmpty {
+  grid-column: 1 / -1;
+}
+
 .reportList,
 .signalGrid {
   display: grid;
@@ -1354,6 +1567,100 @@ input {
 
 .sourceReport {
   margin: 0 0 10px;
+}
+
+.poolDiagnostics {
+  margin: 0 0 12px;
+}
+
+.poolDiagnostics[hidden] {
+  display: none;
+}
+
+.poolDiagnosticsCard {
+  display: grid;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background:
+    linear-gradient(145deg, rgba(8, 2, 18, 0.96), rgba(28, 8, 39, 0.86)) padding-box,
+    linear-gradient(135deg, rgba(143, 240, 255, 0.3), rgba(255, 220, 135, 0.22), rgba(255, 115, 216, 0.18)) border-box;
+  box-shadow: var(--inner-light), 0 14px 34px rgba(2, 0, 8, 0.38);
+}
+
+.poolMetrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.poolDiagnosticsGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.poolDiagnosticsGrid section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.poolDiagnosticsGrid h3 {
+  margin: 0;
+  color: rgba(217, 179, 255, 0.72);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.poolDiagnosticsGrid ol {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.poolDiagnosticsGrid li {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(217, 179, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(6, 2, 13, 0.52);
+}
+
+.poolDiagnosticsGrid li div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.poolDiagnosticsGrid li strong {
+  color: rgba(250, 246, 255, 0.94);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.poolDiagnosticsGrid li b {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.poolDiagnosticsGrid li span {
+  color: rgba(236, 224, 251, 0.78);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.poolNotes {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .sourceReport[hidden] {
@@ -1885,6 +2192,51 @@ input {
   margin-top: 6px;
 }
 
+.resultDiagnostics {
+  display: grid;
+  gap: 6px;
+  width: min(560px, 100%);
+  margin: 10px 0 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 215, 129, 0.28);
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgba(16, 8, 24, 0.95), rgba(8, 3, 16, 0.92)) padding-box,
+    linear-gradient(135deg, rgba(255, 213, 115, 0.24), rgba(224, 103, 255, 0.14)) border-box;
+}
+
+.resultDiagnosticsHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.resultDiagnosticsHead span {
+  color: rgba(255, 225, 161, 0.92);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.resultDiagnosticsHead button {
+  min-height: 30px;
+  padding: 0 10px;
+  color: #ffe7f6;
+  font-size: 12px;
+}
+
+.resultDiagnostics p {
+  margin: 0;
+  color: rgba(241, 232, 255, 0.82);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.resultDiagnostics strong {
+  color: #fff;
+}
+
 .statusBlock {
   display: flex;
   flex-wrap: wrap;
@@ -1912,6 +2264,44 @@ input {
 
 .queueReport p {
   margin-top: 6px;
+}
+
+.queueReportAdded {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.queueReportAdded > span {
+  color: rgba(217, 179, 255, 0.72);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.queueReportAdded ol {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.queueReportAdded li {
+  color: rgba(250, 246, 255, 0.9);
+}
+
+.queueReportAdded li strong {
+  display: block;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.queueReportAdded li span {
+  display: block;
+  margin-top: 2px;
+  color: rgba(238, 228, 252, 0.66);
+  font-size: 12px;
+  line-height: 1.3;
 }
 
 .queueReport ul {
@@ -2219,6 +2609,39 @@ input {
   padding: 0 10px;
 }
 
+.resultFilterToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(217, 179, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(8, 4, 17, 0.72);
+  color: rgba(241, 232, 255, 0.9);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.resultFilterToggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #77dcff;
+}
+
+.resultFilterToggle:has(input:checked) {
+  border-color: rgba(119, 220, 255, 0.5);
+  color: #c9f7ff;
+  box-shadow: 0 0 18px rgba(119, 220, 255, 0.1);
+}
+
+.resultFilterToggle:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -2326,6 +2749,14 @@ button:disabled:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .poolDiagnosticsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .poolNotes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .sourceReportColumns {
     grid-template-columns: 1fr;
   }
@@ -2356,6 +2787,15 @@ button:disabled:hover {
     flex-direction: column;
   }
 
+  .resultDiagnosticsHead {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .resultDiagnosticsHead button {
+    width: 100%;
+  }
+
   .healthGrid {
     grid-template-columns: 1fr;
   }
@@ -2366,6 +2806,14 @@ button:disabled:hover {
 
   .wideField {
     grid-column: auto;
+  }
+
+  .scoringModeField {
+    grid-column: auto;
+  }
+
+  .scoringModeCards {
+    grid-template-columns: 1fr;
   }
 
   h1 {
@@ -2388,6 +2836,15 @@ button:disabled:hover {
   .sourceReportMetrics,
   .sourceReportNotes {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .poolMetrics,
+  .poolNotes {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .poolDiagnosticsCard {
+    padding: 10px;
   }
 
   .sourceReportCard {
@@ -2890,6 +3347,48 @@ label,
   text-shadow:
     0 0 12px rgba(181, 126, 255, 0.18),
     0 0 24px rgba(224, 103, 255, 0.08);
+}
+
+.trackBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.track .artistCreditBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid rgba(217, 179, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(7, 3, 15, 0.72);
+  color: rgba(241, 232, 255, 0.88);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.track .artistCreditBadge.exact {
+  border-color: rgba(119, 220, 255, 0.48);
+  background: linear-gradient(135deg, rgba(12, 48, 66, 0.78), rgba(8, 21, 38, 0.78));
+  color: #bff3ff;
+  box-shadow: 0 0 18px rgba(119, 220, 255, 0.12);
+}
+
+.track .artistCreditBadge.broad {
+  border-color: rgba(255, 218, 125, 0.46);
+  background: linear-gradient(135deg, rgba(66, 44, 9, 0.72), rgba(23, 12, 5, 0.76));
+  color: #ffe59b;
+}
+
+.track .artistCreditBadge.queue {
+  border-color: rgba(217, 179, 255, 0.34);
+  background: rgba(35, 16, 58, 0.72);
+  color: #eadcff;
 }
 
 h1,
@@ -3866,6 +4365,16 @@ body.playerMaximized {
 
 body.playerFullWindow {
   overflow: hidden;
+}
+
+.screenWakeVideo {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  left: 0;
+  bottom: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 @media (min-width: 760px) and (orientation: landscape) {

@@ -100,6 +100,36 @@ test("rankQueries promotes historically useful templates and demotes sludge", ()
   assert.ok(ranked.adjustments.some((item) => item.template === "deep house mix {year}" && item.quality < 0));
 });
 
+test("rankQueries can prune historically bad templates when discovery asks for it", () => {
+  const tracker = new QueryYieldTracker(tempFile("yield.json"));
+  tracker.recordRun([
+    {
+      query: "deep house mix 2026",
+      lane: "core",
+      attempts: 3,
+      returned: 24,
+      rejected: 24,
+      seoRejects: 24
+    },
+    {
+      query: "psytrance 2026",
+      lane: "core",
+      attempts: 2,
+      returned: 12,
+      accepted: 5
+    }
+  ]);
+
+  const ranked = tracker.rankQueries([
+    "deep house mix 2025",
+    "psytrance 2025"
+  ], { lane: "core", prune: true });
+
+  assert.deepEqual(ranked.queries, ["psytrance 2025"]);
+  assert.equal(ranked.pruned.length, 1);
+  assert.equal(ranked.pruned[0].template, "deep house mix {year}");
+});
+
 test("discovery uses query yield memory to reorder TIDAL search queries", async () => {
   const tracker = new QueryYieldTracker(tempFile("yield.json"));
   tracker.recordRun([
@@ -156,4 +186,93 @@ test("discovery uses query yield memory to reorder TIDAL search queries", async 
   assert.equal(result.tracks.length, 1);
   assert.equal(searchOrder[0], "better query");
   assert.ok(result.verification.queryYield.adjustments.some((item) => item.query === "better query"));
+});
+
+test("discovery skips pruned query-yield templates before spending TIDAL crawl time", async () => {
+  const tracker = new QueryYieldTracker(tempFile("yield.json"));
+  tracker.recordRun([
+    {
+      query: "bad query",
+      lane: "core",
+      attempts: 3,
+      returned: 24,
+      rejected: 24,
+      seoRejects: 24
+    },
+    {
+      query: "better query",
+      lane: "core",
+      attempts: 2,
+      returned: 10,
+      accepted: 5
+    }
+  ]);
+  const searchOrder = [];
+  const fakeTidal = {
+    isConfigured() {
+      return true;
+    },
+    async searchTracks(query) {
+      searchOrder.push(query);
+      if (query !== "better query") return [];
+      return [{
+        artist: "Useful Artist",
+        title: "Useful Track",
+        album: "Useful Track",
+        label: "Useful Label",
+        year: 2026,
+        durationMs: 420000,
+        tidalUrl: "https://tidal.com/browse/track/9001",
+        query
+      }];
+    }
+  };
+
+  const result = await discoverTracks({
+    tidal: fakeTidal,
+    options: {
+      request: "Find a useful electronic track",
+      count: "1",
+      llmSearchPlan: {
+        searchQueries: ["bad query", "better query"]
+      }
+    },
+    history: null,
+    queryYieldTracker: tracker
+  });
+
+  assert.equal(result.tracks.length, 1);
+  assert.equal(searchOrder.includes("bad query"), false);
+  assert.equal(result.verification.queryYield.prunedCount, 1);
+});
+
+test("discovery runs TIDAL search queries with conservative parallelism", async () => {
+  let active = 0;
+  let maxActive = 0;
+  const fakeTidal = {
+    isConfigured() {
+      return true;
+    },
+    async searchTracks() {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      active -= 1;
+      return [];
+    }
+  };
+
+  await discoverTracks({
+    tidal: fakeTidal,
+    options: {
+      request: "Find electronic tracks",
+      count: "3",
+      llmSearchPlan: {
+        searchQueries: ["one", "two", "three", "four"]
+      }
+    },
+    history: null
+  });
+
+  assert.equal(maxActive, 2);
 });
