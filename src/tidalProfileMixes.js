@@ -461,6 +461,43 @@ function normalizeCreatedPlaylist(payload = {}, fallbackTitle = "") {
   };
 }
 
+function normalizeUserPlaylist(payload = {}, fallbackTitle = "") {
+  const data = payload?.data || payload || {};
+  const attributes = data.attributes || {};
+  const id = cleanText(data.id);
+  const title = firstText(attributes.name, data.name, data.title, fallbackTitle || id);
+  if (!id || !title) return null;
+  return {
+    id,
+    title,
+    description: cleanText(attributes.description),
+    url: firstExternalLink(attributes) || playlistUrlFromId(id),
+    rawType: firstText(attributes.playlistType, data.type, "playlist"),
+    itemCount: itemCountFromPlaylist({ data })
+  };
+}
+
+function playlistSummariesFromPayload(payload = {}) {
+  const included = new Map();
+  for (const item of Array.isArray(payload.included) ? payload.included : []) {
+    if (item?.type === "playlists" && item.id) included.set(cleanText(item.id), item);
+  }
+
+  const refs = [];
+  if (Array.isArray(payload.data)) refs.push(...payload.data);
+  const relationshipRefs = payload.data?.relationships?.playlists?.data;
+  if (Array.isArray(relationshipRefs)) refs.push(...relationshipRefs);
+
+  const summaries = [];
+  for (const ref of refs) {
+    if (ref?.type !== "playlists" || !ref.id) continue;
+    const full = ref.attributes ? ref : (included.get(cleanText(ref.id)) || ref);
+    const summary = normalizeUserPlaylist(full);
+    if (summary) summaries.push(summary);
+  }
+  return summaries;
+}
+
 function trackMatches(left = {}, right = {}) {
   const leftTidalId = trackTidalId(left);
   const rightTidalId = trackTidalId(right);
@@ -620,6 +657,8 @@ class TidalProfileMixes {
       clock: this.clock
     });
     this.cache = null;
+    this.playlistCache = null;
+    this.userIdCache = "";
   }
 
   isConfigured() {
@@ -737,6 +776,162 @@ class TidalProfileMixes {
     }
   }
 
+  async currentUserId() {
+    if (this.userId) return this.userId;
+    if (this.userIdCache) return this.userIdCache;
+    const payload = await this.fetchOpenApiJson("/users/me", {
+      countryCode: this.countryCode
+    });
+    const id = cleanText(payload?.data?.id || payload?.id);
+    if (!id) throw new Error("TIDAL did not return the current user id.");
+    this.userIdCache = id;
+    return id;
+  }
+
+  async userPlaylistRelationshipPaths() {
+    let currentUserId = "";
+    try {
+      currentUserId = await this.currentUserId();
+    } catch {
+      currentUserId = "";
+    }
+
+    return Array.from(new Set([
+      currentUserId ? `/userCollections/${encodeURIComponent(currentUserId)}/relationships/playlists` : "",
+      this.userId ? `/userCollections/${encodeURIComponent(this.userId)}/relationships/playlists` : "",
+      currentUserId ? `/users/${encodeURIComponent(currentUserId)}/relationships/playlists` : "",
+      "/users/me/relationships/playlists",
+      currentUserId ? `/userProfiles/${encodeURIComponent(currentUserId)}/relationships/playlists` : "",
+      "/userProfiles/me/relationships/playlists",
+      "/userCollections/me/relationships/playlists"
+    ].filter(Boolean)));
+  }
+
+  async fetchUserPlaylistPage(pathname = "", cursor = "") {
+    const params = {
+      countryCode: this.countryCode,
+      include: "playlists",
+      "page[limit]": "50"
+    };
+    if (cursor) params["page[cursor]"] = cursor;
+    const payload = await this.fetchOpenApiJson(pathname, params);
+    const next = cleanText(payload?.links?.next);
+    let nextCursor = "";
+    if (next) {
+      try {
+        const nextUrl = new URL(next, TIDAL_OPENAPI_ROOT);
+        nextCursor = cleanText(nextUrl.searchParams.get("page[cursor]"));
+      } catch {
+        nextCursor = "";
+      }
+    }
+    return {
+      payload,
+      nextCursor,
+      endpoint: openApiUrl(pathname, params)
+    };
+  }
+
+  async fetchPlaylistSummary(playlistId = "") {
+    const id = cleanText(playlistId);
+    if (!id) return null;
+    const params = {
+      countryCode: this.countryCode,
+      include: "items"
+    };
+    const payload = await this.fetchOpenApiJson(`/playlists/${encodeURIComponent(id)}`, params);
+    return {
+      playlist: normalizeUserPlaylist(payload),
+      endpoint: openApiUrl(`/playlists/${encodeURIComponent(id)}`, params)
+    };
+  }
+
+  async getUserPlaylists({ force = false } = {}) {
+    const status = this.status();
+    if (!this.enabled) return { ...status, connected: false, playlists: [], error: "TIDAL profile mixes are disabled." };
+    if (!this.isConfigured()) {
+      return {
+        ...status,
+        connected: false,
+        playlists: [],
+        error: "TIDAL profile token missing. Connect TIDAL profile access first."
+      };
+    }
+
+    const now = this.clock();
+    if (!force && this.playlistCache?.result && this.cacheMs && now - this.playlistCache.fetchedAtMs < this.cacheMs) {
+      return this.playlistCache.result;
+    }
+
+    const attemptedEndpoints = [];
+    let lastError = "";
+    for (const pathname of await this.userPlaylistRelationshipPaths()) {
+      const playlists = [];
+      let cursor = "";
+      let page = 0;
+      try {
+        do {
+          const pageResult = await this.fetchUserPlaylistPage(pathname, cursor);
+          attemptedEndpoints.push(pageResult.endpoint);
+          playlists.push(...playlistSummariesFromPayload(pageResult.payload));
+          cursor = pageResult.nextCursor;
+          page += 1;
+        } while (cursor && page < 5);
+
+        const seen = new Set();
+        const unique = playlists
+          .filter((playlist) => {
+            const key = playlist.id.toLowerCase();
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          })
+          .sort((left, right) => left.title.localeCompare(right.title));
+        const detailed = [];
+        for (const playlist of unique) {
+          if (playlist.title !== playlist.id) {
+            detailed.push(playlist);
+            continue;
+          }
+          try {
+            const detail = await this.fetchPlaylistSummary(playlist.id);
+            if (detail?.endpoint) attemptedEndpoints.push(detail.endpoint);
+            detailed.push(detail?.playlist || playlist);
+          } catch {
+            detailed.push(playlist);
+          }
+        }
+
+        const result = {
+          ...this.status(),
+          connected: true,
+          playlists: detailed.sort((left, right) => left.title.localeCompare(right.title)),
+          count: detailed.length,
+          attemptedEndpoints,
+          sourceEndpoint: attemptedEndpoints.at(-1) || "",
+          fetchedAt: new Date(now).toISOString(),
+          warning: detailed.length ? "" : "TIDAL responded, but no user playlists were found."
+        };
+        this.playlistCache = { result, fetchedAtMs: now, fetchedAt: result.fetchedAt, error: result.warning || "" };
+        return result;
+      } catch (error) {
+        lastError = error.message;
+        attemptedEndpoints.push(`${openApiUrl(pathname)} -> ${error.message}`);
+      }
+    }
+
+    const result = {
+      ...this.status(),
+      connected: false,
+      playlists: [],
+      count: 0,
+      attemptedEndpoints,
+      error: lastError || "No TIDAL user playlist endpoint returned data."
+    };
+    this.playlistCache = { result, fetchedAtMs: now, fetchedAt: "", error: result.error };
+    return result;
+  }
+
   async createPlaylist({ title = "", description = "" } = {}) {
     this.assertPlaylistWriteReady();
     const safeTitle = cleanText(title) || queuePlaylistTitle(this.clock());
@@ -797,6 +992,7 @@ class TidalProfileMixes {
     });
     const added = await this.addTracksToPlaylist(playlist.id, refs);
     this.cache = null;
+    this.playlistCache = null;
     return {
       connected: true,
       requested,
@@ -806,6 +1002,37 @@ class TidalProfileMixes {
       addedCount: added.addedCount,
       chunks: added.chunks,
       playlist,
+      trackIds: refs.map((ref) => ref.id)
+    };
+  }
+
+  async addTrackToPlaylist(playlistId = "", track = {}, { playlistTitle = "" } = {}) {
+    const { refs, skipped } = uniqueTidalTrackRefs([track]);
+    if (!refs.length) {
+      throw inputError("The current track does not include a TIDAL track ID, so Rabbit Hole cannot add it to a TIDAL playlist.");
+    }
+    const added = await this.addTracksToPlaylist(playlistId, refs);
+    this.playlistCache = null;
+    return {
+      connected: true,
+      requested: 1,
+      addableCount: refs.length,
+      skippedCount: skipped.length,
+      skipped,
+      addedCount: added.addedCount,
+      chunks: added.chunks,
+      playlist: normalizeUserPlaylist({
+        id: cleanText(playlistId),
+        type: "playlists",
+        attributes: {
+          name: cleanText(playlistTitle)
+        }
+      }),
+      track: {
+        id: refs[0].id,
+        title: refs[0].title,
+        artist: refs[0].artist
+      },
       trackIds: refs.map((ref) => ref.id)
     };
   }

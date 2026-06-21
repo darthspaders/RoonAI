@@ -534,10 +534,13 @@ select:focus option,
 }
 
 .nowDiscoveryTools {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "feedback badge"
+    "actions actions"
+    "playlist playlist";
+  align-items: start;
   gap: 12px;
   margin: 16px 0 10px;
 }
@@ -547,24 +550,55 @@ select:focus option,
 }
 
 .nowFeedback {
+  grid-area: feedback;
   flex: 1 1 360px;
   margin-top: 0;
 }
 
 .nowDiscoveryActions {
-  display: flex;
+  grid-area: actions;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: center;
-  justify-content: flex-end;
   gap: 10px;
-  flex-wrap: wrap;
+  width: 100%;
+}
+
+.nowDiscoveryActions button,
+.nowCandidateAddGroup > button {
+  width: 100%;
+  min-width: 0;
 }
 
 .nowCandidateAddGroup {
-  display: inline-flex;
+  display: inline-grid;
   align-items: center;
   gap: 8px;
   position: relative;
+  width: 100%;
   max-width: 100%;
+}
+
+.nowTidalPlaylistGroup {
+  grid-area: playlist;
+  display: grid;
+  grid-template-columns: minmax(0, 420px);
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.nowTidalPlaylistGroup select {
+  min-width: 0;
+  width: 100%;
+  min-height: 38px;
+}
+
+.nowTidalPlaylistStatus {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
 }
 
 .candidateListMenu {
@@ -599,8 +633,10 @@ select:focus option,
 }
 
 .nowDiscoveryBadge {
+  grid-area: badge;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
 }
 
 .rabbitHolePanel {
@@ -923,18 +959,34 @@ textarea {
   box-shadow: var(--inner-light);
 }
 
+.playlistSeedSources {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.playlistSeedSource {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
 .playlistSeed select {
   min-width: 0;
   width: 100%;
 }
 
 #playlistSelect,
-#playlistSelect option {
+#playlistSelect option,
+#tidalPlaylistSeedSelect,
+#tidalPlaylistSeedSelect option {
   background-color: #080313;
   color: #f8f0ff;
 }
 
-#playlistSelect option:checked {
+#playlistSelect option:checked,
+#tidalPlaylistSeedSelect option:checked {
   background-color: #5b2f8f;
   color: #ffffff;
 }
@@ -947,6 +999,12 @@ textarea {
 .playlistButtons button {
   min-height: 34px;
   padding: 0 10px;
+}
+
+@media (max-width: 699px) {
+  .playlistSeedSources {
+    grid-template-columns: 1fr;
+  }
 }
 
 .advanced summary {
@@ -2901,15 +2959,24 @@ button:disabled:hover {
   .nowDiscoveryTools {
     display: grid;
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "feedback"
+      "badge"
+      "actions"
+      "playlist";
     align-items: center;
   }
 
   .nowDiscoveryActions {
-    justify-content: flex-start;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .nowCandidateAddGroup {
     width: 100%;
+  }
+
+  .nowTidalPlaylistGroup {
+    grid-template-columns: 1fr;
   }
 
   .nowDiscoveryActions .scoreBadge {
@@ -3625,7 +3692,8 @@ a,
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       "feedback badge"
-      "actions actions";
+      "actions actions"
+      "playlist playlist";
     align-items: start;
     margin: 0;
   }
@@ -3644,7 +3712,7 @@ a,
   .player > .nowDiscoveryTools .nowDiscoveryActions {
     grid-area: actions;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     justify-content: stretch;
     width: 100%;
   }
@@ -3654,8 +3722,14 @@ a,
     width: 100%;
   }
 
-  .player > .nowDiscoveryTools .nowCandidateAddGroup {
+  .player > .nowDiscoveryTools .nowCandidateAddGroup,
+  .player > .nowDiscoveryTools .nowTidalPlaylistGroup {
     min-width: 0;
+  }
+
+  .player > .nowDiscoveryTools .nowTidalPlaylistGroup {
+    grid-area: playlist;
+    grid-template-columns: minmax(0, 420px);
   }
 
   .player > .controls {
@@ -3888,6 +3962,11 @@ body.playerMaximized {
   grid-area: tools;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "feedback"
+    "badge"
+    "actions"
+    "playlist";
   gap: 14px;
   margin: 0;
 }
@@ -3976,7 +4055,8 @@ body.playerMaximized {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       "feedback badge"
-      "actions actions";
+      "actions actions"
+      "playlist playlist";
     align-items: center;
   }
 
@@ -3993,8 +4073,11 @@ body.playerMaximized {
     grid-area: actions;
   }
 
+  .player.isMaximized .nowTidalPlaylistGroup {
+    grid-area: playlist;
+  }
+
   .player.isMaximized .nowCandidateAddGroup {
-    grid-column: 1 / -1;
     display: grid;
     grid-template-columns: 1fr;
   }
@@ -4160,6 +4243,10 @@ body.playerMaximized {
     padding: 14px;
   }
 
+  .composer .playlistSeedSources {
+    grid-template-columns: 1fr;
+  }
+
   .composer label {
     font-size: 14px;
   }
@@ -4260,7 +4347,8 @@ body.playerMaximized {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       "feedback badge"
-      "actions actions";
+      "actions actions"
+      "playlist playlist";
     align-items: start;
     gap: 10px;
   }
@@ -4289,10 +4377,16 @@ body.playerMaximized {
   .nowDiscoveryActions button,
   .nowCandidateAddGroup,
   .nowCandidateAddGroup > button,
+  .nowTidalPlaylistGroup,
   .feedbackButtons button,
   .controls button {
     width: 100%;
     min-width: 0;
+  }
+
+  .nowTidalPlaylistGroup {
+    grid-area: playlist;
+    grid-template-columns: minmax(0, 420px);
   }
 
   .feedbackButton.wrong_genre,
@@ -4494,7 +4588,8 @@ body.playerFullWindow {
     grid-template-areas:
       "badge"
       "feedback"
-      "actions";
+      "actions"
+      "playlist";
     align-items: stretch;
     gap: clamp(8px, 1.3vh, 14px);
     width: 100%;
@@ -4536,7 +4631,7 @@ body.playerFullWindow {
   .player:-webkit-full-screen .nowDiscoveryActions {
     grid-area: actions;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: clamp(8px, 1.4vw, 12px);
     width: 100%;
   }
@@ -4548,6 +4643,15 @@ body.playerFullWindow {
     grid-column: auto;
     display: grid;
     grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .player.isMaximized .nowTidalPlaylistGroup,
+  .player.isFullWindow .nowTidalPlaylistGroup,
+  .player:fullscreen .nowTidalPlaylistGroup,
+  .player:-webkit-full-screen .nowTidalPlaylistGroup {
+    grid-area: playlist;
+    grid-template-columns: minmax(0, 480px);
     width: 100%;
   }
 
@@ -4674,6 +4778,12 @@ body.playerFullWindow {
   .player.isFullWindow > .nowDiscoveryTools,
   .player:fullscreen > .nowDiscoveryTools,
   .player:-webkit-full-screen > .nowDiscoveryTools {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "feedback"
+      "badge"
+      "actions"
+      "playlist";
     gap: 8px;
     margin: 0;
   }
@@ -4725,6 +4835,12 @@ body.playerFullWindow {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
     width: 100%;
+  }
+
+  .player.isFullWindow .nowTidalPlaylistGroup,
+  .player:fullscreen .nowTidalPlaylistGroup,
+  .player:-webkit-full-screen .nowTidalPlaylistGroup {
+    grid-template-columns: 1fr;
   }
 
   .player.isFullWindow .nowCandidateAddGroup,

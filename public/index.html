@@ -57,13 +57,19 @@
               <div id="nowFeedback" class="feedbackButtons nowFeedback" aria-label="Now playing feedback"></div>
               <div id="nowDiscoveryBadge" class="nowDiscoveryBadge"></div>
               <div class="nowDiscoveryActions">
-                <button type="button" id="jumpToNowTrack">Jump to track</button>
                 <div class="nowCandidateAddGroup">
                   <button type="button" id="saveNowCandidate">Add candidate</button>
                   <div id="nowCandidateListMenu" class="candidateListMenu" hidden></div>
                 </div>
+                <button type="button" id="addNowToTidalPlaylist" disabled>Add to TIDAL</button>
                 <button type="button" id="jumpToCandidatesList">Jump to candidates</button>
                 <button type="button" id="openRabbitHole">Open Rabbit Hole</button>
+              </div>
+              <div class="nowTidalPlaylistGroup">
+                <select id="nowTidalPlaylistSelect" aria-label="TIDAL playlist">
+                  <option value="">Load TIDAL playlists...</option>
+                </select>
+                <span id="nowTidalPlaylistStatus" class="nowTidalPlaylistStatus" aria-live="polite"></span>
               </div>
             </div>
             <div id="rabbitHolePanel" class="rabbitHolePanel" hidden>
@@ -105,16 +111,32 @@
               <button type="button" data-preset="long">Long tracks this week</button>
             </div>
             <div class="playlistSeed">
-              <label>Roon playlist
-                <select id="playlistSelect" aria-label="Roon playlist">
-                  <option value="">Load Roon playlists...</option>
-                </select>
-              </label>
-              <div class="playlistButtons">
-                <button type="button" id="refreshPlaylists">Refresh</button>
-                <button type="button" id="usePlaylistSeed">Use as seed</button>
+              <div class="playlistSeedSources">
+                <div class="playlistSeedSource">
+                  <label>Roon playlist
+                    <select id="playlistSelect" aria-label="Roon playlist">
+                      <option value="">Load Roon playlists...</option>
+                    </select>
+                  </label>
+                  <div class="playlistButtons">
+                    <button type="button" id="refreshPlaylists">Refresh Roon</button>
+                    <button type="button" id="usePlaylistSeed">Use Roon seed</button>
+                  </div>
+                  <p id="playlistStatus" class="muted"></p>
+                </div>
+                <div class="playlistSeedSource">
+                  <label>TIDAL playlist
+                    <select id="tidalPlaylistSeedSelect" aria-label="TIDAL playlist seed">
+                      <option value="">Load TIDAL playlists...</option>
+                    </select>
+                  </label>
+                  <div class="playlistButtons">
+                    <button type="button" id="refreshTidalSeedPlaylists">Refresh TIDAL</button>
+                    <button type="button" id="useTidalPlaylistSeed" disabled>Use TIDAL seed</button>
+                  </div>
+                  <p id="tidalPlaylistSeedStatus" class="muted"></p>
+                </div>
               </div>
-              <p id="playlistStatus" class="muted"></p>
             </div>
             <details class="advanced">
               <summary>Advanced</summary>

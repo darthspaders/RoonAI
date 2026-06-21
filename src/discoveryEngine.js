@@ -364,6 +364,7 @@ function matchExplanationFor(track = {}, options = {}, breakdown = {}, profile =
   }
   if (prompt.percent >= 55 && taste.percent >= 70) why.push("Result selected from the prompt/taste overlap region.");
   if (track.discoveryLane === "adjacent") why.push("Adjacent-lane result kept for discovery range.");
+  if (track.discoveryLane === "branch") why.push("Branch-source result kept from a similar artist, label, radio, or remixer seed.");
 
   const seen = new Set();
   return {
@@ -1327,6 +1328,90 @@ function extractSeedArtists(options = {}) {
     .slice(0, 8);
 }
 
+function optionValues(options = {}, keys = []) {
+  const values = [];
+  for (const key of keys) {
+    const value = options[key];
+    if (Array.isArray(value)) values.push(...value);
+    else if (value) values.push(value);
+  }
+  return values.map(cleanText).filter(Boolean);
+}
+
+function extractRemixerSeedsFromText(value = "") {
+  const text = cleanText(value);
+  if (!text) return [];
+  const seeds = [];
+  const patterns = [
+    /[\[(]([^\])]{2,80}?)\s+(?:extended\s+|club\s+|dub\s+|vocal\s+)?(?:remix|rework|rerub|dub)(?:\s+mix)?[\])]/gi,
+    /\b(?:remix|rework|rerub|dub)\s+by\s+([a-z0-9][\w .'-]{2,80})\b/gi,
+    /\b([a-z0-9][\w .'-]{2,80}?)\s+(?:extended\s+|club\s+|dub\s+|vocal\s+)?(?:remix|rework|rerub|dub)(?:\s+mix)?\b/gi
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const candidate = normalizeEntityCandidate(match[1]);
+      if (!candidate) continue;
+      const key = normalize(candidate);
+      if (/^(?:original|extended|radio|club|dub|vocal|instrumental|edit|remix|rework|rerub|mix|version)$/i.test(candidate)) continue;
+      if (/\b(?:original mix|extended mix|radio edit|club mix|dub mix|vocal mix|instrumental mix)\b/.test(key)) continue;
+      seeds.push(...splitArtists(candidate));
+    }
+  }
+
+  return uniqueTerms(seeds, 12);
+}
+
+function branchArtistSeeds(options = {}, profile = buildDiscoveryProfile(options), limit = 24) {
+  const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
+  const optionSeeds = optionValues(options, [
+    "similarArtistSeeds",
+    "branchArtistSeeds",
+    "relatedArtistSeeds",
+    "radioArtistSeeds",
+    "artistRadioSeeds",
+    "remixerSeeds",
+    "remixArtistSeeds"
+  ]);
+  const planSeeds = [
+    ...(Array.isArray(plan.relatedArtists) ? plan.relatedArtists : []),
+    ...(Array.isArray(plan.similarArtists) ? plan.similarArtists : []),
+    ...(Array.isArray(plan.radioArtists) ? plan.radioArtists : []),
+    ...(Array.isArray(plan.remixers) ? plan.remixers : [])
+  ];
+  const remixerSeeds = extractRemixerSeedsFromText([
+    options.request,
+    options.reference,
+    options.nowPlaying?.title,
+    options.nowPlaying?.album
+  ].map(cleanText).join(" "));
+  const requestedKeys = new Set([...(profile.requestedArtists || []), ...(profile.seedArtists || [])].map(normalize));
+  return uniqueTerms([...optionSeeds, ...planSeeds, ...remixerSeeds].flatMap(splitArtists), limit)
+    .filter((artist) => !isGenericSeedArtist(artist) && !requestedKeys.has(normalize(artist)));
+}
+
+function branchLabelSeeds(options = {}, profile = buildDiscoveryProfile(options), limit = 24) {
+  const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
+  return uniqueTerms([
+    ...(profile.requestedLabels || []),
+    ...(Array.isArray(plan.candidateLabels) ? plan.candidateLabels : []),
+    ...(Array.isArray(plan.relatedLabels) ? plan.relatedLabels : []),
+    ...optionValues(options, ["branchLabels", "relatedLabels", "radioLabels", "remixerLabels", "labelSeeds"])
+  ], limit);
+}
+
+function artistMatchesSeedList(artist = "", seeds = []) {
+  return seeds.some((seed) => hasArtistMatch(artist, seed));
+}
+
+function textMentionsSeed(text = "", seeds = []) {
+  const normalized = normalize(text);
+  return Boolean(normalized) && seeds.some((seed) => {
+    const key = normalize(seed);
+    return key && normalized.includes(key);
+  });
+}
+
 function isGenericSeedArtist(value = "") {
   const text = normalize(value);
   if (!text) return true;
@@ -1345,6 +1430,7 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
     ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
     ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : [])
   ].filter((artist) => !isGenericSeedArtist(artist)), 24);
+  const branchArtists = pureRequestedArtistSearch ? [] : branchArtistSeeds(options, profile, 24);
   const planLabels = uniqueTerms(Array.isArray(plan.candidateLabels) ? plan.candidateLabels : [], 24);
   const planTargetTerms = uniqueTerms(Array.isArray(plan.targetGenres) ? plan.targetGenres : [], 16);
   const planVibeTerms = uniqueTerms(Array.isArray(plan.vibeTerms) ? plan.vibeTerms : [], 16);
@@ -1357,6 +1443,7 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
   const useAnchoredGenreSearch = Boolean(profile.isGenreDiscoveryTarget && !profile.isProgressiveTarget && !pureRequestedArtistSearch);
   const artists = uniqueTerms([
     ...planArtists,
+    ...branchArtists,
     ...buildArtistSeeds(options, isYearCatalogSearch ? 34 : 18, tasteProfile, profile)
   ], isYearCatalogSearch ? 42 : 28);
   const genreSeeds = genreDiscoverySeeds(profile);
@@ -1442,7 +1529,7 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
     }
   }
 
-  for (const label of planLabels.slice(0, isYearCatalogSearch ? 18 : 12)) {
+  for (const label of uniqueTerms([...branchLabelSeeds(options, profile, 18), ...planLabels], isYearCatalogSearch ? 24 : 16)) {
     for (const target of targetTerms.slice(0, 3)) {
       for (const year of yearTerms.slice(-2)) labelQueries.push(cleanText(`${label} ${target} ${year}`));
     }
@@ -1515,10 +1602,12 @@ function buildAdjacentSearchQueries(options = {}, tasteProfile = null, profile =
   const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
   const planLabels = uniqueTerms(Array.isArray(plan.candidateLabels) ? plan.candidateLabels : [], 16);
   const seeds = uniqueTerms([
+    ...branchArtistSeeds(options, profile, 18),
     ...genreDiscoverySeeds(profile),
+    ...branchLabelSeeds(options, profile, 16),
     ...planLabels,
     ...buildArtistSeeds(options, 16, tasteProfile, profile)
-  ], 36);
+  ], 44);
   const vibeTerms = uniqueTerms([...(profile.vibeTerms || [])], 10);
   const queries = [];
 
@@ -1535,6 +1624,55 @@ function buildAdjacentSearchQueries(options = {}, tasteProfile = null, profile =
   }
 
   return uniqueTerms(queries, yearRange ? 72 : 40);
+}
+
+function buildBranchSearchQueries(options = {}, tasteProfile = null, profile = buildDiscoveryProfile(options)) {
+  if (profile.scoringMode === "pure") return [];
+
+  const yearRange = parseYearRange(options);
+  const yearTerms = yearRange
+    ? Array.from({ length: yearRange.max - yearRange.min + 1 }, (_, index) => String(yearRange.min + index))
+    : [""];
+  const targetTerms = uniqueTerms([
+    ...(profile.targetGenres || []),
+    ...(profile.primaryTarget ? [profile.primaryTarget] : [])
+  ], 8);
+  const vibeTerms = uniqueTerms([...(profile.vibeTerms || [])], 6);
+  const artistSeeds = uniqueTerms([
+    ...branchArtistSeeds(options, profile, 28),
+    ...((profile.scoringMode === "similar" || profile.scoringMode === "explore") ? buildArtistSeeds(options, 10, tasteProfile, profile) : [])
+  ], 32);
+  const labelSeeds = uniqueTerms([
+    ...branchLabelSeeds(options, profile, 24),
+    ...(profile.isProgressiveTarget ? PROGRESSIVE_LABELS.slice(0, 14) : [])
+  ], 32);
+
+  if (!artistSeeds.length && !labelSeeds.length) return [];
+
+  const queries = [];
+  const recentYears = yearTerms.slice(-3);
+  for (const year of recentYears) {
+    for (const artist of artistSeeds.slice(0, yearRange ? 18 : 12)) {
+      queries.push(cleanText(`${artist} ${year}`));
+      for (const target of targetTerms.slice(0, 3)) {
+        queries.push(cleanText(`${artist} ${target} ${year}`));
+      }
+      for (const vibe of vibeTerms.slice(0, 2)) {
+        queries.push(cleanText(`${artist} ${vibe} ${year}`));
+      }
+    }
+    for (const label of labelSeeds.slice(0, yearRange ? 18 : 10)) {
+      queries.push(cleanText(`${label} ${year}`));
+      for (const target of targetTerms.slice(0, 3)) {
+        queries.push(cleanText(`${label} ${target} ${year}`));
+      }
+      for (const vibe of vibeTerms.slice(0, 2)) {
+        queries.push(cleanText(`${label} ${vibe} ${year}`));
+      }
+    }
+  }
+
+  return uniqueTerms(queries, yearRange ? 80 : 44);
 }
 
 function yearTermsForBroadenPass(options = {}) {
@@ -1856,6 +1994,8 @@ function buildSceneAnchorRecentQueries(options = {}, tasteProfile = null, profil
   const anchors = uniqueTerms([
     ...genreArtistAnchors(profile),
     ...genreDiscoverySeeds(profile),
+    ...branchArtistSeeds(options, profile, 20),
+    ...branchLabelSeeds(options, profile, 16),
     ...planLabels,
     ...planArtists,
     ...buildArtistSeeds(options, 22, tasteProfile, profile)
@@ -1913,6 +2053,7 @@ function buildArtistSeeds(options = {}, limit = 12, tasteProfile = null, profile
     ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : [])
   ], limit);
   const seedArtists = profile.seedArtists || extractSeedArtists(options);
+  const branchArtists = pureRequestedArtistSearch ? [] : branchArtistSeeds(options, profile, Math.max(4, Math.ceil(limit * 0.45)));
   const seedKeys = new Set(seedArtists.map(normalize));
   const useLearnedArtists = profile.scoringMode === "similar" ||
     (profile.scoringMode === "taste-guided" && !profile.hasExplicitDiscoveryIntent);
@@ -1933,7 +2074,7 @@ function buildArtistSeeds(options = {}, limit = 12, tasteProfile = null, profile
     : (profile.isProgressiveTarget ? PROGRESSIVE_ARTISTS : genreArtistAnchors(profile)));
   const priorityKeys = new Set([...seedArtists, ...freshYearAnchors].map(normalize));
   const rotatedSceneArtists = shuffled(uniqueValues(sceneArtists).filter((artist) => !seedKeys.has(normalize(artist)) && !priorityKeys.has(normalize(artist))));
-  return uniqueValues([...planArtists, ...seedArtists, ...learnedArtists, ...freshYearAnchors, ...rotatedSceneArtists]).slice(0, limit);
+  return uniqueValues([...planArtists, ...seedArtists, ...branchArtists, ...learnedArtists, ...freshYearAnchors, ...rotatedSceneArtists]).slice(0, limit);
 }
 
 function requestText(options = {}) {
@@ -3007,6 +3148,10 @@ function hasArtistMatch(value, artist) {
 function discoverySourceForArtist(artist, options = {}, tasteProfile = null) {
   if (hasArtistMatch(options.nowPlaying?.artist, artist)) return "Recently played seed";
   if (extractSeedArtists(options).some((seed) => normalize(seed) === normalize(artist))) return "Artist expansion";
+  if (artistMatchesSeedList(artist, optionValues(options, ["radioArtistSeeds", "artistRadioSeeds"]))) return "Radio branch artist";
+  if (artistMatchesSeedList(artist, optionValues(options, ["remixerSeeds", "remixArtistSeeds"]))) return "Remixer branch artist";
+  if (artistMatchesSeedList(artist, extractRemixerSeedsFromText(`${options.request || ""} ${options.reference || ""} ${options.nowPlaying?.title || ""}`))) return "Remixer branch artist";
+  if (artistMatchesSeedList(artist, optionValues(options, ["similarArtistSeeds", "branchArtistSeeds", "relatedArtistSeeds"]))) return "Similar artist branch";
   const learned = typeof tasteProfile?.getTopArtists === "function" ? tasteProfile.getTopArtists(12) : [];
   if (learned.some((seed) => normalize(seed) === normalize(artist))) return "Liked artist expansion";
   return "Similar artist";
@@ -3020,6 +3165,21 @@ function discoverySourceForResult(track = {}, options = {}) {
   if (extractSeedArtists(options).some((artist) => query.includes(normalize(artist)))) {
     return "Artist expansion";
   }
+  const radioSeeds = optionValues(options, ["radioArtistSeeds", "artistRadioSeeds"]);
+  if (artistMatchesSeedList(track.artist, radioSeeds) || textMentionsSeed(query, radioSeeds)) {
+    return "Radio branch artist";
+  }
+  const remixerSeeds = [
+    ...optionValues(options, ["remixerSeeds", "remixArtistSeeds"]),
+    ...extractRemixerSeedsFromText(`${options.request || ""} ${options.reference || ""} ${options.nowPlaying?.title || ""}`)
+  ];
+  if (artistMatchesSeedList(track.artist, remixerSeeds) || textMentionsSeed(query, remixerSeeds)) {
+    return "Remixer branch artist";
+  }
+  const similarSeeds = optionValues(options, ["similarArtistSeeds", "branchArtistSeeds", "relatedArtistSeeds"]);
+  if (artistMatchesSeedList(track.artist, similarSeeds) || textMentionsSeed(query, similarSeeds)) {
+    return "Similar artist branch";
+  }
   if (matchingSceneArtist(track.artist)) return "Similar artist";
   return "TIDAL search";
 }
@@ -3030,7 +3190,10 @@ function discoveryQuotaBucket(track = {}, profile = {}) {
   if (lane.includes("adjacent")) return "adjacent";
   if (lane.includes("recent") || source.includes("fallback")) return "recent";
   if (lane.includes("expanded") || lane.includes("relaxed") || track.autoBroadened) return "expanded";
-  if (source.includes("liked artist") || source.includes("similar artist") || source.includes("artist expansion") || source.includes("recently played seed")) {
+  if (lane.includes("branch") || source.includes("similar artist") || source.includes("radio branch") || source.includes("remixer branch") || source.includes("branch source")) {
+    return profile.scoringMode === "similar" ? "taste" : "branch";
+  }
+  if (source.includes("liked artist") || source.includes("artist expansion") || source.includes("recently played seed")) {
     return "taste";
   }
   if (labelText(track) && (source.includes("tidal search") || source.includes("local model") || source.includes("catalogue"))) {
@@ -3049,7 +3212,8 @@ function discoveryLaneQuotaPlan(requestedCount = 8, profile = {}) {
     core: count >= 8 ? Math.max(2, Math.floor(count * (explore ? 0.35 : 0.45))) : Math.max(1, Math.ceil(count * 0.6)),
     adjacent: count >= 8 ? Math.max(1, Math.floor(count * (explore ? 0.22 : 0.16))) : ((explore && count >= 5) || smallDiscoveryRequest ? 1 : 0),
     label: count >= 8 ? 1 : (smallDiscoveryRequest ? 1 : 0),
-    taste: !pure && count >= 8 ? Math.max(1, Math.floor(count * (similar ? 0.25 : 0.14))) : (smallDiscoveryRequest ? 1 : 0),
+    branch: !pure && !similar && count >= 8 ? Math.max(1, Math.floor(count * (explore ? 0.18 : 0.14))) : (smallDiscoveryRequest ? 1 : 0),
+    taste: !pure && count >= 8 ? Math.max(1, Math.floor(count * (similar ? 0.3 : 0.1))) : (smallDiscoveryRequest ? 1 : 0),
     expanded: count >= 12 ? 1 : 0,
     recent: 0
   };
@@ -3057,7 +3221,8 @@ function discoveryLaneQuotaPlan(requestedCount = 8, profile = {}) {
     core: count,
     adjacent: Math.max(targets.adjacent, Math.ceil(count * (explore ? 0.4 : 0.3))),
     label: Math.max(targets.label, Math.ceil(count * 0.35)),
-    taste: pure ? 0 : Math.max(targets.taste, Math.ceil(count * (similar ? 0.55 : (explore ? 0.25 : 0.4)))),
+    branch: pure ? 0 : Math.max(targets.branch, Math.ceil(count * (explore ? 0.32 : 0.28))),
+    taste: pure ? 0 : Math.max(targets.taste, Math.ceil(count * (similar ? 0.6 : (explore ? 0.2 : 0.22)))),
     expanded: Math.max(targets.expanded, Math.ceil(count * 0.25)),
     recent: Math.max(1, Math.ceil(count * 0.15))
   };
@@ -3200,7 +3365,7 @@ function selectDiscoveryLaneCandidates(candidates = [], requestedCount = 8, opti
   ));
   const basePlan = discoveryLaneQuotaPlan(limit, profile);
   let plan = basePlan;
-  const bucketOrder = ["core", "label", "adjacent", "taste", "expanded", "recent"];
+  const bucketOrder = ["core", "label", "adjacent", "branch", "taste", "expanded", "recent"];
   const selected = [];
   const selectedKeys = new Set();
   const artistCounts = new Map();
@@ -3480,6 +3645,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     if (options.autoBroaden) return 2_500;
     if (!profile.isGenreDiscoveryTarget) return 2_500;
     if (lane === "core") return yearRange ? 10_000 : 6_000;
+    if (lane === "branch") return yearRange ? 5_000 : 3_500;
     if (lane === "adjacent") return yearRange ? 5_000 : 3_500;
     return 2_500;
   }
@@ -3710,6 +3876,12 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     byKey.set(key, candidate);
   }
 
+  function candidateCountForQuotaBucket(bucket) {
+    return Array.from(byKey.values()).filter((candidate) => {
+      return discoveryQuotaBucket(candidate, profile) === bucket;
+    }).length;
+  }
+
   const modelCandidateLimit = strictRoonMode ? Math.max(40, requestedCount * 4) : Math.max(30, requestedCount * 3);
   const modelCandidates = Array.isArray(options.llmCandidates) ? options.llmCandidates.slice(0, modelCandidateLimit) : [];
   if (modelCandidates.length) {
@@ -3851,12 +4023,52 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     }
   });
 
+  const baseQuotaPlan = discoveryLaneQuotaPlan(requestedCount, profile);
+  const branchQuotaTarget = Number(baseQuotaPlan.targets.branch || 0);
+  const usedCoreQueries = new Set(searchQueries.map(normalize));
+  const branchQueries = buildBranchSearchQueries(options, tasteProfile, profile)
+    .filter((query) => !usedCoreQueries.has(normalize(query)))
+    .slice(0, isYearCatalogSearch ? (strictRoonMode ? 28 : 22) : 16);
+  const needsBranchCandidate = () => branchQuotaTarget > 0 && candidateCountForQuotaBucket("branch") < branchQuotaTarget;
+  if (branchQueries.length && (needsBranchCandidate() || byKey.size < usefulCandidateTarget)) {
+    const rankedBranchQueries = rankTrackedQueries(branchQueries, "branch");
+    await mapWithConcurrency(rankedBranchQueries, searchConcurrencyFor("branch"), async (query) => {
+      if (!hasLaneBudget("branch")) {
+        return;
+      }
+      if (!needsBranchCandidate() && byKey.size >= usefulCandidateTarget) return;
+      let results = [];
+      try {
+        results = await tidal.searchTracks(query, {
+          limit: strictRoonMode ? (isYearCatalogSearch ? 14 : 12) : (isYearCatalogSearch ? (smallExactYearSearch ? 10 : 8) : 6),
+          detailLimit: yearRange?.dateSpecific
+            ? (strictRoonMode ? 10 : 7)
+            : (yearRange ? (isYearCatalogSearch ? (strictRoonMode ? 4 : (smallExactYearSearch ? 3 : 2)) : 3) : 2)
+        });
+        recordQueryAttempt(query, "branch", results.length);
+      } catch (error) {
+        recordQueryError(query, "branch");
+        discarded.push({ query, reason: error.message });
+        return;
+      }
+
+      for (const result of results) {
+        consider({
+          ...result,
+          discoverySource: "Branch source search",
+          discoveryLane: "branch"
+        }, options, profile, { query, lane: "branch", trackYield: true });
+        if (!needsBranchCandidate() && byKey.size >= usefulCandidateTarget) break;
+      }
+    });
+  }
+
   const adjacentCandidateFloor = Math.min(
     usefulCandidateTarget,
     Math.max(requestedCount + (smallExactYearSearch ? 12 : 8), Math.ceil(usefulCandidateTarget * (smallExactYearSearch ? 0.7 : 0.55)))
   );
   if (profile.isGenreDiscoveryTarget && byKey.size < adjacentCandidateFloor) {
-    const usedQueries = new Set(searchQueries.map(normalize));
+    const usedQueries = new Set([...searchQueries, ...branchQueries].map(normalize));
     const adjacentQueries = buildAdjacentSearchQueries(options, tasteProfile, profile)
       .filter((query) => !usedQueries.has(normalize(query)))
       .slice(0, isYearCatalogSearch ? (strictRoonMode ? 28 : 22) : 16);

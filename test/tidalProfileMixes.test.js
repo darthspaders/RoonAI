@@ -766,6 +766,103 @@ test("TIDAL profile mix client creates queue playlist from TIDAL track ids", asy
   ]);
 });
 
+test("TIDAL profile mix client lists user playlists with titles", async () => {
+  const calls = [];
+  const client = new TidalProfileMixes({
+    accessToken: "profile-token",
+    scopes: "user.read playlists.read playlists.write",
+    tokenFile: tempTokenFile(),
+    countryCode: "US",
+    fetchImpl: async (url, options) => {
+      calls.push({ url, method: options.method || "GET" });
+      const parsed = new URL(url);
+      if (parsed.pathname === "/v2/users/me") {
+        return new Response(JSON.stringify({
+          data: {
+            id: "current-user",
+            type: "users"
+          }
+        }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+      }
+      if (parsed.pathname === "/v2/userCollections/current-user/relationships/playlists") {
+        return new Response(JSON.stringify({
+          data: [
+            { id: "playlist-b", type: "playlists" },
+            { id: "playlist-a", type: "playlists" }
+          ]
+        }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+      }
+      if (parsed.pathname === "/v2/playlists/playlist-a") {
+        return new Response(JSON.stringify({
+          data: {
+            id: "playlist-a",
+            type: "playlists",
+            attributes: {
+              name: "A Title",
+              externalLinks: [{ href: "https://listen.tidal.com/playlist/playlist-a" }]
+            },
+            relationships: { items: { data: [{ id: "track-1", type: "tracks" }] } }
+          }
+        }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+      }
+      if (parsed.pathname === "/v2/playlists/playlist-b") {
+        return new Response(JSON.stringify({
+          data: {
+            id: "playlist-b",
+            type: "playlists",
+            attributes: { name: "B Title" }
+          }
+        }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+      }
+      return new Response("{}", { status: 404 });
+    }
+  });
+
+  const result = await client.getUserPlaylists({ force: true });
+
+  assert.equal(result.connected, true);
+  assert.deepEqual(result.playlists.map((playlist) => playlist.title), ["A Title", "B Title"]);
+  assert.equal(result.playlists[0].itemCount, 1);
+  assert.ok(calls.some((call) => call.url.includes("/v2/users/me")));
+  assert.ok(calls.some((call) => call.url.includes("/v2/userCollections/current-user/relationships/playlists")));
+  assert.ok(calls.some((call) => call.url.includes("/v2/playlists/playlist-a")));
+});
+
+test("TIDAL profile mix client adds one track to an existing playlist", async () => {
+  const calls = [];
+  const client = new TidalProfileMixes({
+    accessToken: "profile-token",
+    scopes: "user.read playlists.read playlists.write",
+    tokenFile: tempTokenFile(),
+    countryCode: "US",
+    fetchImpl: async (url, options) => {
+      calls.push({
+        url,
+        method: options.method || "GET",
+        body: options.body ? JSON.parse(options.body) : null
+      });
+      const parsed = new URL(url);
+      if (parsed.pathname === "/v2/playlists/target-playlist/relationships/items" && options.method === "POST") {
+        return new Response(null, { status: 204 });
+      }
+      return new Response("{}", { status: 404 });
+    }
+  });
+
+  const result = await client.addTrackToPlaylist("target-playlist", {
+    title: "Current One",
+    artist: "Current Artist",
+    tidalUrl: "https://tidal.com/browse/track/current-track"
+  }, {
+    playlistTitle: "Target Playlist"
+  });
+
+  assert.equal(result.addedCount, 1);
+  assert.equal(result.playlist.title, "Target Playlist");
+  assert.deepEqual(result.trackIds, ["current-track"]);
+  assert.deepEqual(calls[0].body.data, [{ id: "current-track", type: "tracks" }]);
+});
+
 test("TIDAL profile mix client requires playlists.write for queue playlist creation", async () => {
   const client = new TidalProfileMixes({
     accessToken: "profile-token",

@@ -25,6 +25,13 @@ const state = {
   tidalMixes: null,
   tidalVisibleMixes: [],
   tidalMixesNeedsRefresh: true,
+  tidalPlaylists: [],
+  tidalPlaylistsLoaded: false,
+  tidalPlaylistsLoading: false,
+  tidalPlaylistsError: "",
+  selectedTidalPlaylistId: localStorage.getItem("tidalPlaylistId") || "",
+  selectedTidalSeedPlaylistId: localStorage.getItem("tidalSeedPlaylistId") || "",
+  tidalPlaylistSeedTracks: [],
   appStatus: null,
   connectionStatus: { connected: false, coreName: "" },
   nowTrack: null,
@@ -1320,16 +1327,206 @@ function nowPlayingBadgeHtml(track = {}, source = "") {
   return `<span class="scoreBadge unscored">${escapeHtml(label)}</span>`;
 }
 
+function selectedTidalPlaylist() {
+  return state.tidalPlaylists.find((playlist) => playlist.id === state.selectedTidalPlaylistId) || state.tidalPlaylists[0] || null;
+}
+
+function selectedTidalSeedPlaylist() {
+  return state.tidalPlaylists.find((playlist) => playlist.id === state.selectedTidalSeedPlaylistId) || state.tidalPlaylists[0] || null;
+}
+
+function tidalPlaylistOptionsKey() {
+  return state.tidalPlaylists.map((playlist) => `${playlist.id}:${playlist.title}:${Number(playlist.itemCount || 0)}`).join("|");
+}
+
+function tidalPlaylistOptionsHtml() {
+  return state.tidalPlaylists.map((playlist) => {
+    const count = Number(playlist.itemCount || 0);
+    const suffix = count ? ` (${count})` : "";
+    return `<option value="${escapeHtml(playlist.id)}">${escapeHtml(playlist.title + suffix)}</option>`;
+  }).join("");
+}
+
+function setSelectOptionsIfChanged(select, html, renderKey) {
+  if (select.dataset.renderKey === renderKey) return;
+  const currentValue = select.value;
+  select.innerHTML = html;
+  select.dataset.renderKey = renderKey;
+  if (currentValue && Array.from(select.options).some((option) => option.value === currentValue)) {
+    select.value = currentValue;
+  }
+}
+
+function renderNowTidalPlaylistControl(track = state.nowTrack) {
+  const select = $("#nowTidalPlaylistSelect");
+  const button = $("#addNowToTidalPlaylist");
+  const status = $("#nowTidalPlaylistStatus");
+  if (!select || !button || !status) return;
+
+  if (state.tidalPlaylistsLoading) {
+    setSelectOptionsIfChanged(select, "<option value=\"\">Loading TIDAL playlists...</option>", "loading");
+    select.disabled = true;
+    button.disabled = true;
+    status.textContent = "";
+    return;
+  }
+
+  if (state.tidalPlaylistsError) {
+    setSelectOptionsIfChanged(select, "<option value=\"\">TIDAL playlists unavailable</option>", `error:${state.tidalPlaylistsError}`);
+    select.disabled = false;
+    button.disabled = true;
+    status.textContent = state.tidalPlaylistsError;
+    return;
+  }
+
+  if (!state.tidalPlaylistsLoaded) {
+    setSelectOptionsIfChanged(select, "<option value=\"\">Load TIDAL playlists...</option>", "not-loaded");
+    select.disabled = true;
+    button.disabled = true;
+    status.textContent = "";
+    return;
+  }
+
+  if (!state.tidalPlaylists.length) {
+    setSelectOptionsIfChanged(select, "<option value=\"\">No TIDAL playlists found</option>", "empty");
+    select.disabled = false;
+    button.disabled = true;
+    status.textContent = "Create a playlist in TIDAL, then open this selector to refresh.";
+    return;
+  }
+
+  if (!state.tidalPlaylists.some((playlist) => playlist.id === state.selectedTidalPlaylistId)) {
+    state.selectedTidalPlaylistId = state.tidalPlaylists[0].id;
+    localStorage.setItem("tidalPlaylistId", state.selectedTidalPlaylistId);
+  }
+  setSelectOptionsIfChanged(select, tidalPlaylistOptionsHtml(), `ready:${tidalPlaylistOptionsKey()}`);
+  if (select.value !== state.selectedTidalPlaylistId) select.value = state.selectedTidalPlaylistId;
+  select.disabled = false;
+  button.disabled = !track || !state.selectedTidalPlaylistId;
+}
+
+function renderTidalPlaylistSeedControl() {
+  const select = $("#tidalPlaylistSeedSelect");
+  const button = $("#useTidalPlaylistSeed");
+  const status = $("#tidalPlaylistSeedStatus");
+  if (!select || !button || !status) return;
+
+  if (state.tidalPlaylistsLoading) {
+    setSelectOptionsIfChanged(select, "<option value=\"\">Loading TIDAL playlists...</option>", "loading");
+    select.disabled = true;
+    button.disabled = true;
+    status.textContent = "Loading TIDAL playlists...";
+    return;
+  }
+
+  if (state.tidalPlaylistsError) {
+    setSelectOptionsIfChanged(select, "<option value=\"\">TIDAL playlists unavailable</option>", `error:${state.tidalPlaylistsError}`);
+    select.disabled = false;
+    button.disabled = true;
+    status.textContent = state.tidalPlaylistsError;
+    return;
+  }
+
+  if (!state.tidalPlaylistsLoaded) {
+    setSelectOptionsIfChanged(select, "<option value=\"\">Load TIDAL playlists...</option>", "not-loaded");
+    select.disabled = false;
+    button.disabled = true;
+    status.textContent = "Refresh TIDAL to load playlists.";
+    return;
+  }
+
+  if (!state.tidalPlaylists.length) {
+    setSelectOptionsIfChanged(select, "<option value=\"\">No TIDAL playlists found</option>", "empty");
+    select.disabled = false;
+    button.disabled = true;
+    status.textContent = "No TIDAL playlists found";
+    return;
+  }
+
+  if (!state.tidalPlaylists.some((playlist) => playlist.id === state.selectedTidalSeedPlaylistId)) {
+    state.selectedTidalSeedPlaylistId = state.tidalPlaylists[0].id;
+    localStorage.setItem("tidalSeedPlaylistId", state.selectedTidalSeedPlaylistId);
+  }
+  setSelectOptionsIfChanged(select, tidalPlaylistOptionsHtml(), `ready:${tidalPlaylistOptionsKey()}`);
+  if (select.value !== state.selectedTidalSeedPlaylistId) select.value = state.selectedTidalSeedPlaylistId;
+  select.disabled = false;
+  button.disabled = !state.selectedTidalSeedPlaylistId;
+  if (!status.textContent || /^(?:Loading|Refresh TIDAL|No TIDAL|TIDAL playlists unavailable)/i.test(status.textContent)) {
+    status.textContent = `${state.tidalPlaylists.length} TIDAL playlists available`;
+  }
+}
+
+async function loadTidalPlaylists({ force = false } = {}) {
+  if (state.tidalPlaylistsLoading) return;
+  if (!force && state.tidalPlaylistsLoaded) {
+    renderNowTidalPlaylistControl();
+    renderTidalPlaylistSeedControl();
+    return;
+  }
+  state.tidalPlaylistsLoading = true;
+  state.tidalPlaylistsError = "";
+  renderNowTidalPlaylistControl();
+  renderTidalPlaylistSeedControl();
+  try {
+    const result = await getJson(`/api/tidal/playlists${force ? "?refresh=1" : ""}`);
+    state.tidalPlaylists = Array.isArray(result.playlists) ? result.playlists : [];
+    state.tidalPlaylistsLoaded = true;
+    state.tidalPlaylistsError = result.connected === false ? (result.error || "Connect TIDAL profile access first.") : "";
+  } catch (error) {
+    state.tidalPlaylists = [];
+    state.tidalPlaylistsLoaded = false;
+    state.tidalPlaylistsError = error.message;
+  } finally {
+    state.tidalPlaylistsLoading = false;
+    renderNowTidalPlaylistControl();
+    renderTidalPlaylistSeedControl();
+  }
+}
+
+async function addNowTrackToTidalPlaylist(button = $("#addNowToTidalPlaylist")) {
+  const track = state.nowTrack || nowPlayingTrack(activeZone());
+  const playlist = selectedTidalPlaylist();
+  const status = $("#nowTidalPlaylistStatus");
+  if (!track) return alert("There is no current track to add.");
+  if (!playlist?.id) return alert("Choose a TIDAL playlist first.");
+
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Adding...";
+  if (status) status.textContent = "";
+  try {
+    const result = await api("/api/tidal/playlist-track", {
+      playlistId: playlist.id,
+      playlistTitle: playlist.title,
+      track
+    });
+    button.textContent = "Added";
+    if (status) {
+      const title = result.track?.title || track.title || "Current track";
+      const artist = result.track?.artist || track.artist || "";
+      status.textContent = `Added ${[artist, title].filter(Boolean).join(" - ")} to ${playlist.title}.`;
+    }
+  } catch (error) {
+    button.textContent = originalText;
+    if (status) status.textContent = error.message;
+    alert(error.message);
+  } finally {
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.disabled = !state.nowTrack || !selectedTidalPlaylist();
+    }, 900);
+  }
+}
+
 function updateNowDiscoveryTools(zone = activeZone()) {
   const tools = $("#nowDiscoveryTools");
   const feedback = $("#nowFeedback");
   const badge = $("#nowDiscoveryBadge");
-  const jump = $("#jumpToNowTrack");
   const saveNow = $("#saveNowCandidate");
   const jumpCandidates = $("#jumpToCandidatesList");
   const openRabbitHole = $("#openRabbitHole");
   const rabbitHolePanel = $("#rabbitHolePanel");
-  if (!tools || !feedback || !badge || !jump || !saveNow || !jumpCandidates || !openRabbitHole || !rabbitHolePanel) return;
+  if (!tools || !feedback || !badge || !saveNow || !jumpCandidates || !openRabbitHole || !rabbitHolePanel) return;
 
   const match = findNowPlayingMatch(zone);
   state.nowMatchIndex = match.index;
@@ -1342,9 +1539,8 @@ function updateNowDiscoveryTools(zone = activeZone()) {
     feedback.innerHTML = "";
     feedback.dataset.renderKey = "";
     badge.innerHTML = "";
-    jump.disabled = true;
-    jump.textContent = "Jump to track";
     updateNowCandidateSaveState(null);
+    renderNowTidalPlaylistControl(null);
     jumpCandidates.disabled = true;
     openRabbitHole.disabled = true;
     rabbitHolePanel.hidden = true;
@@ -1358,9 +1554,11 @@ function updateNowDiscoveryTools(zone = activeZone()) {
     feedback.dataset.renderKey = feedbackRenderKey;
   }
   badge.innerHTML = nowPlayingBadgeHtml(match.track, match.source);
-  jump.textContent = match.source === "saved" ? "Jump to saved" : "Jump to track";
-  jump.disabled = match.index < 0 && match.savedIndex < 0;
   updateNowCandidateSaveState(match.track);
+  renderNowTidalPlaylistControl(match.track);
+  if (!state.tidalPlaylistsLoaded && !state.tidalPlaylistsLoading && !state.tidalPlaylistsError) {
+    loadTidalPlaylists().catch(() => {});
+  }
   jumpCandidates.disabled = false;
   jumpCandidates.title = `Jump to ${activeSavedList().name}`;
   openRabbitHole.disabled = false;
@@ -2973,9 +3171,42 @@ async function refreshPlaylists() {
     $("#playlistSelect").innerHTML = state.playlists.length
       ? state.playlists.map((playlist) => `<option value="${escapeHtml(playlist.id)}">${escapeHtml(playlist.title)}${playlist.subtitle ? ` - ${escapeHtml(playlist.subtitle)}` : ""}</option>`).join("")
       : "<option value=\"\">No playlists found</option>";
-    $("#playlistStatus").textContent = state.playlists.length ? `${state.playlists.length} Roon playlists available` : "No Roon playlists found";
+    const hiddenTidalCount = Number(result.hiddenTidalPlaylistCount || 0);
+    const hiddenNote = hiddenTidalCount ? ` (${hiddenTidalCount} TIDAL-backed hidden)` : "";
+    $("#playlistStatus").textContent = state.playlists.length ? `${state.playlists.length} Roon local playlists available${hiddenNote}` : `No Roon local playlists found${hiddenNote}`;
   } catch (error) {
     $("#playlistStatus").textContent = error.message;
+  }
+}
+
+function seedLinesFromTracks(tracks = []) {
+  return tracks
+    .slice(0, 80)
+    .map((track) => `${track.artist || "Unknown Artist"} - ${track.title || "Untitled"}`)
+    .join("\n");
+}
+
+async function useTidalPlaylistSeed() {
+  const playlist = selectedTidalSeedPlaylist();
+  const status = $("#tidalPlaylistSeedStatus");
+  if (!playlist?.id) return;
+
+  status.textContent = "Loading TIDAL playlist tracks...";
+  try {
+    const result = await api("/api/tidal/playlist-tracks", {
+      playlistId: playlist.id,
+      title: playlist.title,
+      limit: 80
+    });
+    state.tidalPlaylistSeedTracks = result.tracks || [];
+    const title = result.mix?.title || playlist.title || "TIDAL playlist";
+    $("#reference").value = seedLinesFromTracks(state.tidalPlaylistSeedTracks);
+    if (!$("#request").value.trim()) {
+      $("#request").value = `find similar discoveries to ${title}`;
+    }
+    status.textContent = `${title}: ${state.tidalPlaylistSeedTracks.length} TIDAL seed tracks loaded`;
+  } catch (error) {
+    status.textContent = error.message;
   }
 }
 
@@ -3547,11 +3778,6 @@ $("#zoneSelect").addEventListener("change", (event) => {
   renderState({ connected: true, core: { name: $("#connection").textContent.replace("Connected to ", "") }, zones: state.zones });
 });
 
-$("#jumpToNowTrack").addEventListener("click", () => {
-  if (state.nowMatchIndex >= 0) scrollToDiscoveryTrack(state.nowMatchIndex);
-  else if (state.nowSavedIndex >= 0) scrollToSavedTrack(state.nowSavedIndex);
-});
-
 $("#jumpToCandidatesList").addEventListener("click", scrollToCandidatesList);
 
 $("#openRabbitHole").addEventListener("click", () => {
@@ -3638,6 +3864,22 @@ $("#nowCandidateListMenu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-now-candidate-list]");
   if (!button) return;
   saveNowCandidateToList(button.dataset.nowCandidateList, $("#saveNowCandidate")).catch((error) => alert(error.message));
+});
+
+$("#nowTidalPlaylistSelect")?.addEventListener("focus", () => {
+  loadTidalPlaylists({
+    force: Boolean(state.tidalPlaylistsError || (state.tidalPlaylistsLoaded && !state.tidalPlaylists.length))
+  }).catch(() => {});
+});
+
+$("#nowTidalPlaylistSelect")?.addEventListener("change", (event) => {
+  state.selectedTidalPlaylistId = event.target.value || "";
+  if (state.selectedTidalPlaylistId) localStorage.setItem("tidalPlaylistId", state.selectedTidalPlaylistId);
+  renderNowTidalPlaylistControl();
+});
+
+$("#addNowToTidalPlaylist")?.addEventListener("click", () => {
+  addNowTrackToTidalPlaylist().catch((error) => alert(error.message));
 });
 
 $("#jumpTop").addEventListener("click", () => {
@@ -3885,6 +4127,33 @@ for (const name of ["releaseExactDate", "releaseStartDate", "releaseEndDate"]) {
 
 $("#refreshPlaylists").addEventListener("click", refreshPlaylists);
 
+$("#refreshTidalSeedPlaylists")?.addEventListener("click", () => {
+  loadTidalPlaylists({ force: true }).catch((error) => {
+    const status = $("#tidalPlaylistSeedStatus");
+    if (status) status.textContent = error.message;
+  });
+});
+
+$("#tidalPlaylistSeedSelect")?.addEventListener("focus", () => {
+  loadTidalPlaylists({
+    force: Boolean(state.tidalPlaylistsError || (state.tidalPlaylistsLoaded && !state.tidalPlaylists.length))
+  }).catch(() => {});
+});
+
+$("#tidalPlaylistSeedSelect")?.addEventListener("change", (event) => {
+  state.selectedTidalSeedPlaylistId = event.target.value || "";
+  if (state.selectedTidalSeedPlaylistId) localStorage.setItem("tidalSeedPlaylistId", state.selectedTidalSeedPlaylistId);
+  const button = $("#useTidalPlaylistSeed");
+  if (button) button.disabled = !state.selectedTidalSeedPlaylistId;
+});
+
+$("#useTidalPlaylistSeed")?.addEventListener("click", () => {
+  useTidalPlaylistSeed().catch((error) => {
+    const status = $("#tidalPlaylistSeedStatus");
+    if (status) status.textContent = error.message;
+  });
+});
+
 $("#usePlaylistSeed").addEventListener("click", async () => {
   const itemKey = $("#playlistSelect").value;
   if (!itemKey) return;
@@ -3894,11 +4163,7 @@ $("#usePlaylistSeed").addEventListener("click", async () => {
   try {
     const playlist = await api("/api/roon/playlist-tracks", { itemKey, title: selectedPlaylist?.title || "" });
     state.playlistSeedTracks = playlist.tracks || [];
-    const seedLines = state.playlistSeedTracks
-      .slice(0, 80)
-      .map((track) => `${track.artist || "Unknown Artist"} - ${track.title}`)
-      .join("\n");
-    $("#reference").value = seedLines;
+    $("#reference").value = seedLinesFromTracks(state.playlistSeedTracks);
     if (!$("#request").value.trim()) {
       $("#request").value = `find similar discoveries to ${playlist.title}`;
     }
@@ -4358,4 +4623,5 @@ setInterval(() => {
 refreshSession().catch(() => {});
 refreshSaved().catch(() => {});
 refreshPlaylists().catch(() => {});
+loadTidalPlaylists().catch(() => {});
 refreshHistoryReport().catch(() => {});

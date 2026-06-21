@@ -322,3 +322,56 @@ test("small fresh progressive searches branch beyond fixed familiar anchors", as
   assert.ok(albumCalls.some((artist) => !familiarFreshAnchors.has(artist)));
   assert.ok(albumCalls.filter((artist) => familiarFreshAnchors.has(artist)).length < albumCalls.length);
 });
+
+test("explicit Taste Guided searches expand similar branch seeds before liked artists", async () => {
+  const albumCalls = [];
+  const fakeTidal = {
+    isConfigured() {
+      return true;
+    },
+    async getArtistAlbums(artist) {
+      albumCalls.push(artist);
+      return [];
+    },
+    async searchTracks() {
+      return [];
+    }
+  };
+  const tasteProfile = {
+    getTopArtists() {
+      return ["Liked Anchor One", "Liked Anchor Two", "Liked Anchor Three"];
+    },
+    adjustmentFor() {
+      return { value: 0, reasons: [] };
+    },
+    getFeedbackFor() {
+      return "";
+    },
+    summary() {
+      return {};
+    },
+    read() {
+      return {};
+    }
+  };
+
+  await discoverTracks({
+    tidal: fakeTidal,
+    options: {
+      request: "Find 8 melodic techno discoveries",
+      genres: "melodic techno",
+      count: "8",
+      scoringMode: "taste-guided",
+      similarArtistSeeds: ["Adjacent Branch One", "Adjacent Branch Two"],
+      llmSearchPlan: {
+        candidateArtists: []
+      }
+    },
+    history: null,
+    tasteProfile
+  });
+
+  assert.ok(albumCalls.includes("Adjacent Branch One"));
+  assert.ok(albumCalls.includes("Adjacent Branch Two"));
+  assert.equal(albumCalls.some((artist) => /^Liked Anchor/.test(artist)), false);
+});

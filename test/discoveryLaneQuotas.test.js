@@ -109,6 +109,39 @@ test("small Taste Guided requests still reserve branch-out slots", () => {
   assert.ok(buckets.includes("taste"));
 });
 
+test("Taste Guided separates similar branch sources from liked-artist taste fill", () => {
+  const options = {
+    request: "Find 8 progressive house discoveries this year",
+    genres: "progressive house",
+    years: "2026",
+    count: "8",
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const core = Array.from({ length: 8 }, (_, index) => candidate(index, {
+    score: 98 - index
+  }));
+  const liked = Array.from({ length: 4 }, (_, index) => candidate(200 + index, {
+    artist: `Liked Artist ${index}`,
+    score: 99 - index,
+    discoverySource: "Liked artist expansion"
+  }));
+  const similarBranch = candidate(300, {
+    artist: "Adjacent Similar Artist",
+    score: 63,
+    discoverySource: "Similar artist"
+  });
+
+  const selected = selectDiscoveryLaneCandidates([...liked, ...core, similarBranch], 8, options, profile);
+  const buckets = selected.tracks.map((track) => track.discoveryQuotaBucket);
+
+  assert.equal(selected.tracks.length, 8);
+  assert.equal(selected.quota.targets.branch, 1);
+  assert.ok(buckets.includes("branch"));
+  assert.ok(selected.tracks.some((track) => track.artist === "Adjacent Similar Artist"));
+  assert.ok((selected.quota.selected.taste || 0) <= selected.quota.max.taste);
+});
+
 test("small Taste Guided requests cap repeated collaborator artists", () => {
   const options = {
     request: "Find 5 progressive house tracks this year",

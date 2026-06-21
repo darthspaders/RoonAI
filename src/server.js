@@ -1248,6 +1248,62 @@ async function enrichRoonTrackWithTidal(track, options = {}) {
   }
 }
 
+function trackHasTidalId(track = {}) {
+  const direct = String(track.tidal?.id || track.tidalId || track.id || "").trim();
+  if (direct && !/^https?:\/\//i.test(direct)) return true;
+  const url = String(track.tidal?.tidalUrl || track.tidalUrl || track.url || "").trim();
+  return /\/track\/[^/?#]+/i.test(url);
+}
+
+async function resolveTidalTrackForPlaylist(track = {}) {
+  const candidate = {
+    ...track,
+    artist: String(track.artist || track.tidal?.artist || "").trim(),
+    title: String(track.title || track.tidal?.title || "").trim()
+  };
+  if (!candidate.title || !candidate.artist) {
+    const error = new Error("The current track needs both artist and title before it can be added to a TIDAL playlist.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (trackHasTidalId(candidate)) {
+    return { track: candidate, resolvedBy: "provided-tidal-id" };
+  }
+  if (!tidal.isConfigured()) {
+    const error = new Error("The current track does not have a TIDAL ID, and TIDAL catalogue verification is not configured.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const verified = await withTimeout(
+    tidal.verify(candidate, { strict: false }),
+    8_000,
+    "TIDAL catalogue verification took too long."
+  );
+  if (!verified) {
+    const error = new Error(`Could not find a TIDAL catalogue match for ${candidate.artist} - ${candidate.title}.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!tidalEnrichmentMatches(candidate, verified)) {
+    const error = new Error(`TIDAL found ${verified.artist || "unknown artist"} - ${verified.title || "unknown title"}, which does not exactly match the current track.`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return {
+    track: {
+      ...candidate,
+      artist: verified.artist || candidate.artist,
+      title: verified.title || candidate.title,
+      album: verified.album || candidate.album || "",
+      tidal: verified,
+      tidalUrl: verified.tidalUrl || candidate.tidalUrl || ""
+    },
+    resolvedBy: "tidal-catalogue"
+  };
+}
+
 async function enrichRoonTracksOpportunistically(tracks = [], options = {}) {
   const startedAt = Date.now();
   const circuitState = tidal.status?.()?.circuit?.state || "";
@@ -2799,6 +2855,61 @@ async function tidalMixesResponse({ force = false } = {}) {
   };
 }
 
+async function roonPlaylistsResponse({ includeTidal = false } = {}) {
+  const roonResult = await roon.listPlaylists();
+  const playlists = Array.isArray(roonResult.playlists) ? roonResult.playlists : [];
+  if (includeTidal) {
+    return {
+      ...roonResult,
+      playlists,
+      count: playlists.length,
+      totalRoonVisibleCount: playlists.length,
+      hiddenTidalPlaylistCount: 0,
+      playlistFilter: "all-roon-visible"
+    };
+  }
+
+  try {
+    const tidalResult = await tidalProfileMixes.getUserPlaylists();
+    const tidalTitleKeys = new Set((tidalResult.playlists || [])
+      .map((playlist) => normalizeMatchText(playlist.title))
+      .filter(Boolean));
+    if (!tidalResult.connected || !tidalTitleKeys.size) {
+      return {
+        ...roonResult,
+        playlists,
+        count: playlists.length,
+        totalRoonVisibleCount: playlists.length,
+        hiddenTidalPlaylistCount: 0,
+        playlistFilter: "unfiltered",
+        warning: tidalResult.error || tidalResult.warning || "TIDAL playlist comparison unavailable."
+      };
+    }
+
+    const localPlaylists = playlists
+      .filter((playlist) => !tidalTitleKeys.has(normalizeMatchText(playlist.title)))
+      .map((playlist) => ({ ...playlist, source: "roon-local" }));
+    return {
+      ...roonResult,
+      playlists: localPlaylists,
+      count: localPlaylists.length,
+      totalRoonVisibleCount: playlists.length,
+      hiddenTidalPlaylistCount: playlists.length - localPlaylists.length,
+      playlistFilter: "local-only-by-tidal-title"
+    };
+  } catch (error) {
+    return {
+      ...roonResult,
+      playlists,
+      count: playlists.length,
+      totalRoonVisibleCount: playlists.length,
+      hiddenTidalPlaylistCount: 0,
+      playlistFilter: "unfiltered",
+      warning: `TIDAL playlist comparison unavailable: ${error.message}`
+    };
+  }
+}
+
 async function handleApi(req, res, url) {
   const pathname = url.pathname;
 
@@ -2928,7 +3039,9 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && pathname === "/api/roon/playlists") {
-    return sendJson(res, 200, await roon.listPlaylists());
+    return sendJson(res, 200, await roonPlaylistsResponse({
+      includeTidal: /^(1|true|yes)$/i.test(String(url.searchParams.get("includeTidal") || url.searchParams.get("all") || ""))
+    }));
   }
 
   if (req.method === "GET" && pathname === "/api/saved") {
@@ -2966,6 +3079,12 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && pathname === "/api/tidal/mixes") {
     return sendJson(res, 200, await tidalMixesResponse({
+      force: /^(1|true|yes)$/i.test(String(url.searchParams.get("refresh") || ""))
+    }));
+  }
+
+  if (req.method === "GET" && pathname === "/api/tidal/playlists") {
+    return sendJson(res, 200, await tidalProfileMixes.getUserPlaylists({
       force: /^(1|true|yes)$/i.test(String(url.searchParams.get("refresh") || ""))
     }));
   }
@@ -3057,7 +3176,7 @@ async function handleApi(req, res, url) {
       };
     }
 
-    if (body.zoneId && strictRoonMode) {
+    if (normalizeScoringMode(searchBody) !== "pure") {
       searchBody = await withSimilarArtistSeeds(searchBody, requestedCount);
       searchProfile = buildDiscoveryProfile(searchBody);
     }
@@ -3308,11 +3427,33 @@ async function handleApi(req, res, url) {
       excludeTracks: Array.isArray(body.excludeTracks) ? body.excludeTracks : []
     }));
   }
+  if (pathname === "/api/tidal/playlist-tracks") {
+    return sendJson(res, 200, await tidalProfileMixes.getMixTracks(body.playlistId || body.playlist_id || body.mixId || body.id || "", {
+      limit: body.limit || 50,
+      excludeTracks: Array.isArray(body.excludeTracks) ? body.excludeTracks : []
+    }));
+  }
   if (pathname === "/api/tidal/queue-playlist") {
     return sendJson(res, 200, await tidalProfileMixes.createQueuePlaylist(body.tracks || [], {
       title: body.title || "",
       description: body.description || ""
     }));
+  }
+  if (pathname === "/api/tidal/playlist-track") {
+    const resolved = await resolveTidalTrackForPlaylist(body.track || {});
+    const result = await tidalProfileMixes.addTrackToPlaylist(body.playlistId || body.playlist_id || "", resolved.track, {
+      playlistTitle: body.playlistTitle || body.playlist_title || ""
+    });
+    return sendJson(res, 200, {
+      ...result,
+      resolvedBy: resolved.resolvedBy,
+      track: {
+        ...(result.track || {}),
+        title: resolved.track.title || result.track?.title || "",
+        artist: resolved.track.artist || result.track?.artist || "",
+        tidalUrl: resolved.track.tidal?.tidalUrl || resolved.track.tidalUrl || ""
+      }
+    });
   }
   if (pathname === "/api/roon/search") {
     return sendJson(res, 200, await roon.search(body.track, body.zoneId));
