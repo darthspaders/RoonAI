@@ -45,6 +45,17 @@ function trackKey(track = {}) {
   return `${normalize(track.artist)}|${normalize(track.title)}`;
 }
 
+function feedbackScoreForRating(value = "") {
+  const rating = normalize(value);
+  if (rating === "love") return 3;
+  if (rating === "good" || rating === "up") return 1;
+  if (rating === "ok" || rating === "okay") return 0.5;
+  if (rating === "skip" || rating === "down") return -1;
+  if (rating === "never" || rating === "never again" || rating === "never_again") return -3;
+  if (rating === "wrong genre" || rating === "wrong_genre" || rating === "not what i asked for") return -1;
+  return 0;
+}
+
 function trackMatches(left = {}, right = {}) {
   const leftTitles = titleKeys(left.title || left.tidal?.title);
   const rightTitles = titleKeys(right.title || right.tidal?.title);
@@ -75,10 +86,16 @@ function compactTrack(track = {}) {
     reason: cleanText(track.reason),
     why: Array.isArray(track.why) ? track.why.slice(0, 8).map(cleanText).filter(Boolean) : [],
     discoverySource: cleanText(track.discoverySource),
+    discoveryLane: cleanText(track.discoveryLane),
+    sourceType: cleanText(track.sourceType),
+    isRadio: Boolean(track.isRadio),
+    isLiveRadio: Boolean(track.isLiveRadio),
+    playbackSource: track.playbackSource || null,
     tidal: track.tidal || null,
     roon: track.roon || null,
     statusChecks: Array.isArray(track.statusChecks) ? track.statusChecks.slice(0, 12).map(cleanText).filter(Boolean) : [],
     verificationSource: cleanText(track.verificationSource),
+    tasteScore: Number.isFinite(Number(track.tasteScore)) ? Number(track.tasteScore) : null,
     feedback: cleanText(track.feedback)
   };
 }
@@ -149,9 +166,10 @@ class TrackMemory {
     const key = trackKey(track);
     if (!key || key === "|") return this.summary();
     const previous = this.entries.get(key) || compactTrack(track);
+    const tasteScore = feedbackScoreForRating(rating);
     this.entries.set(key, {
       ...previous,
-      ...compactTrack({ ...previous, ...track }),
+      ...compactTrack({ ...previous, ...track, tasteScore }),
       key,
       firstSeenAt: previous.firstSeenAt || Date.now(),
       lastSeenAt: Date.now(),

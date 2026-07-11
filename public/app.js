@@ -8,23 +8,29 @@ const state = {
   lastResult: null,
   playlists: [],
   playlistSeedTracks: [],
-  savedLists: [],
-  activeSavedListId: "",
-  savedTracks: [],
   feedbackByKey: {},
   calibration: null,
   calibrationVersion: "",
   appUpdatedAt: "",
-  savedVersion: "",
   sessionUpdatedAt: "",
   tasteUpdatedAt: "",
   feedbackVersion: "",
   memory: null,
+  standby: null,
+  standbyTracks: [],
   historyReport: null,
   historyNeedsRefresh: true,
   tidalMixes: null,
   tidalVisibleMixes: [],
   tidalMixesNeedsRefresh: true,
+  radioStations: [],
+  radioStationsLoaded: false,
+  radioStationsLoading: false,
+  radioStationsError: "",
+  radioStationsSession: "",
+  radioBrowseHierarchy: "",
+  radioBrowseTitle: "",
+  radioBrowseItemKey: "",
   tidalPlaylists: [],
   tidalPlaylistsLoaded: false,
   tidalPlaylistsLoading: false,
@@ -36,8 +42,11 @@ const state = {
   connectionStatus: { connected: false, coreName: "" },
   nowTrack: null,
   nowTrackSource: "",
+  nowQualityKey: "",
+  nowQualityLoading: false,
+  nowQualityInfo: null,
+  nowQualityCache: {},
   nowMatchIndex: -1,
-  nowSavedIndex: -1,
   rabbitHoleGraph: null,
   rabbitHoleKey: "",
   isSeeking: false,
@@ -52,7 +61,13 @@ const $ = (selector) => document.querySelector(selector);
 const TIDAL_RADIO_RECENT_KEY = "rabbitHole.tidalRadioRecent.v1";
 const TIDAL_RADIO_RECENT_TTL_MS = 24 * 60 * 60 * 1000;
 const TIDAL_RADIO_RECENT_MAX = 160;
+const RADIO_STATION_ORDER_KEY = "rabbitHole.radioStationOrder.v1";
 
+let lastRabbitStatusAt = 0;
+let eventSourceOfflineTimer = null;
+let radioDrag = null;
+let radioMoveIndex = -1;
+let suppressNextRadioClick = false;
 let screenWakeLock = null;
 let screenWakeLockDesired = false;
 let screenWakeLockPending = null;
@@ -191,6 +206,24 @@ function trackMatchesNow(track, now) {
   return Boolean(track && now?.title && titleMatchesNow(track.title, now.title) && artistMatchesNow(track.artist, now.artist));
 }
 
+function radioArtworkKeyFor(value = {}) {
+  const artist = normalizeMatchText(value.artist || "");
+  const title = normalizeMatchText(value.title || "");
+  return artist && title ? `${artist}|${title}` : "";
+}
+
+function trustedRadioArtworkUrl(now = {}) {
+  const lookup = now?.radio_lookup || null;
+  const enrichment = now?.radio_enrichment || null;
+  if (!lookup || !enrichment?.imageUrl) return "";
+
+  const currentKey = radioArtworkKeyFor(lookup);
+  const enrichmentKey = String(enrichment.radioTrackKey || enrichment.key || radioArtworkKeyFor(enrichment.lookup || enrichment)).trim();
+  if (!currentKey || !enrichmentKey || currentKey !== enrichmentKey) return "";
+  if (enrichment.radioArtworkResolved === false) return "";
+  return enrichment.imageUrl;
+}
+
 function withLocalFeedback(track = null) {
   if (!track) return null;
   const key = trackKeyFor(track);
@@ -203,9 +236,14 @@ function nowPlayingTrack(zone = activeZone()) {
   if (!now?.title) return null;
   const rawNow = zone?.now_playing;
   const enriched = rawNow?.radio_enrichment;
-  const roonImageUrl = rawNow?.image_key && rawNow?.radio_lookup?.catalogEnrichmentAllowed !== false
+  const output = hqplayerOutputForZone(zone);
+  const hqSource = hqplayerStatusFor(zone, output || {})?.source || null;
+  const isRadio = Boolean(rawNow?.radio_lookup);
+  const isLiveRadio = isRadio || isLiveRadioZone(zone);
+  const roonImageUrl = rawNow?.image_key && !isRadio
     ? `/api/roon/image/${encodeURIComponent(rawNow.image_key)}?width=360&height=360`
     : "";
+  const imageUrl = isRadio ? trustedRadioArtworkUrl(rawNow) : (roonImageUrl || enriched?.imageUrl);
   return withLocalFeedback({
     artist: now.artist || "Unknown artist",
     title: now.title,
@@ -216,7 +254,19 @@ function nowPlayingTrack(zone = activeZone()) {
     releaseDate: enriched?.releaseDate || "",
     tidal: enriched || null,
     tidalUrl: enriched?.tidalUrl || "",
-    imageUrl: roonImageUrl || enriched?.imageUrl,
+    isRadio,
+    isLiveRadio,
+    sourceType: isLiveRadio ? "radio" : "roon",
+    playbackSource: hqSource ? {
+      display: hqSource.display || "",
+      codec: hqSource.codec || "",
+      sampleRateKhz: hqSource.sampleRateKhz || null,
+      bitDepth: hqSource.bitDepth || null,
+      channels: hqSource.channels || null,
+      bitrate: hqSource.bitrate || null,
+      sourceName: hqSource.sourceName || ""
+    } : null,
+    imageUrl,
     discoverySource: "Now playing",
     statusChecks: ["Now playing in Roon"],
     roon: {
@@ -246,7 +296,7 @@ function rabbitHoleContextTracks(zone = activeZone()) {
 function findNowPlayingMatch(zone = activeZone()) {
   const now = summarizeNowPlaying(zone);
   const fallback = nowPlayingTrack(zone);
-  if (!now?.title) return { index: -1, savedIndex: -1, track: null, source: "" };
+  if (!now?.title) return { index: -1, track: null, source: "" };
 
   function withLiveNowPlayingMedia(track) {
     const localTrack = withLocalFeedback(track);
@@ -257,21 +307,22 @@ function findNowPlayingMatch(zone = activeZone()) {
       durationMs: fallback.durationMs || localTrack.durationMs || null,
       imageUrl: fallback.imageUrl || localTrack.imageUrl || "",
       tidal: localTrack.tidal || fallback.tidal || null,
-      tidalUrl: localTrack.tidalUrl || fallback.tidalUrl || ""
+      tidalUrl: localTrack.tidalUrl || fallback.tidalUrl || "",
+      isRadio: fallback.isRadio || localTrack.isRadio || false,
+      isLiveRadio: fallback.isLiveRadio || localTrack.isLiveRadio || false,
+      sourceType: fallback.sourceType || localTrack.sourceType || "",
+      playbackSource: fallback.playbackSource || localTrack.playbackSource || null
     };
   }
 
   const index = state.lastTracks.findIndex((track) => trackMatchesNow(track, now));
-  if (index >= 0) return { index, savedIndex: -1, track: withLiveNowPlayingMedia(state.lastTracks[index]), source: "current" };
-
-  const savedIndex = state.savedTracks.findIndex((track) => trackMatchesNow(track, now));
-  if (savedIndex >= 0) return { index: -1, savedIndex, track: withLiveNowPlayingMedia(state.savedTracks[savedIndex]), source: "saved" };
+  if (index >= 0) return { index, track: withLiveNowPlayingMedia(state.lastTracks[index]), source: "current" };
 
   if (zone?.memoryTrack && trackMatchesNow(zone.memoryTrack, now)) {
-    return { index: -1, savedIndex: -1, track: withLiveNowPlayingMedia(zone.memoryTrack), source: "memory" };
+    return { index: -1, track: withLiveNowPlayingMedia(zone.memoryTrack), source: "memory" };
   }
 
-  return { index: -1, savedIndex: -1, track: fallback, source: "now" };
+  return { index: -1, track: fallback, source: "now" };
 }
 
 function formatDuration(durationMs) {
@@ -380,7 +431,10 @@ function llmHealthSummary(app = {}) {
   const detail = [label, model].filter(Boolean).join(" ");
   if (status.online && status.loaded !== false) return { level: "ok", status: "ready", detail };
   if (status.checking) return { level: "unknown", status: "checking", detail };
-  if (status.reachable && status.loaded === false) return { level: "warn", status: "model not loaded", detail: status.message || detail };
+  if (status.reachable && status.loaded === false) {
+    const loading = status.runtimeState === "loading" || /loading/i.test(status.message || "");
+    return { level: "warn", status: loading ? "model loading" : "model not loaded", detail: status.message || detail };
+  }
   if (state.llmStatus) return { level: "bad", status: "offline", detail: status.message || detail };
   return { level: "unknown", status: "not checked yet", detail };
 }
@@ -613,6 +667,7 @@ function outputHtml(zone, output) {
 async function api(path, body) {
   const response = await fetch(path, {
     method: "POST",
+    cache: "no-store",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -630,7 +685,7 @@ async function api(path, body) {
 }
 
 async function getJson(path) {
-  const response = await fetch(path);
+  const response = await fetch(path, { cache: "no-store" });
   const text = await response.text();
   let data = {};
   if (text) {
@@ -647,6 +702,7 @@ async function getJson(path) {
 async function deleteJson(path, body) {
   const response = await fetch(path, {
     method: "DELETE",
+    cache: "no-store",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body || {})
   });
@@ -690,120 +746,92 @@ function trackKeyFor(track = {}) {
   return `${normalizeKeyText(track.artist)}|${normalizeKeyText(track.title)}`;
 }
 
-function savedVersionFor(tracks = []) {
-  return (tracks || []).map((track) => `${track.key || trackKeyFor(track)}:${track.feedback || ""}:${track.savedAt || ""}`).join("|");
+function nowQualityKeyFor(track = {}) {
+  const key = trackKeyFor(track);
+  if (!key || key === "|") return "";
+  const album = normalizeKeyText(track.album || track.tidal?.album || "");
+  const durationSeconds = track.durationMs ? Math.round(Number(track.durationMs || 0) / 1000) : "";
+  const liveSource = track.isLiveRadio || track.isRadio || track.sourceType === "radio"
+    ? normalizeKeyText([
+      "radio",
+      track.playbackSource?.display,
+      track.playbackSource?.codec,
+      track.playbackSource?.sampleRateKhz,
+      track.playbackSource?.bitDepth,
+      track.playbackSource?.channels,
+      track.playbackSource?.bitrate
+    ].filter(Boolean).join(" "))
+    : "";
+  return [key, album, durationSeconds, liveSource].filter(Boolean).join("|");
 }
 
-function normalizeSavedSnapshot(payload = {}) {
-  if (Array.isArray(payload)) {
-    return {
-      activeListId: "default",
-      lists: [{ id: "default", name: "Candidates", count: payload.length }],
-      tracks: payload
-    };
-  }
-
-  const tracks = Array.isArray(payload.tracks) ? payload.tracks : [];
-  const lists = Array.isArray(payload.lists) && payload.lists.length
-    ? payload.lists.map((list) => ({
-      id: String(list.id || "").trim() || "default",
-      name: String(list.name || "").trim() || "Candidates",
-      count: Number(list.count ?? list.tracks?.length ?? 0),
-      createdAt: list.createdAt || 0,
-      updatedAt: list.updatedAt || 0
-    }))
-    : [{ id: "default", name: "Candidates", count: tracks.length }];
-  const activeListId = lists.some((list) => list.id === payload.activeListId)
-    ? payload.activeListId
-    : lists[0].id;
-
-  return { activeListId, lists, tracks };
+function renderNowSourceQuality(info = null) {
+  const source = $("#nowSourceFormat");
+  if (!source) return;
+  const text = String(info?.display || "").trim();
+  source.textContent = text;
+  source.hidden = !text;
 }
 
-function savedSnapshotVersion(snapshot = {}) {
-  return [
-    snapshot.activeListId || "",
-    (snapshot.lists || []).map((list) => `${list.id}:${list.name}:${list.count}:${list.updatedAt || ""}`).join("|"),
-    savedVersionFor(snapshot.tracks || [])
-  ].join("||");
-}
-
-function applySavedSnapshot(payload = {}) {
-  const snapshot = normalizeSavedSnapshot(payload);
-  state.savedLists = snapshot.lists;
-  state.activeSavedListId = snapshot.activeListId;
-  state.savedTracks = applyFeedbackToTracks(snapshot.tracks || []);
-  state.savedVersion = savedSnapshotVersion({ ...snapshot, tracks: state.savedTracks });
-  return snapshot;
-}
-
-function activeSavedList() {
-  return state.savedLists.find((list) => list.id === state.activeSavedListId) || state.savedLists[0] || {
-    id: "default",
-    name: "Candidates",
-    count: state.savedTracks.length
+function playbackQualityInfoFromTrack(track = null) {
+  const source = track?.playbackSource || null;
+  const display = String(source?.display || "").trim();
+  if (!display) return null;
+  return {
+    display,
+    source: source.sourceName || "Roon",
+    codec: source.codec || "",
+    sampleRateKhz: source.sampleRateKhz || null,
+    bitDepth: source.bitDepth || null,
+    channels: source.channels || null,
+    bitrate: source.bitrate || null,
+    resolvedBy: "live-playback-source"
   };
 }
 
-function savedListFilename(extension) {
-  const slug = normalizeKeyText(activeSavedList().name).replace(/\s+/g, "-") || "playlist-candidates";
-  return `rabbit-hole-${slug}.${extension}`;
-}
-
-function savedListOptionsHtml(selectedId = state.activeSavedListId) {
-  const lists = state.savedLists.length ? state.savedLists : [activeSavedList()];
-  return lists.map((list) => `
-    <option value="${escapeHtml(list.id)}" ${list.id === selectedId ? "selected" : ""}>
-      ${escapeHtml(list.name)}
-    </option>
-  `).join("");
-}
-
-function savedMoveOptionsHtml(sourceListId = state.activeSavedListId) {
-  return (state.savedLists || [])
-    .filter((list) => list.id !== sourceListId)
-    .map((list) => `
-      <option value="${escapeHtml(list.id)}">${escapeHtml(list.name)} (${Number(list.count || 0)})</option>
-    `).join("");
-}
-
-function candidateListById(listId = "") {
-  return state.savedLists.find((list) => list.id === listId) || activeSavedList();
-}
-
-function renderNowCandidateListMenu() {
-  const menu = $("#nowCandidateListMenu");
-  if (!menu) return;
-  const lists = state.savedLists.length ? state.savedLists : [activeSavedList()];
-  menu.innerHTML = lists.map((list) => `
-    <button type="button" data-now-candidate-list="${escapeHtml(list.id)}">
-      Add to ${escapeHtml(list.name)}${Number.isFinite(Number(list.count)) ? ` (${Number(list.count)})` : ""}
-    </button>
-  `).join("");
-}
-
-function toggleNowCandidateListMenu(show = null) {
-  const menu = $("#nowCandidateListMenu");
-  if (!menu) return;
-  const nextVisible = show === null ? menu.hidden : Boolean(show);
-  if (nextVisible) renderNowCandidateListMenu();
-  menu.hidden = !nextVisible;
-}
-
-function updateNowCandidateSaveState(track = state.nowTrack) {
-  const button = $("#saveNowCandidate");
-  if (!button) return;
-  if (!track) {
-    button.disabled = true;
-    button.textContent = "Add candidate";
-    toggleNowCandidateListMenu(false);
+function updateNowSourceQuality(track = null) {
+  const key = track ? nowQualityKeyFor(track) : "";
+  if (!key) {
+    state.nowQualityKey = "";
+    state.nowQualityLoading = false;
+    state.nowQualityInfo = null;
+    renderNowSourceQuality(null);
     return;
   }
 
-  button.disabled = false;
-  button.textContent = "Add candidate";
-  button.title = "Choose a candidate list";
-  renderNowCandidateListMenu();
+  const hasCachedQuality = Object.prototype.hasOwnProperty.call(state.nowQualityCache, key);
+  const playbackFallback = playbackQualityInfoFromTrack(track);
+  if (state.nowQualityKey !== key) {
+    state.nowQualityKey = key;
+    state.nowQualityLoading = false;
+    state.nowQualityInfo = hasCachedQuality ? state.nowQualityCache[key] : playbackFallback;
+  }
+
+  if (hasCachedQuality) {
+    renderNowSourceQuality(state.nowQualityCache[key]);
+    return;
+  }
+
+  renderNowSourceQuality(state.nowQualityInfo);
+  if (state.nowQualityLoading) return;
+
+  state.nowQualityLoading = true;
+  api("/api/tidal/track-quality", { track })
+    .then((result) => {
+      if (state.nowQualityKey !== key) return;
+      state.nowQualityInfo = result || null;
+      state.nowQualityCache[key] = state.nowQualityInfo;
+      renderNowSourceQuality(state.nowQualityInfo);
+    })
+    .catch(() => {
+      if (state.nowQualityKey !== key) return;
+      state.nowQualityInfo = playbackFallback;
+      state.nowQualityCache[key] = playbackFallback;
+      renderNowSourceQuality(playbackFallback);
+    })
+    .finally(() => {
+      if (state.nowQualityKey === key) state.nowQualityLoading = false;
+    });
 }
 
 function feedbackMapFromServer(feedback = {}) {
@@ -873,11 +901,6 @@ function renderMemoryStatus() {
   const mb = Number(memory.mb || 0);
   const maxMb = Number(memory.maxMb || 250);
   element.textContent = `Track memory: ${count} remembered track${count === 1 ? "" : "s"} - ${mb.toFixed(2)} MB / ${maxMb} MB`;
-}
-
-function isSavedCandidate(track = {}) {
-  const key = trackKeyFor(track);
-  return Boolean(key && key !== "|" && state.savedTracks.some((saved) => saved.key === key || trackKeyFor(saved) === key));
 }
 
 function textList(value) {
@@ -968,6 +991,227 @@ function compactScoreBadgeHtml(track) {
 function trackPayload(track = {}) {
   const { _resultIndex, ...payload } = track || {};
   return payload;
+}
+
+function jsonDataAttr(value) {
+  return escapeHtml(JSON.stringify(value));
+}
+
+function tidalTrackUrl(track = {}) {
+  return safeHttpUrl(track.tidal?.tidalUrl || track.tidalUrl);
+}
+
+function tidalTrackId(track = {}) {
+  const explicit = String(track.tidal?.id || track.tidalId || track.id || track.trackId || "").trim();
+  const url = tidalTrackUrl(track);
+  const match = url.match(/\/(?:browse\/)?track\/(\d+)/i);
+  if (match?.[1]) return match[1];
+  return /^\d+$/.test(explicit) ? explicit : "";
+}
+
+function tidalAndroidHttpsIntentUrl(track = {}) {
+  const id = tidalTrackId(track);
+  const webUrl = tidalTrackUrl(track);
+  if (!id || !webUrl) return "";
+  return `intent://tidal.com/browse/track/${encodeURIComponent(id)}#Intent;scheme=https;package=com.aspiro.tidal;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;S.browser_fallback_url=${encodeURIComponent(webUrl)};end`;
+}
+
+function tidalAndroidSchemeIntentUrl(track = {}) {
+  const id = tidalTrackId(track);
+  const webUrl = tidalTrackUrl(track);
+  if (!id || !webUrl) return "";
+  return `intent://track/${encodeURIComponent(id)}#Intent;scheme=tidal;package=com.aspiro.tidal;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;S.browser_fallback_url=${encodeURIComponent(webUrl)};end`;
+}
+
+function tidalAndroidWakeIntentUrl(track = {}) {
+  const webUrl = tidalTrackUrl(track);
+  if (!webUrl) return "";
+  return `intent://#Intent;scheme=tidal;package=com.aspiro.tidal;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;S.browser_fallback_url=${encodeURIComponent(webUrl)};end`;
+}
+
+function tidalAppUrl(track = {}) {
+  const id = tidalTrackId(track);
+  return id ? `tidal://track/${encodeURIComponent(id)}` : "";
+}
+
+function openExternalUrl(url) {
+  const opened = window.open(url, "_blank", "noopener,noreferrer");
+  if (!opened) window.location.href = url;
+}
+
+function sendLocation(url) {
+  if (!url) return;
+  window.location.href = url;
+}
+
+function openAndroidTidalTrack(track = {}) {
+  const webUrl = tidalTrackUrl(track);
+  const firstIntent = tidalAndroidHttpsIntentUrl(track) || tidalAndroidSchemeIntentUrl(track) || webUrl;
+  const retryIntent = tidalAndroidSchemeIntentUrl(track) || firstIntent;
+  const wakeIntent = tidalAndroidWakeIntentUrl(track);
+  let waitingForWake = false;
+  let sentAfterWake = false;
+
+  const removeVisibilityHandler = () => {
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+  };
+
+  function handleVisibilityChange() {
+    if (!waitingForWake || sentAfterWake || document.visibilityState !== "visible") return;
+    sentAfterWake = true;
+    waitingForWake = false;
+    setTimeout(() => sendLocation(retryIntent), 350);
+    removeVisibilityHandler();
+  }
+
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+  setTimeout(removeVisibilityHandler, 5000);
+
+  sendLocation(firstIntent);
+  setTimeout(() => {
+    if (document.visibilityState === "hidden") return;
+    waitingForWake = true;
+    sendLocation(wakeIntent || retryIntent);
+    setTimeout(() => {
+      if (document.visibilityState !== "hidden" && !sentAfterWake) {
+        sentAfterWake = true;
+        sendLocation(retryIntent);
+        removeVisibilityHandler();
+      }
+    }, 450);
+  }, 900);
+}
+
+function parseTrackPayloadElement(element, key = "tidalOpen") {
+  let payload = {};
+  try {
+    payload = JSON.parse(element?.dataset?.[key] || "{}");
+  } catch {
+    payload = {};
+  }
+  const fallbackUrl = safeHttpUrl(element?.getAttribute?.("href") || element?.dataset?.tidalUrl || "");
+  if (fallbackUrl && !tidalTrackUrl(payload)) payload.tidalUrl = fallbackUrl;
+  return payload;
+}
+
+function openTrackElementInTidal(element) {
+  openTrackInTidal(parseTrackPayloadElement(element), element);
+}
+
+function openTrackInTidal(track = {}, button = null) {
+  const webUrl = tidalTrackUrl(track);
+  if (!webUrl) {
+    alert("No TIDAL link is available for this track.");
+    return;
+  }
+
+  const originalText = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Opening...";
+  }
+
+  const userAgent = navigator.userAgent || "";
+  const isAndroid = /Android/i.test(userAgent);
+  const isIos = /iPhone|iPad|iPod/i.test(userAgent);
+  const id = tidalTrackId(track);
+
+  try {
+    if (isAndroid) {
+      openAndroidTidalTrack(track);
+      return;
+    }
+
+    if (isIos && id) {
+      window.location.href = tidalAppUrl(track);
+      setTimeout(() => {
+        window.location.href = webUrl;
+      }, 900);
+      return;
+    }
+
+    openExternalUrl(webUrl);
+  } finally {
+    if (button) {
+      setTimeout(() => {
+        button.textContent = originalText;
+        button.disabled = false;
+      }, 1200);
+    }
+  }
+}
+
+function standbyPayloadTracks(limit = 25) {
+  return (state.standbyTracks || []).slice(0, Math.max(1, Number(limit || 25))).map(trackPayload);
+}
+
+function standbyTimeLabel(value) {
+  const timestamp = Date.parse(value || "");
+  if (!Number.isFinite(timestamp)) return "";
+  return new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function standbyTrackMeta(track = {}) {
+  return [
+    track.artist || track.tidal?.artist || "",
+    track.album || track.tidal?.album || "",
+    track.releaseDate || track.tidal?.releaseDate || track.year || "",
+    track.durationMs ? formatDuration(track.durationMs) : ""
+  ].filter(Boolean).join(" - ");
+}
+
+function standbyTrackHtml(track = {}, index = 0) {
+  const tidalUrl = safeHttpUrl(track.tidal?.tidalUrl || track.tidalUrl);
+  const payload = trackPayload(track);
+  const payloadAttr = jsonDataAttr(payload);
+  const score = track.score || track.scoreBreakdown?.total || "";
+  const badge = score ? compactScoreBadgeHtml(track) : "";
+  return `
+    <li class="standbyTrack">
+      <span class="standbyIndex">${index + 1}</span>
+      <span class="standbyMain">
+        <strong>${tidalUrl ? `<a href="${escapeHtml(tidalUrl)}" data-tidal-open="${payloadAttr}" data-tidal-url="${escapeHtml(tidalUrl)}" rel="noreferrer">${escapeHtml(track.title || "Untitled")}</a>` : escapeHtml(track.title || "Untitled")}</strong>
+        <small>${escapeHtml(standbyTrackMeta(track) || "Metadata unavailable")}</small>
+      </span>
+      <span class="standbyScore">${badge}</span>
+    </li>
+  `;
+}
+
+function renderStandbyPool(standby = state.standby) {
+  const title = $("#standbyTitle");
+  const status = $("#standbyStatus");
+  const list = $("#standbyTracks");
+  if (!title || !status || !list) return;
+
+  state.standby = standby || null;
+  state.standbyTracks = Array.isArray(standby?.tracks) ? applyFeedbackToTracks(standby.tracks) : [];
+  const target = Number(standby?.targetCount || 25);
+  const count = state.standbyTracks.length;
+  title.textContent = `${count}/${target} standby tracks`;
+
+  const statusParts = [];
+  if (standby?.refreshing) statusParts.push("Refreshing");
+  if (standby?.lastError) statusParts.push(`Last refresh failed: ${standby.lastError}`);
+  if (standby?.lastRefreshAt) statusParts.push(`Updated ${standbyTimeLabel(standby.lastRefreshAt)}`);
+  if (standby?.lastRun && !standby.lastError) {
+    const kept = Number(standby.lastRun.kept || count);
+    const generated = Number(standby.lastRun.generated || 0);
+    if (generated) statusParts.push(`${kept}/${target} ready after ${generated} checked`);
+  }
+  if (standby?.nextRefreshAt && !standby?.refreshing) statusParts.push(`Next ${standbyTimeLabel(standby.nextRefreshAt)}`);
+  status.textContent = statusParts.join(" - ") || "Waiting for background search.";
+
+  const hasTracks = count > 0;
+  $("#standbyQueue").disabled = !hasTracks;
+  $("#standbyQueueNext").disabled = !hasTracks;
+  $("#standbySendTidal").disabled = !hasTracks;
+  $("#standbyClear").disabled = !hasTracks && !standby?.lastError;
+
+  list.innerHTML = hasTracks
+    ? `<ol>${state.standbyTracks.map(standbyTrackHtml).join("")}</ol>`
+    : "<p class=\"muted\">No standby tracks cached yet.</p>";
+  cleanRenderedArtifacts(list);
 }
 
 function artistCreditConfirmed(track = {}) {
@@ -1257,11 +1501,6 @@ function jumpToTrackIdentity(track = {}) {
     scrollToDiscoveryTrack(currentIndex);
     return true;
   }
-  const savedIndex = state.savedTracks.findIndex((candidate) => trackKeyFor(candidate) === key);
-  if (savedIndex >= 0) {
-    scrollToSavedTrack(savedIndex);
-    return true;
-  }
   if (track.tidalUrl || track.tidal?.tidalUrl) {
     window.open(track.tidalUrl || track.tidal.tidalUrl, "_blank", "noreferrer");
     return true;
@@ -1304,26 +1543,10 @@ function scrollToDiscoveryTrack(index) {
   setTimeout(() => target.classList.remove("trackFocus"), 1800);
 }
 
-function scrollToSavedTrack(index) {
-  const target = document.getElementById(`saved-track-${index}`);
-  if (!target) return;
-  target.scrollIntoView({ behavior: "smooth", block: "start" });
-  target.classList.add("trackFocus");
-  setTimeout(() => target.classList.remove("trackFocus"), 1800);
-}
-
-function scrollToCandidatesList() {
-  const target = $("#candidatesPanel");
-  if (!target) return;
-  target.scrollIntoView({ behavior: "smooth", block: "start" });
-  target.classList.add("trackFocus");
-  setTimeout(() => target.classList.remove("trackFocus"), 1800);
-}
-
 function nowPlayingBadgeHtml(track = {}, source = "") {
   const scoreBadge = compactScoreBadgeHtml(track);
   if (scoreBadge) return scoreBadge;
-  const label = source === "saved" ? "Saved candidate" : source === "memory" ? "Remembered track" : "Unscored now playing";
+  const label = source === "memory" ? "Remembered track" : "Unscored now playing";
   return `<span class="scoreBadge unscored">${escapeHtml(label)}</span>`;
 }
 
@@ -1361,7 +1584,12 @@ function renderNowTidalPlaylistControl(track = state.nowTrack) {
   const select = $("#nowTidalPlaylistSelect");
   const button = $("#addNowToTidalPlaylist");
   const status = $("#nowTidalPlaylistStatus");
+  const createButton = $("#createNowTidalPlaylist");
+  const createInput = $("#nowTidalPlaylistName");
   if (!select || !button || !status) return;
+  const createDisabled = state.tidalPlaylistsLoading;
+  if (createButton) createButton.disabled = createDisabled;
+  if (createInput) createInput.disabled = createDisabled;
 
   if (state.tidalPlaylistsLoading) {
     setSelectOptionsIfChanged(select, "<option value=\"\">Loading TIDAL playlists...</option>", "loading");
@@ -1391,7 +1619,7 @@ function renderNowTidalPlaylistControl(track = state.nowTrack) {
     setSelectOptionsIfChanged(select, "<option value=\"\">No TIDAL playlists found</option>", "empty");
     select.disabled = false;
     button.disabled = true;
-    status.textContent = "Create a playlist in TIDAL, then open this selector to refresh.";
+    status.textContent = "Create a playlist below, or refresh after creating one in TIDAL.";
     return;
   }
 
@@ -1403,6 +1631,47 @@ function renderNowTidalPlaylistControl(track = state.nowTrack) {
   if (select.value !== state.selectedTidalPlaylistId) select.value = state.selectedTidalPlaylistId;
   select.disabled = false;
   button.disabled = !track || !state.selectedTidalPlaylistId;
+}
+
+async function createNowTidalPlaylist(button = $("#createNowTidalPlaylist")) {
+  const input = $("#nowTidalPlaylistName");
+  const status = $("#nowTidalPlaylistStatus");
+  const title = input?.value?.trim() || "";
+  if (!title) return alert("Enter a TIDAL playlist name first.");
+
+  const originalText = button?.textContent || "Create playlist";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Creating...";
+  }
+  if (status) status.textContent = "Creating TIDAL playlist...";
+  try {
+    const result = await api("/api/tidal/playlist", {
+      title,
+      description: "Created from Rabbit Hole."
+    });
+    const playlist = result.playlist || {};
+    state.tidalPlaylistsLoaded = true;
+    state.tidalPlaylistsError = "";
+    state.tidalPlaylists = [
+      playlist,
+      ...state.tidalPlaylists.filter((item) => item.id !== playlist.id)
+    ].filter((item) => item?.id);
+    state.selectedTidalPlaylistId = playlist.id || "";
+    if (state.selectedTidalPlaylistId) localStorage.setItem("tidalPlaylistId", state.selectedTidalPlaylistId);
+    if (input) input.value = "";
+    renderNowTidalPlaylistControl();
+    renderTidalPlaylistSeedControl();
+    if (status) status.textContent = `Created ${playlist.title || title}.`;
+  } catch (error) {
+    if (status) status.textContent = error.message;
+    alert(error.message);
+  } finally {
+    if (button) {
+      button.textContent = originalText;
+      button.disabled = false;
+    }
+  }
 }
 
 function renderTidalPlaylistSeedControl() {
@@ -1509,7 +1778,6 @@ async function addNowTrackToTidalPlaylist(button = $("#addNowToTidalPlaylist")) 
   } catch (error) {
     button.textContent = originalText;
     if (status) status.textContent = error.message;
-    alert(error.message);
   } finally {
     setTimeout(() => {
       button.textContent = originalText;
@@ -1522,15 +1790,12 @@ function updateNowDiscoveryTools(zone = activeZone()) {
   const tools = $("#nowDiscoveryTools");
   const feedback = $("#nowFeedback");
   const badge = $("#nowDiscoveryBadge");
-  const saveNow = $("#saveNowCandidate");
-  const jumpCandidates = $("#jumpToCandidatesList");
   const openRabbitHole = $("#openRabbitHole");
   const rabbitHolePanel = $("#rabbitHolePanel");
-  if (!tools || !feedback || !badge || !saveNow || !jumpCandidates || !openRabbitHole || !rabbitHolePanel) return;
+  if (!tools || !feedback || !badge || !openRabbitHole || !rabbitHolePanel) return;
 
   const match = findNowPlayingMatch(zone);
   state.nowMatchIndex = match.index;
-  state.nowSavedIndex = match.savedIndex;
   state.nowTrack = match.track;
   state.nowTrackSource = match.source;
 
@@ -1539,9 +1804,7 @@ function updateNowDiscoveryTools(zone = activeZone()) {
     feedback.innerHTML = "";
     feedback.dataset.renderKey = "";
     badge.innerHTML = "";
-    updateNowCandidateSaveState(null);
     renderNowTidalPlaylistControl(null);
-    jumpCandidates.disabled = true;
     openRabbitHole.disabled = true;
     rabbitHolePanel.hidden = true;
     return;
@@ -1554,13 +1817,10 @@ function updateNowDiscoveryTools(zone = activeZone()) {
     feedback.dataset.renderKey = feedbackRenderKey;
   }
   badge.innerHTML = nowPlayingBadgeHtml(match.track, match.source);
-  updateNowCandidateSaveState(match.track);
   renderNowTidalPlaylistControl(match.track);
   if (!state.tidalPlaylistsLoaded && !state.tidalPlaylistsLoading && !state.tidalPlaylistsError) {
     loadTidalPlaylists().catch(() => {});
   }
-  jumpCandidates.disabled = false;
-  jumpCandidates.title = `Jump to ${activeSavedList().name}`;
   openRabbitHole.disabled = false;
   if (!rabbitHolePanel.hidden) {
     const nextKey = trackKeyFor(match.track);
@@ -1599,6 +1859,9 @@ function scoreBreakdownHtml(track) {
   if (breakdown.genreInference?.confidence) {
     rows.push(["Genre Confidence", breakdown.genreInference.confidence, 100]);
   }
+  if (breakdown.vibeInference?.confidence) {
+    rows.push(["Trait Confidence", breakdown.vibeInference.confidence, 100]);
+  }
 
   if (breakdown.tasteAdjustment) {
     rows.push(["Taste Adjustment", breakdown.tasteAdjustment, 12]);
@@ -1608,6 +1871,9 @@ function scoreBreakdownHtml(track) {
   }
   if (breakdown.calibrationAdjustment) {
     rows.push(["Calibration Adjustment", breakdown.calibrationAdjustment, 10]);
+  }
+  if (breakdown.serendipityAdjustment) {
+    rows.push(["Serendipity Adjustment", breakdown.serendipityAdjustment, 8]);
   }
 
   return `
@@ -1721,10 +1987,14 @@ function queueReportHtml(result = {}) {
                 track.album,
                 track.year || ""
               ].filter(Boolean).join(" - ");
+              const requested = track.requestedTitle && track.requestedTitle !== track.title
+                ? `Requested as ${track.requestedTitle}`
+                : "";
               return `
                 <li>
                   <strong>${escapeHtml(track.title || "Unknown title")}</strong>
                   <span>${escapeHtml(subtitle || "Rabbit Hole result")}</span>
+                  ${requested ? `<span>${escapeHtml(requested)}</span>` : ""}
                 </li>
               `;
             }).join("")}
@@ -1813,8 +2083,9 @@ function rejectionBucketFor(item = {}) {
   if (/\b(?:roon|queueable|queue action|exact queueable match|best result)\b/.test(reason)) return "Roon not queueable";
   if (/\b(?:outside the requested|genre\/vibe|requested genre|scene|wrong genre|does not confirm|search query|corroborat|metadata)\b/.test(reason)) return "Genre/scene mismatch";
   if (/\b(?:release|year|date|outside \d{4}|range)\b/.test(reason)) return "Date/range mismatch";
-  if (/\b(?:previously suggested|held back|history)\b/.test(reason)) return "Previously suggested";
+  if (/\b(?:previously suggested|held back|history|already suggested|already recommended|not recommended before)\b/.test(reason)) return "Previously suggested";
   if (/\b(?:below minimum|minimum)\b/.test(reason)) return "Below minimum";
+  if (/\b(?:model rejected|model candidate|local model)\b/.test(reason)) return "Model rejected";
   if (/\b(?:short|radio edit)\b/.test(reason)) return "Short/edit";
   if (/\b(?:tidal|verified|verification)\b/.test(reason)) return "TIDAL verification";
   return "Other discarded";
@@ -2266,8 +2537,15 @@ function sourceReportHtml(result = {}) {
     ? `model error: ${report.model.error}`
     : (report.model.skipped || `${report.model.queryCount} planned queries`);
   const review = report.model.review;
+  const reviewWarnings = Number(review?.audit?.warningCount || review?.warningCount || 0);
+  const reviewKeptAfterReject = Number(review?.rejectedKept || 0);
   const reviewSummary = review?.enabled
-    ? `${review.scored || 0} reviewed, ${review.rejected || 0} rejected`
+    ? [
+      `${review.scored || 0} reviewed`,
+      `${review.rejected || 0} rejected`,
+      reviewWarnings ? `${reviewWarnings} warning${reviewWarnings === 1 ? "" : "s"}` : "",
+      reviewKeptAfterReject ? `${reviewKeptAfterReject} kept for count` : ""
+    ].filter(Boolean).join(", ")
     : (review?.error || "not run");
   const roonSummary = report.roon.error
     ? report.roon.error
@@ -2503,10 +2781,10 @@ function emptyResultHtml(reason, verification = {}) {
 
 function trackCardHtml(track, index) {
   const label = track.label || track.tidal?.label || "";
-  const saved = isSavedCandidate(track);
-  const tidalUrl = safeHttpUrl(track.tidal?.tidalUrl);
+  const tidalUrl = tidalTrackUrl(track);
   const resultIndex = Number.isFinite(Number(track._resultIndex)) ? Number(track._resultIndex) : index;
   const payload = trackPayload(track);
+  const payloadAttr = jsonDataAttr(payload);
   const meta = [
     track.artist,
     track.releaseDate || track.tidal?.releaseDate || track.year || "",
@@ -2533,15 +2811,9 @@ function trackCardHtml(track, index) {
         <div class="feedbackButtons" aria-label="Track feedback">${feedbackButtonsHtml(track, index)}</div>
       </div>
       <div class="trackActions">
-        ${tidalUrl ? `<a class="buttonLink" href="${escapeHtml(tidalUrl)}" target="_blank" rel="noreferrer">TIDAL</a>` : ""}
-        <div class="candidateSaveGroup" data-active-saved="${saved ? "true" : "false"}">
-          <select data-save-list aria-label="Candidate list">
-            ${savedListOptionsHtml()}
-          </select>
-          <button data-save-track='${escapeHtml(JSON.stringify(payload))}' ${saved ? "disabled" : ""}>${saved ? "Saved" : "Add"}</button>
-        </div>
-        <button data-queue-next='${escapeHtml(JSON.stringify(payload))}'>Add Next</button>
-        <button data-track='${escapeHtml(JSON.stringify(payload))}'>Play Roon</button>
+        ${tidalUrl ? `<button type="button" data-tidal-open="${payloadAttr}" data-tidal-url="${escapeHtml(tidalUrl)}">TIDAL</button>` : ""}
+        <button data-queue-next="${payloadAttr}">Add Next</button>
+        <button data-track="${payloadAttr}">Play Roon</button>
       </div>
     </div>
   `;
@@ -2697,6 +2969,7 @@ function applyAppState(app = {}) {
   if (!app) return;
   state.appStatus = app;
   state.memory = app.memory || state.memory;
+  if (app.standby) renderStandbyPool(app.standby);
   renderMemoryStatus();
 
   const llm = app.llm || {};
@@ -2722,20 +2995,8 @@ function applyAppState(app = {}) {
     state.feedbackVersion = feedbackVersion;
     state.tasteUpdatedAt = app.taste?.updatedAt || "";
     if (state.lastResult) renderResults(state.lastResult);
-    renderSaved();
     updateNowDiscoveryTools(activeZone());
     state.historyNeedsRefresh = true;
-  }
-
-  const savedSnapshot = normalizeSavedSnapshot(app.saved || []);
-  const savedVersion = savedSnapshotVersion({
-    ...savedSnapshot,
-    tracks: applyFeedbackToTracks(savedSnapshot.tracks || [])
-  });
-  if (savedVersion !== state.savedVersion) {
-    applySavedSnapshot(savedSnapshot);
-    renderSaved();
-    if (state.lastResult) renderResults(state.lastResult);
   }
 
   const session = app.session || {};
@@ -2756,28 +3017,34 @@ function renderLlmStatus(status = {}) {
   pill.classList.toggle("statusOffline", !online && !checking);
   pill.classList.toggle("statusUnknown", checking);
   pill.title = status.message || "";
+  const unavailableText = status.message || `${label}: model not loaded`;
   pill.textContent = online
     ? `${label}${model}`
-    : (status.reachable && status.loaded === false ? `${label}: model not loaded` : `${label}: offline`);
+    : (status.reachable && status.loaded === false ? unavailableText : `${label}: offline`);
   renderSystemHealth();
 }
 
 function setCoverImage(cover, urls = []) {
   const candidates = urls.map((url) => String(url || "").trim()).filter(Boolean);
   const signature = candidates.join("\n");
-  if (cover.dataset.coverSignature === signature) return;
-  cover.dataset.coverSignature = signature;
 
   if (!candidates.length) {
+    cover.dataset.coverSignature = "";
+    cover.dataset.coverLoaded = "0";
     cover.style.backgroundImage = "";
     cover.classList.remove("hasArt");
     return;
   }
 
+  if (cover.dataset.coverSignature === signature && cover.dataset.coverLoaded === "1") return;
+  cover.dataset.coverSignature = signature;
+  cover.dataset.coverLoaded = "0";
+
   const tryCandidate = (index) => {
     if (cover.dataset.coverSignature !== signature) return;
     const url = candidates[index];
     if (!url) {
+      cover.dataset.coverLoaded = "0";
       cover.style.backgroundImage = "";
       cover.classList.remove("hasArt");
       return;
@@ -2786,6 +3053,7 @@ function setCoverImage(cover, urls = []) {
     const image = new Image();
     image.onload = () => {
       if (cover.dataset.coverSignature !== signature) return;
+      cover.dataset.coverLoaded = "1";
       cover.style.backgroundImage = `url("${url.replace(/"/g, "%22")}")`;
       cover.classList.add("hasArt");
     };
@@ -2813,7 +3081,27 @@ async function refreshLlmStatus() {
   }
 }
 
+function markRabbitConnectionLost(error = {}) {
+  state.connectionStatus = { connected: false, coreName: state.connectionStatus.coreName || "" };
+  const pill = $("#connection");
+  if (pill) {
+    pill.classList.add("statusOffline");
+    pill.classList.remove("statusUnknown");
+    pill.textContent = "Rabbit Hole offline - reconnecting";
+    pill.title = error.message || "The browser cannot reach the Rabbit Hole server right now.";
+  }
+  const playState = $("#playState");
+  if (playState) playState.textContent = "Connection lost";
+}
+
 function renderState(payload) {
+  lastRabbitStatusAt = Date.now();
+  const connectionPill = $("#connection");
+  if (connectionPill) {
+    connectionPill.classList.toggle("statusOffline", !payload.connected);
+    connectionPill.classList.remove("statusUnknown");
+    connectionPill.title = "";
+  }
   state.zones = payload.zones || [];
   state.connectionStatus = {
     connected: Boolean(payload.connected),
@@ -2823,7 +3111,7 @@ function renderState(payload) {
     state.selectedZoneId = state.zones[0]?.zone_id || "";
   }
 
-  $("#connection").textContent = payload.connected
+  connectionPill.textContent = payload.connected
     ? `Connected to ${payload.core.name}`
     : "Enable this extension in Roon Settings > Extensions";
 
@@ -2867,9 +3155,12 @@ function renderState(payload) {
   }
 
   const cover = $("#cover");
+  const roonCoverUrl = !now?.radio_lookup && now?.image_key
+    ? `/api/roon/image/${encodeURIComponent(now.image_key)}?width=360&height=360`
+    : "";
   setCoverImage(cover, [
-    now?.radio_enrichment?.imageUrl,
-    !now?.radio_lookup && now?.image_key ? `/api/roon/image/${encodeURIComponent(now.image_key)}?width=360&height=360` : ""
+    trustedRadioArtworkUrl(now),
+    roonCoverUrl
   ]);
 
   const outputs = $("#outputs");
@@ -2878,14 +3169,34 @@ function renderState(payload) {
     outputs.innerHTML = "";
   }
   updateNowDiscoveryTools(zone);
+  updateNowSourceQuality(nowPlayingTrack(zone) || state.nowTrack);
   updateJumpTopVisibility();
   renderSystemHealth();
 }
 
 async function refresh() {
-  const payload = await getJson("/api/status");
-  renderState(payload);
-  applyAppState(payload.app);
+  try {
+    const payload = await getJson("/api/status");
+    renderState(payload);
+    applyAppState(payload.app);
+  } catch (error) {
+    markRabbitConnectionLost(error);
+    throw error;
+  }
+}
+
+function currentRequestPrefersExtendedMixes() {
+  const text = [
+    $("#request")?.value || "",
+    document.querySelector("[name='genres']")?.value || "",
+    document.querySelector("[name='mood']")?.value || "",
+    state.lastResult?.options?.request || "",
+    state.lastResult?.options?.genres || "",
+    state.lastResult?.options?.mood || ""
+  ].join(" ").toLowerCase();
+  return /\b(?:prefer|prioritize|prioritise|favor|favour|find|give|use)\b.{0,80}\b(?:extended|club|long)\s+(?:mixes?|versions?|cuts?)\b/.test(text) ||
+    /\b(?:extended|club|long)\s+(?:mixes?|versions?|cuts?)\b.{0,50}\b(?:available|preferred|prefer|priority)\b/.test(text) ||
+    /\b(?:extended mixes?|extended versions?|club mixes?|long mixes?|full length mixes?)\b/.test(text);
 }
 
 async function queueTrackList(tracks, button, options = {}) {
@@ -2908,7 +3219,8 @@ async function queueTrackList(tracks, button, options = {}) {
       tracks,
       alternates: options.alternates || [],
       targetCount: options.targetCount || tracks.length,
-      mode
+      mode,
+      preferExtendedMixes: options.preferExtendedMixes ?? currentRequestPrefersExtendedMixes()
     });
     console.info("Roon queue result", result);
     button.textContent = result.failedCount
@@ -3210,6 +3522,390 @@ async function useTidalPlaylistSeed() {
   }
 }
 
+function radioOrderStore() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(RADIO_STATION_ORDER_KEY) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function radioOrderScope() {
+  return state.radioBrowseItemKey || state.radioBrowseHierarchy || "root";
+}
+
+function radioStationOrderId(station = {}) {
+  return String(station.id || station.itemKey || `${station.kind || "station"}:${station.title || ""}:${station.subtitle || ""}`).trim();
+}
+
+function saveRadioStationOrder(stations = state.radioStations) {
+  const scope = radioOrderScope();
+  const order = stations.map(radioStationOrderId).filter(Boolean);
+  const store = radioOrderStore();
+  if (order.length) store[scope] = order;
+  else delete store[scope];
+  localStorage.setItem(RADIO_STATION_ORDER_KEY, JSON.stringify(store));
+}
+
+function radioStationOrderForScope(scope = radioOrderScope()) {
+  const order = radioOrderStore()[scope];
+  return Array.isArray(order) ? order.filter(Boolean) : [];
+}
+
+function hasCustomRadioStationOrder() {
+  return radioStationOrderForScope().length > 0;
+}
+
+function applyRadioStationOrder(stations = []) {
+  const order = radioStationOrderForScope();
+  if (!order.length) return stations;
+  const rank = new Map(order.map((id, index) => [id, index]));
+  return stations
+    .map((station, index) => ({ station, index, id: radioStationOrderId(station) }))
+    .sort((left, right) => {
+      const leftRank = rank.has(left.id) ? rank.get(left.id) : Number.POSITIVE_INFINITY;
+      const rightRank = rank.has(right.id) ? rank.get(right.id) : Number.POSITIVE_INFINITY;
+      return leftRank - rightRank || left.index - right.index;
+    })
+    .map((entry) => entry.station);
+}
+
+function moveRadioStation(fromIndex, toIndex) {
+  const from = Math.max(0, Math.min(state.radioStations.length - 1, Number(fromIndex)));
+  const to = Math.max(0, Math.min(state.radioStations.length - 1, Number(toIndex)));
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from === to) return false;
+  const next = [...state.radioStations];
+  const [station] = next.splice(from, 1);
+  next.splice(to, 0, station);
+  state.radioStations = next;
+  radioMoveIndex = -1;
+  saveRadioStationOrder(next);
+  renderRadioStations();
+  const status = $("#radioStatus");
+  if (status) status.textContent = `Saved radio station order for ${state.radioBrowseTitle || "Radio Stations"}.`;
+  return true;
+}
+
+function clearRadioStationOrder() {
+  const scope = radioOrderScope();
+  const store = radioOrderStore();
+  delete store[scope];
+  localStorage.setItem(RADIO_STATION_ORDER_KEY, JSON.stringify(store));
+}
+
+function selectRadioStationForMove(index) {
+  const nextIndex = Math.max(0, Math.min(state.radioStations.length - 1, Number(index)));
+  if (!Number.isFinite(nextIndex) || !state.radioStations[nextIndex]) return;
+  radioMoveIndex = radioMoveIndex === nextIndex ? -1 : nextIndex;
+  renderRadioStations();
+  const status = $("#radioStatus");
+  if (!status) return;
+  if (radioMoveIndex >= 0) {
+    const station = state.radioStations[radioMoveIndex];
+    status.textContent = `Move ${station.title || "station"}: tap another station to place it before that station, or hold and drag.`;
+  } else {
+    status.textContent = `${state.radioStations.length} station${state.radioStations.length === 1 ? "" : "s"} in ${state.radioBrowseTitle || "Radio Stations"}.`;
+  }
+}
+
+function handleRadioStationMoveTarget(event) {
+  if (radioMoveIndex < 0) return false;
+  if (event.target.closest("button, a, input, select, textarea")) return false;
+  const card = event.target.closest("#radioStations .radioStation[data-radio-index]");
+  if (!card) return false;
+  const targetIndex = Number(card.dataset.radioIndex);
+  if (!Number.isFinite(targetIndex)) return false;
+  event.preventDefault();
+  if (targetIndex === radioMoveIndex) {
+    radioMoveIndex = -1;
+    renderRadioStations();
+    return true;
+  }
+  const toIndex = radioMoveIndex < targetIndex ? targetIndex - 1 : targetIndex;
+  return moveRadioStation(radioMoveIndex, toIndex);
+}
+
+function radioStationCardHtml(station = {}, index = 0) {
+  const title = station.title || "Untitled station";
+  const subtitle = (station.subtitle || "").trim();
+  const fallbackMeta = station.kind === "folder" ? "Folder" : "";
+  const meta = subtitle || fallbackMeta;
+  const moving = radioMoveIndex === index;
+  const imageUrl = station.imageKey
+    ? `/api/roon/image/${encodeURIComponent(station.imageKey)}?width=160&height=160`
+    : "";
+  const art = imageUrl
+    ? `<span class="radioStationArt" style="background-image:url('${escapeHtml(imageUrl)}')"></span>`
+    : `<span class="radioStationArt radioStationArtEmpty">${escapeHtml(String(index + 1).padStart(2, "0"))}</span>`;
+  return `
+    <article class="radioStation${moving ? " isMoveSelected" : ""}" data-radio-index="${index}">
+      ${art}
+      <div class="radioStationText">
+        <h3 title="${escapeHtml(title)}">${escapeHtml(title)}</h3>
+        ${meta ? `<p>${escapeHtml(meta)}</p>` : ""}
+      </div>
+      <div class="radioStationActions">
+        <button type="button" class="radioStationDragButton" data-radio-drag="${index}" aria-pressed="${moving ? "true" : "false"}" aria-label="Move ${escapeHtml(title)}">${moving ? "Moving" : "Move"}</button>
+        ${station.kind === "folder" ? `<button type="button" data-radio-open="${index}">Open</button>` : ""}
+        ${station.playable ? `<button type="button" data-radio-play="${index}">Play</button>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderRadioStations() {
+  const status = $("#radioStatus");
+  const grid = $("#radioStations");
+  if (!status || !grid) return;
+
+  if (state.radioStationsLoading) {
+    status.textContent = "Loading Roon radio stations...";
+  } else if (state.radioStationsError) {
+    status.textContent = state.radioStationsError;
+  } else if (state.radioStationsLoaded) {
+    const title = state.radioBrowseTitle || "Radio Stations";
+    const playableCount = state.radioStations.filter((station) => station.playable).length;
+    const itemLabel = playableCount === state.radioStations.length ? "station" : "item";
+    status.textContent = state.radioStations.length
+      ? `${state.radioStations.length} ${itemLabel}${state.radioStations.length === 1 ? "" : "s"} in ${title}.`
+      : `${title}: Roon did not return any radio items.`;
+  } else {
+    status.textContent = "Radio stations have not been loaded yet.";
+  }
+
+  const rootButton = $("#radioRoot");
+  if (rootButton) rootButton.hidden = !state.radioBrowseItemKey;
+  const resetButton = $("#resetRadioOrder");
+  if (resetButton) resetButton.hidden = !state.radioStationsLoaded || !hasCustomRadioStationOrder();
+  if (radioMoveIndex >= state.radioStations.length) radioMoveIndex = -1;
+  grid.innerHTML = state.radioStations.length
+    ? state.radioStations.map(radioStationCardHtml).join("")
+    : `<p class="muted">${escapeHtml(state.radioStationsLoading ? "Loading stations..." : "Open this tab or refresh to load Roon radio stations.")}</p>`;
+}
+
+async function refreshRadioStations({ force = false, itemKey = state.radioBrowseItemKey } = {}) {
+  const zone = activeZone();
+  if (!zone?.zone_id) throw new Error("Choose a Roon output zone first.");
+  state.radioStationsLoading = true;
+  state.radioStationsError = "";
+  renderRadioStations();
+  try {
+    const query = new URLSearchParams({ zoneId: zone.zone_id });
+    if (force) query.set("refresh", "1");
+    if (itemKey) query.set("itemKey", itemKey);
+    if (state.radioBrowseHierarchy) query.set("hierarchy", state.radioBrowseHierarchy);
+    if (state.radioStationsSession) query.set("session", state.radioStationsSession);
+    const result = await getJson(`/api/roon/radio?${query.toString()}`);
+    state.radioStationsSession = result.session || "";
+    state.radioBrowseHierarchy = result.hierarchy || state.radioBrowseHierarchy || "";
+    state.radioBrowseTitle = result.title || "Radio Stations";
+    state.radioBrowseItemKey = result.itemKey || itemKey || "";
+    state.radioStations = applyRadioStationOrder(Array.isArray(result.items) ? result.items : (Array.isArray(result.stations) ? result.stations : []));
+    state.radioStationsLoaded = true;
+    state.radioStationsError = result.error || "";
+    renderRadioStations();
+    return result;
+  } catch (error) {
+    state.radioStationsError = error.message;
+    renderRadioStations();
+    throw error;
+  } finally {
+    state.radioStationsLoading = false;
+    renderRadioStations();
+  }
+}
+
+async function openRadioFolder(station = {}) {
+  if (!station?.id) throw new Error("Missing radio folder id.");
+  return refreshRadioStations({ itemKey: station.id });
+}
+
+async function playRadioStation(station = {}, button = null) {
+  const zone = activeZone();
+  if (!zone?.zone_id) throw new Error("Choose a Roon output zone first.");
+  if (!station?.id) throw new Error("Missing radio station id.");
+  const originalText = button?.textContent || "Play";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Playing...";
+  }
+  try {
+    const result = await api("/api/roon/radio/play", {
+      zoneId: zone.zone_id,
+      itemKey: station.id,
+      hierarchy: state.radioBrowseHierarchy || "",
+      session: state.radioStationsSession || "",
+      title: station.title || "",
+      subtitle: station.subtitle || ""
+    });
+    const status = $("#radioStatus");
+    if (status) status.textContent = result.played || result.success
+      ? `Playing ${station.title || "radio station"} on ${zone.display_name || "selected zone"}.`
+      : (result.reason || "Roon did not start the radio station.");
+    setTimeout(() => refresh().catch(() => {}), 900);
+    return result;
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
+}
+
+function radioStationCardFromPoint(clientX, clientY) {
+  const element = document.elementFromPoint(clientX, clientY);
+  return element?.closest?.("#radioStations .radioStation[data-radio-index]") || null;
+}
+
+function clearRadioDragDropClasses() {
+  document.querySelectorAll("#radioStations .radioStation").forEach((card) => {
+    card.classList.remove("isDropBefore", "isDropAfter");
+  });
+}
+
+function radioDragDestination(event) {
+  if (!radioDrag?.active) return null;
+  const targetCard = radioStationCardFromPoint(event.clientX, event.clientY);
+  if (!targetCard) return null;
+  const targetIndex = Number(targetCard.dataset.radioIndex);
+  if (!Number.isFinite(targetIndex)) return null;
+  const rect = targetCard.getBoundingClientRect();
+  const after = event.clientY > rect.top + rect.height / 2;
+  let toIndex = targetIndex + (after ? 1 : 0);
+  if (radioDrag.sourceIndex < toIndex) toIndex -= 1;
+  toIndex = Math.max(0, Math.min(state.radioStations.length - 1, toIndex));
+  return { targetCard, targetIndex, toIndex, after };
+}
+
+function updateRadioDragGhost(event) {
+  if (!radioDrag?.ghost) return;
+  radioDrag.ghost.style.transform = `translate(${Math.round(event.clientX - radioDrag.offsetX)}px, ${Math.round(event.clientY - radioDrag.offsetY)}px)`;
+}
+
+function beginRadioDrag(event) {
+  if (!radioDrag || radioDrag.active) return;
+  const { card } = radioDrag;
+  if (!card?.isConnected) {
+    radioDrag = null;
+    return;
+  }
+  const rect = card.getBoundingClientRect();
+  radioDrag.active = true;
+  radioDrag.offsetX = event.clientX - rect.left;
+  radioDrag.offsetY = event.clientY - rect.top;
+  radioDrag.ghost = card.cloneNode(true);
+  radioDrag.ghost.classList.add("radioStationDragGhost");
+  radioDrag.ghost.style.width = `${rect.width}px`;
+  radioDrag.ghost.style.height = `${rect.height}px`;
+  document.body.appendChild(radioDrag.ghost);
+  card.classList.add("isDragging");
+  document.body.classList.add("radioDragActive");
+  updateRadioDragGhost(event);
+}
+
+function cancelPendingRadioDrag() {
+  if (!radioDrag) return;
+  if (radioDrag.timer) clearTimeout(radioDrag.timer);
+  radioDrag = null;
+}
+
+function cleanupRadioDrag() {
+  if (!radioDrag) return;
+  if (radioDrag.timer) clearTimeout(radioDrag.timer);
+  try {
+    radioDrag.card?.releasePointerCapture?.(radioDrag.pointerId);
+  } catch {
+    // Pointer capture may already be released on some mobile browsers.
+  }
+  radioDrag.card?.classList.remove("isDragging");
+  radioDrag.ghost?.remove();
+  clearRadioDragDropClasses();
+  document.body.classList.remove("radioDragActive");
+  radioDrag = null;
+}
+
+function startRadioStationDrag(event) {
+  const card = event.target.closest("#radioStations .radioStation[data-radio-index]");
+  if (!card || event.button > 0) return;
+  const handle = event.target.closest("[data-radio-drag]");
+  const action = event.target.closest("button, a, input, select, textarea");
+  if (action && !handle) return;
+  if (event.pointerType === "mouse" && !handle) return;
+
+  const sourceIndex = Number(card.dataset.radioIndex);
+  if (!Number.isFinite(sourceIndex) || !state.radioStations[sourceIndex]) return;
+  if (handle) event.preventDefault();
+  radioDrag = {
+    active: false,
+    card,
+    sourceIndex,
+    startX: event.clientX,
+    startY: event.clientY,
+    pointerId: event.pointerId,
+    timer: null,
+    ghost: null,
+    targetIndex: sourceIndex,
+    dragOnMove: Boolean(handle),
+    moved: false,
+    offsetX: 0,
+    offsetY: 0
+  };
+  try {
+    card.setPointerCapture?.(event.pointerId);
+  } catch {
+    // Best-effort only. Window listeners still handle the drag path.
+  }
+
+  const delay = handle ? 0 : 420;
+  if (delay) {
+    radioDrag.timer = setTimeout(() => beginRadioDrag(event), delay);
+  } else {
+    beginRadioDrag(event);
+  }
+}
+
+function handleRadioStationDragMove(event) {
+  if (!radioDrag || event.pointerId !== radioDrag.pointerId) return;
+  const moved = Math.hypot(event.clientX - radioDrag.startX, event.clientY - radioDrag.startY);
+  if (moved > 10) radioDrag.moved = true;
+  if (!radioDrag.active) {
+    if (moved > 10) {
+      if (radioDrag.dragOnMove) beginRadioDrag(event);
+      else cancelPendingRadioDrag();
+    }
+    return;
+  }
+
+  event.preventDefault();
+  updateRadioDragGhost(event);
+  const destination = radioDragDestination(event);
+  clearRadioDragDropClasses();
+  if (destination) {
+    radioDrag.targetIndex = destination.toIndex;
+    destination.targetCard.classList.add(destination.after ? "isDropAfter" : "isDropBefore");
+  }
+  if (event.clientY < 70) window.scrollBy(0, -12);
+  if (event.clientY > window.innerHeight - 70) window.scrollBy(0, 12);
+}
+
+function handleRadioStationDragEnd(event) {
+  if (!radioDrag || event.pointerId !== radioDrag.pointerId) return;
+  const wasActive = radioDrag.active;
+  const sourceIndex = radioDrag.sourceIndex;
+  const moved = radioDrag.moved;
+  const destination = wasActive ? radioDragDestination(event) : null;
+  cleanupRadioDrag();
+  if (wasActive && moved) {
+    suppressNextRadioClick = true;
+    setTimeout(() => {
+      suppressNextRadioClick = false;
+    }, 0);
+  }
+  if (!wasActive || !destination) return;
+  moveRadioStation(sourceIndex, destination.toIndex);
+}
+
 function tidalMixCardHtml(mix = {}, index = 0) {
   const imageUrl = safeHttpUrl(mix.imageUrl);
   const externalUrl = safeHttpUrl(mix.url);
@@ -3387,79 +4083,6 @@ async function refreshTidalMixes({ force = false } = {}) {
   }
 }
 
-async function refreshSaved() {
-  const result = await getJson("/api/saved");
-  applySavedSnapshot(result);
-  renderSaved();
-  if (state.lastResult) renderResults(state.lastResult);
-  updateNowDiscoveryTools(activeZone());
-}
-
-function applySavedChange(result = {}) {
-  applySavedSnapshot(result);
-  renderSaved();
-  if (state.lastResult) renderResults(state.lastResult);
-  updateNowDiscoveryTools(activeZone());
-  const listNameInput = $("#savedListName");
-  if (listNameInput) listNameInput.value = activeSavedList().name;
-}
-
-function renderSaved() {
-  const selectedList = activeSavedList();
-  const listSelect = $("#savedListSelect");
-  if (listSelect) {
-    listSelect.innerHTML = state.savedLists.map((list) => `
-      <option value="${escapeHtml(list.id)}" ${list.id === state.activeSavedListId ? "selected" : ""}>
-        ${escapeHtml(list.name)} (${Number(list.count || 0)})
-      </option>
-    `).join("");
-  }
-  const listNameInput = $("#savedListName");
-  if (listNameInput && document.activeElement !== listNameInput && !listNameInput.value.trim()) {
-    listNameInput.value = selectedList.name;
-  }
-  updateNowCandidateSaveState(state.nowTrack);
-
-  $("#savedTitle").textContent = `${selectedList.name}: ${state.savedTracks.length} playlist candidate${state.savedTracks.length === 1 ? "" : "s"}`;
-  $("#queueSaved").disabled = !state.savedTracks.length;
-  $("#queueSavedNext").disabled = !state.savedTracks.length;
-  $("#sendSavedTidalQueue").disabled = !state.savedTracks.length;
-  $("#copySaved").disabled = !state.savedTracks.length;
-  $("#exportSaved").disabled = !state.savedTracks.length;
-  const deleteListButton = $("#deleteSavedList");
-  if (deleteListButton) deleteListButton.disabled = state.savedLists.length <= 1;
-  $("#savedTracks").innerHTML = state.savedTracks.length ? state.savedTracks.map((track, index) => {
-    const key = track.key || trackKeyFor(track);
-    const moveOptions = savedMoveOptionsHtml(selectedList.id);
-    const tidalUrl = safeHttpUrl(track.tidal?.tidalUrl);
-    return `
-      <div class="track savedCandidate" id="saved-track-${index}">
-        <div class="trackMain">
-          <strong class="trackTitle">${index + 1}. ${escapeHtml(track.title)}</strong>
-          <span class="trackMeta">${escapeHtml(track.artist)}${track.releaseDate || track.year ? ` - ${escapeHtml(track.releaseDate || track.year)}` : ""}${track.durationMs ? ` - ${escapeHtml(formatDuration(track.durationMs))}` : ""}</span>
-          ${track.score ? compactScoreBadgeHtml(track) : ""}
-          ${tidalUrl ? `<p class="muted">TIDAL: <a href="${escapeHtml(tidalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(track.tidal.title || track.title)}</a></p>` : ""}
-        </div>
-        <div class="trackActions">
-          ${tidalUrl ? `<a class="buttonLink" href="${escapeHtml(tidalUrl)}" target="_blank" rel="noreferrer">TIDAL</a>` : ""}
-          <button data-queue-saved="${index}">Queue</button>
-          <button data-queue-next-saved="${index}">Add Next</button>
-          <button data-play-saved="${index}">Play Roon</button>
-          ${moveOptions ? `
-            <div class="savedMoveGroup">
-              <select data-move-list aria-label="Move to candidate list">
-                ${moveOptions}
-              </select>
-              <button data-move-saved="${escapeHtml(key)}">Move</button>
-            </div>
-          ` : ""}
-          <button data-remove-saved="${escapeHtml(key)}">Remove</button>
-        </div>
-      </div>
-    `;
-  }).join("") : `<p class="muted">Save from the Current Rabbit Hole list to build ${escapeHtml(selectedList.name)}. Searches can change freely without clearing other candidate lists.</p>`;
-}
-
 function metricCardHtml(label, value, note = "") {
   return `
     <div class="metricCard">
@@ -3508,7 +4131,10 @@ function signalGroupHtml(title, entries = [], emptyText = "No signal yet") {
     <div class="signalGroup">
       <strong>${escapeHtml(title)}</strong>
       ${entries.length ? entries.map((entry) => `
-        <span>${escapeHtml(entry.name)} <em>${entry.score > 0 ? "+" : ""}${escapeHtml(entry.score)}</em></span>
+        <div class="signalItem">
+          <span>${escapeHtml(entry.name)} <em>${Number(entry.rawScore ?? entry.score) > 0 && !String(entry.score).startsWith("+") ? "+" : ""}${escapeHtml(entry.score)}</em></span>
+          ${entry.note ? `<small>${escapeHtml(entry.note)}</small>` : ""}
+        </div>
       `).join("") : `<p class="muted">${escapeHtml(emptyText)}</p>`}
     </div>
   `;
@@ -3536,7 +4162,19 @@ function renderHistoryReport(report = {}) {
     ? report.topTracks.map((track, index) => reportRowHtml(track, index, "track")).join("")
     : "<p class=\"muted\">No track history yet.</p>";
 
+  const dna = report.tasteDna || {};
+  const confidence = dna.confidence || {};
   $("#tasteSignals").innerHTML = [
+    signalGroupHtml("Taste DNA", [
+      { name: "Depth", score: `${confidence.depthScore || 0}/100`, rawScore: confidence.depthScore || 0, note: confidence.depthLabel || "Early" },
+      { name: "Scored memories", score: confidence.detailedMemoryCount || 0, rawScore: confidence.detailedMemoryCount || 0, note: `${confidence.feedbackCount || 0} total ratings` },
+      { name: "Radio feedback", score: confidence.radioFeedbackCount || 0, rawScore: confidence.radioFeedbackCount || 0, note: "Live/radio tracks counted into taste" }
+    ], "No explicit taste depth yet"),
+    signalGroupHtml("Favored traits", dna.traits || [], "No trait-level signal yet"),
+    signalGroupHtml("Genre lane", dna.genres || [], "No genre-level signal yet"),
+    signalGroupHtml("Listening shape", dna.formats || [], "No duration/version signal yet"),
+    signalGroupHtml("Discovery sources", dna.sources || [], "No source pattern yet"),
+    signalGroupHtml("Avoid / calibrate", dna.avoid || [], "No avoid signal yet"),
     signalGroupHtml("Liked artists", report.likedArtists || []),
     signalGroupHtml("Liked labels", report.likedLabels || []),
     signalGroupHtml("Rejected artists", report.rejectedArtists || [], "No rejected artist signal yet"),
@@ -3752,16 +4390,22 @@ async function setPlayerFullWindow(value) {
 }
 
 function setActiveView(view) {
-  const target = ["history", "tidal"].includes(view) ? view : "player";
+  const target = ["history", "radio", "tidal"].includes(view) ? view : "player";
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === target);
   });
   $("#playerView").classList.toggle("isActive", target === "player");
   $("#historyView").classList.toggle("isActive", target === "history");
+  $("#radioView")?.classList.toggle("isActive", target === "radio");
   $("#tidalView")?.classList.toggle("isActive", target === "tidal");
   if (target === "history" && state.historyNeedsRefresh) {
     refreshHistoryReport().catch((error) => {
       $("#tasteNarrative").textContent = error.message;
+    });
+  }
+  if (target === "radio" && !state.radioStationsLoaded && !state.radioStationsLoading) {
+    refreshRadioStations().catch((error) => {
+      $("#radioStatus").textContent = error.message;
     });
   }
   if (target === "tidal" && state.tidalMixesNeedsRefresh) {
@@ -3775,10 +4419,13 @@ function setActiveView(view) {
 $("#zoneSelect").addEventListener("change", (event) => {
   state.selectedZoneId = event.target.value;
   localStorage.setItem("zoneId", state.selectedZoneId);
+  state.radioStationsLoaded = false;
+  state.radioStationsSession = "";
+  state.radioBrowseHierarchy = "";
+  state.radioBrowseTitle = "";
+  state.radioBrowseItemKey = "";
   renderState({ connected: true, core: { name: $("#connection").textContent.replace("Connected to ", "") }, zones: state.zones });
 });
-
-$("#jumpToCandidatesList").addEventListener("click", scrollToCandidatesList);
 
 $("#openRabbitHole").addEventListener("click", () => {
   const panel = $("#rabbitHolePanel");
@@ -3827,45 +4474,6 @@ $("#rabbitHolePanel").addEventListener("click", (event) => {
   setRabbitPrompt(node.prompt || rabbitHoleTextFor({ artist: node.name, title: "" }));
 });
 
-async function saveNowCandidateToList(listId, button = $("#saveNowCandidate")) {
-  const track = state.nowTrack;
-  if (!track) return;
-  const originalText = button.textContent;
-  const list = candidateListById(listId);
-  button.disabled = true;
-  button.textContent = `Saving to ${list.name}...`;
-  try {
-    const result = await api("/api/saved/add", {
-      track,
-      listId: list.id
-    });
-    button.textContent = result.added === false ? "Already saved" : `Added to ${list.name}`;
-    toggleNowCandidateListMenu(false);
-    applySavedChange(result);
-  } catch (error) {
-    button.textContent = originalText;
-    alert(error.message);
-  } finally {
-    setTimeout(() => updateNowCandidateSaveState(track), 700);
-  }
-}
-
-$("#saveNowCandidate").addEventListener("click", () => {
-  if (!state.nowTrack) return;
-  const lists = state.savedLists.length ? state.savedLists : [activeSavedList()];
-  if (lists.length <= 1) {
-    saveNowCandidateToList(lists[0]?.id || state.activeSavedListId).catch((error) => alert(error.message));
-    return;
-  }
-  toggleNowCandidateListMenu();
-});
-
-$("#nowCandidateListMenu").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-now-candidate-list]");
-  if (!button) return;
-  saveNowCandidateToList(button.dataset.nowCandidateList, $("#saveNowCandidate")).catch((error) => alert(error.message));
-});
-
 $("#nowTidalPlaylistSelect")?.addEventListener("focus", () => {
   loadTidalPlaylists({
     force: Boolean(state.tidalPlaylistsError || (state.tidalPlaylistsLoaded && !state.tidalPlaylists.length))
@@ -3880,6 +4488,16 @@ $("#nowTidalPlaylistSelect")?.addEventListener("change", (event) => {
 
 $("#addNowToTidalPlaylist")?.addEventListener("click", () => {
   addNowTrackToTidalPlaylist().catch((error) => alert(error.message));
+});
+
+$("#createNowTidalPlaylist")?.addEventListener("click", () => {
+  createNowTidalPlaylist().catch((error) => alert(error.message));
+});
+
+$("#nowTidalPlaylistName")?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  createNowTidalPlaylist().catch((error) => alert(error.message));
 });
 
 $("#jumpTop").addEventListener("click", () => {
@@ -3922,12 +4540,8 @@ $("#nowFeedback").addEventListener("click", async (event) => {
     if (state.nowMatchIndex >= 0 && state.lastResult?.tracks?.[state.nowMatchIndex]) {
       state.lastResult.tracks[state.nowMatchIndex].feedback = rating;
     }
-    if (state.nowSavedIndex >= 0 && state.savedTracks[state.nowSavedIndex]) {
-      state.savedTracks[state.nowSavedIndex].feedback = rating;
-    }
     if (state.lastResult) renderResults(state.lastResult);
     else updateNowDiscoveryTools(activeZone());
-    renderSaved();
   } catch (error) {
     alert(error.message);
   } finally {
@@ -3964,6 +4578,63 @@ $("#refreshHistory").addEventListener("click", () => {
   refreshHistoryReport().catch((error) => {
     $("#tasteNarrative").textContent = error.message;
   });
+});
+
+$("#refreshRadioStations")?.addEventListener("click", () => {
+  refreshRadioStations({ force: true }).catch((error) => {
+    $("#radioStatus").textContent = error.message;
+  });
+});
+
+$("#radioRoot")?.addEventListener("click", () => {
+  state.radioBrowseItemKey = "";
+  state.radioBrowseHierarchy = "";
+  state.radioStationsSession = "";
+  refreshRadioStations({ force: true, itemKey: "" }).catch((error) => {
+    $("#radioStatus").textContent = error.message;
+  });
+});
+
+$("#resetRadioOrder")?.addEventListener("click", () => {
+  clearRadioStationOrder();
+  refreshRadioStations({ force: true }).catch((error) => {
+    $("#radioStatus").textContent = error.message;
+  });
+});
+
+$("#radioStations")?.addEventListener("pointerdown", startRadioStationDrag);
+window.addEventListener("pointermove", handleRadioStationDragMove, { passive: false });
+window.addEventListener("pointerup", handleRadioStationDragEnd);
+window.addEventListener("pointercancel", cleanupRadioDrag);
+
+$("#radioStations")?.addEventListener("click", (event) => {
+  if (suppressNextRadioClick) {
+    event.preventDefault();
+    suppressNextRadioClick = false;
+    return;
+  }
+
+  const moveButton = event.target.closest("[data-radio-drag]");
+  if (moveButton) {
+    selectRadioStationForMove(Number(moveButton.dataset.radioDrag));
+    return;
+  }
+
+  if (handleRadioStationMoveTarget(event)) return;
+
+  const openButton = event.target.closest("[data-radio-open]");
+  if (openButton) {
+    const station = state.radioStations[Number(openButton.dataset.radioOpen)];
+    if (!station) return;
+    openRadioFolder(station).catch((error) => alert(error.message));
+    return;
+  }
+
+  const button = event.target.closest("[data-radio-play]");
+  if (!button) return;
+  const station = state.radioStations[Number(button.dataset.radioPlay)];
+  if (!station) return;
+  playRadioStation(station, button).catch((error) => alert(error.message));
 });
 
 $("#refreshTidalMixes")?.addEventListener("click", () => {
@@ -4254,6 +4925,74 @@ $("#playlistForm").addEventListener("submit", async (event) => {
   }
 });
 
+$("#standbyRefresh")?.addEventListener("click", async () => {
+  const button = $("#standbyRefresh");
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Refreshing...";
+  $("#busy").textContent = "Refreshing standby discovery pool...";
+  try {
+    const result = await api("/api/standby/refresh", {
+      reason: "manual",
+      options: currentPlaylistFormBody()
+    });
+    renderStandbyPool(result);
+    $("#busy").textContent = `${result.count || 0}/${result.targetCount || 25} standby tracks ready`;
+  } catch (error) {
+    alert(error.message);
+    $("#busy").textContent = "";
+  } finally {
+    button.textContent = originalText;
+    button.disabled = false;
+  }
+});
+
+$("#standbyClear")?.addEventListener("click", async () => {
+  const button = $("#standbyClear");
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Clearing...";
+  try {
+    const result = await api("/api/standby/clear", {});
+    renderStandbyPool(result);
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    button.textContent = originalText;
+    button.disabled = false;
+  }
+});
+
+$("#standbyQueue")?.addEventListener("click", () => {
+  const tracks = standbyPayloadTracks(state.standby?.targetCount || 25);
+  queueTrackList(tracks, $("#standbyQueue"), {
+    targetCount: tracks.length
+  });
+});
+
+$("#standbyQueueNext")?.addEventListener("click", () => {
+  const tracks = standbyPayloadTracks(state.standby?.targetCount || 25);
+  queueTrackList(tracks, $("#standbyQueueNext"), {
+    targetCount: tracks.length,
+    mode: "next"
+  });
+});
+
+$("#standbySendTidal")?.addEventListener("click", () => {
+  const tracks = standbyPayloadTracks(state.standby?.targetCount || 25);
+  sendTracksToTidalPlaylist(tracks, $("#standbySendTidal"), {
+    title: `Rabbit Hole Standby - ${new Date().toLocaleString()}`,
+    description: `Rabbit Hole standby pool with ${tracks.length} cached track${tracks.length === 1 ? "" : "s"}.`
+  });
+});
+
+$("#standbyTracks")?.addEventListener("click", (event) => {
+  const tidalLink = event.target.closest("[data-tidal-open]");
+  if (!tidalLink) return;
+  event.preventDefault();
+  openTrackElementInTidal(tidalLink);
+});
+
 $("#copyList").addEventListener("click", async () => {
   await navigator.clipboard.writeText(plainList(state.displayedTracks.map(trackPayload)));
   $("#copyList").textContent = "Copied";
@@ -4301,139 +5040,13 @@ $("#sendTidalQueue").addEventListener("click", () => {
   });
 });
 
-$("#savedListSelect").addEventListener("change", async (event) => {
-  try {
-    const result = await api("/api/saved/list/select", { listId: event.target.value });
-    applySavedChange(result);
-  } catch (error) {
-    alert(error.message);
-    await refreshSaved();
-  }
-});
-
-$("#createSavedList").addEventListener("click", async (event) => {
-  const input = $("#savedListName");
-  const name = input?.value?.trim() || "New candidates";
-  const button = event.currentTarget;
-  const originalText = button.textContent;
-  button.disabled = true;
-  button.textContent = "Creating...";
-  try {
-    const result = await api("/api/saved/list/create", { name });
-    applySavedChange(result);
-    button.textContent = "Created";
-  } catch (error) {
-    button.textContent = originalText;
-    alert(error.message);
-  } finally {
-    setTimeout(() => {
-      button.textContent = originalText;
-      button.disabled = false;
-    }, 900);
-  }
-});
-
-$("#renameSavedList").addEventListener("click", async (event) => {
-  const input = $("#savedListName");
-  const name = input?.value?.trim();
-  if (!name) return alert("Enter a candidate list name first.");
-  const button = event.currentTarget;
-  const originalText = button.textContent;
-  button.disabled = true;
-  button.textContent = "Renaming...";
-  try {
-    const result = await api("/api/saved/list/rename", {
-      listId: state.activeSavedListId,
-      name
-    });
-    applySavedChange(result);
-    button.textContent = "Renamed";
-  } catch (error) {
-    button.textContent = originalText;
-    alert(error.message);
-  } finally {
-    setTimeout(() => {
-      button.textContent = originalText;
-      button.disabled = false;
-    }, 900);
-  }
-});
-
-$("#deleteSavedList").addEventListener("click", async (event) => {
-  const selectedList = activeSavedList();
-  if (state.savedLists.length <= 1) return alert("Create another candidate list before deleting this one.");
-  if (!confirm(`Delete candidate list "${selectedList.name}"? Tracks in that list will be removed from Rabbit Hole candidates.`)) return;
-  const button = event.currentTarget;
-  const originalText = button.textContent;
-  button.disabled = true;
-  button.textContent = "Deleting...";
-  try {
-    const result = await api("/api/saved/list/delete", { listId: selectedList.id });
-    applySavedChange(result);
-    button.textContent = "Deleted";
-  } catch (error) {
-    button.textContent = originalText;
-    alert(error.message);
-  } finally {
-    setTimeout(() => {
-      button.textContent = originalText;
-      button.disabled = false;
-    }, 900);
-  }
-});
-
-$("#copySaved").addEventListener("click", async () => {
-  await navigator.clipboard.writeText(plainList(state.savedTracks));
-  $("#copySaved").textContent = "Copied";
-  setTimeout(() => {
-    $("#copySaved").textContent = "Copy candidates";
-  }, 1200);
-});
-
-$("#exportSaved").addEventListener("click", () => {
-  downloadCsv(savedListFilename("csv"), state.savedTracks);
-});
-
-$("#queueSaved").addEventListener("click", () => {
-  queueTrackList(state.savedTracks, $("#queueSaved"));
-});
-
-$("#queueSavedNext").addEventListener("click", () => {
-  queueTrackList(state.savedTracks, $("#queueSavedNext"), {
-    mode: "next"
-  });
-});
-
-$("#sendSavedTidalQueue").addEventListener("click", () => {
-  const list = activeSavedList();
-  sendTracksToTidalPlaylist(state.savedTracks, $("#sendSavedTidalQueue"), {
-    title: `Rabbit Hole - ${list.name} - ${new Date().toLocaleString()}`,
-    description: `Rabbit Hole candidate list: ${list.name}.`
-  });
-});
-
-$("#purgeMemory").addEventListener("click", async (event) => {
-  if (!confirm("Purge remembered discovery scores and track memory? Your Love/Good/OK/Wrong Genre/Skip/Never Again taste profile stays intact.")) return;
-  const button = event.currentTarget;
-  const originalText = button.textContent;
-  button.disabled = true;
-  button.textContent = "Purging...";
-  try {
-    state.memory = await api("/api/memory/purge", {});
-    renderMemoryStatus();
-    button.textContent = "Purged";
-    setTimeout(() => {
-      button.textContent = originalText;
-      button.disabled = false;
-    }, 1200);
-  } catch (error) {
-    button.textContent = originalText;
-    button.disabled = false;
-    alert(error.message);
-  }
-});
-
 $("#tracks").addEventListener("click", async (event) => {
+  const tidalButton = event.target.closest("[data-tidal-open]");
+  if (tidalButton) {
+    openTrackElementInTidal(tidalButton);
+    return;
+  }
+
   const rejectSimilarButton = event.target.closest("[data-reject-similar]");
   if (rejectSimilarButton) {
     const index = Number(rejectSimilarButton.dataset.rejectSimilar);
@@ -4493,34 +5106,8 @@ $("#tracks").addEventListener("click", async (event) => {
     return;
   }
 
-  const saveTrackButton = event.target.closest("[data-save-track]");
-  if (saveTrackButton) {
-    const saveGroup = saveTrackButton.closest(".candidateSaveGroup");
-    const listId = saveGroup?.querySelector("[data-save-list]")?.value || state.activeSavedListId;
-    const originalText = saveTrackButton.textContent;
-    saveTrackButton.disabled = true;
-    saveTrackButton.textContent = "Saving...";
-    try {
-      const result = await api("/api/saved/add", {
-        track: JSON.parse(saveTrackButton.dataset.saveTrack),
-        listId
-      });
-      saveTrackButton.textContent = result.added === false ? "Already saved" : "Added";
-      applySavedChange(result);
-    } catch (error) {
-      saveTrackButton.textContent = "Failed";
-      alert(error.message);
-    } finally {
-      setTimeout(() => {
-        saveTrackButton.textContent = originalText;
-        saveTrackButton.disabled = false;
-      }, 900);
-    }
-    return;
-  }
-
   if (event.target.dataset.queueNext) {
-    await queueTrackList([JSON.parse(event.target.dataset.queueNext)], event.target, {
+    await queueTrackList([parseTrackPayloadElement(event.target, "queueNext")], event.target, {
       targetCount: 1,
       mode: "next"
     });
@@ -4528,100 +5115,442 @@ $("#tracks").addEventListener("click", async (event) => {
   }
 
   if (!event.target.dataset.track) return;
-  await playTrackInRoon(JSON.parse(event.target.dataset.track), event.target);
+  await playTrackInRoon(parseTrackPayloadElement(event.target, "track"), event.target);
 });
 
-$("#tracks").addEventListener("change", (event) => {
-  const listSelect = event.target.closest("[data-save-list]");
-  if (!listSelect) return;
-  const group = listSelect.closest(".candidateSaveGroup");
-  const button = group?.querySelector("[data-save-track]");
-  if (!group || !button) return;
-  const savedInActiveList = group.dataset.activeSaved === "true";
-  const selectedActiveList = listSelect.value === state.activeSavedListId;
-  const savedHere = savedInActiveList && selectedActiveList;
-  button.disabled = savedHere;
-  button.textContent = savedHere ? "Saved" : "Add";
-});
+function cleanAgentText(value) {
+  return String(value || "").trim();
+}
 
-$("#savedTracks").addEventListener("click", async (event) => {
-  if (event.target.dataset.queueSaved) {
-    const track = state.savedTracks[Number(event.target.dataset.queueSaved)];
-    if (!track) return;
-    await queueTrackList([track], event.target, { targetCount: 1 });
-    return;
+function agentBoolean(value) {
+  if (typeof value === "boolean") return value;
+  return /^(1|true|yes|on)$/i.test(String(value || ""));
+}
+
+function compactAgentTrack(track = {}) {
+  return {
+    artist: track.artist || "",
+    title: track.title || "",
+    album: track.album || "",
+    label: track.label || track.tidal?.label || "",
+    year: track.year || track.tidal?.year || null,
+    releaseDate: track.releaseDate || track.tidal?.releaseDate || "",
+    score: track.score || track.scoreBreakdown?.total || null,
+    feedback: normalizeFeedbackValue(track.feedback || ""),
+    discoverySource: track.discoverySource || "",
+    discoveryLane: track.discoveryLane || "",
+    tidalUrl: track.tidal?.tidalUrl || track.tidalUrl || "",
+    roonVerified: Boolean(track.roon?.verified),
+    reason: track.reason || ""
+  };
+}
+
+function compactAgentResult(result = {}) {
+  const tracks = Array.isArray(result.tracks) ? result.tracks : [];
+  const discarded = Array.isArray(result.discarded) ? result.discarded : [];
+  const verification = result.verification || {};
+  return {
+    requested: verification.requested || result.requestedCount || tracks.length,
+    kept: tracks.length,
+    discarded: discarded.length,
+    strategy: verification.strategy || "",
+    scoringMode: verification.scoringMode || "",
+    intent: verification.intent || null,
+    poolDiagnostics: verification.poolDiagnostics || null,
+    queryYield: verification.queryYield || null,
+    tracks: tracks.slice(0, 40).map(compactAgentTrack),
+    rejectedExamples: discarded.slice(0, 12).map((track) => ({
+      artist: track.artist || "",
+      title: track.title || "",
+      album: track.album || "",
+      label: track.label || track.tidal?.label || "",
+      year: track.year || track.tidal?.year || null,
+      reason: track.reason || ""
+    }))
+  };
+}
+
+function compactAgentStatus(payload = null) {
+  const app = payload?.app || state.appStatus || {};
+  const zone = activeZone();
+  const now = nowPlayingTrack(zone) || state.nowTrack || null;
+  return {
+    connected: Boolean(payload?.connected ?? state.connectionStatus.connected),
+    coreName: payload?.core?.name || state.connectionStatus.coreName || "",
+    selectedZone: zone ? {
+      zoneId: zone.zone_id,
+      name: zone.display_name,
+      state: zone.state || "",
+      queueItemsRemaining: zone.queue_items_remaining || 0,
+      queueTimeRemaining: zone.queue_time_remaining || 0
+    } : null,
+    nowPlaying: now ? compactAgentTrack(now) : null,
+    sourceQuality: state.nowQualityInfo || null,
+    displayedTrackCount: state.displayedTracks.length,
+    lastResult: state.lastResult ? compactAgentResult(state.lastResult) : null,
+    standby: app.standby ? {
+      count: app.standby.count || 0,
+      targetCount: app.standby.targetCount || 25,
+      ready: Boolean(app.standby.ready),
+      refreshing: Boolean(app.standby.refreshing),
+      lastRefreshAt: app.standby.lastRefreshAt || "",
+      nextRefreshAt: app.standby.nextRefreshAt || "",
+      lastError: app.standby.lastError || "",
+      tracks: (app.standby.tracks || []).slice(0, 25).map(compactAgentTrack)
+    } : null,
+    tidalPlaylists: state.tidalPlaylists.map((playlist) => ({
+      id: playlist.id || "",
+      title: playlist.title || "",
+      itemCount: playlist.itemCount || 0
+    })),
+    genreProfiles: app.genreProfiles || null,
+    llm: app.llm || null,
+    tidal: app.tidal || null,
+    tidalProfileMixes: app.tidalProfileMixes || null
+  };
+}
+
+function currentPlaylistFormBody(overrides = {}) {
+  const form = $("#playlistForm");
+  const body = form ? Object.fromEntries(new FormData(form).entries()) : {};
+  for (const field of [
+    "reference",
+    "genres",
+    "years",
+    "mood",
+    "language",
+    "count",
+    "scoringMode",
+    "minScore",
+    "releasePreset",
+    "releaseExactDate",
+    "releaseStartDate",
+    "releaseEndDate"
+  ]) {
+    if (body[field] !== undefined && !cleanAgentText(body[field])) delete body[field];
   }
 
-  if (event.target.dataset.queueNextSaved) {
-    const track = state.savedTracks[Number(event.target.dataset.queueNextSaved)];
-    if (!track) return;
-    await queueTrackList([track], event.target, { targetCount: 1, mode: "next" });
-    return;
+  for (const [key, value] of Object.entries(overrides || {})) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && !value.trim()) continue;
+    if (key === "strictChildGenre") continue;
+    if (key === "requireRoonQueueable" || key === "preferExtendedMixes") continue;
+    body[key] = value;
   }
 
-  if (event.target.dataset.playSaved) {
-    const track = state.savedTracks[Number(event.target.dataset.playSaved)];
-    if (!track) return;
-    await playTrackInRoon(track, event.target);
-    return;
+  const zone = activeZone();
+  body.zoneId = cleanAgentText(overrides.zoneId) || zone?.zone_id || "";
+  body.nowPlaying = summarizeNowPlaying(zone);
+  body.requireRoonQueueable = agentBoolean(overrides.requireRoonQueueable) ? "true" : "";
+  if (agentBoolean(overrides.preferExtendedMixes) && !/extended|club|long/i.test(String(body.request || ""))) {
+    body.request = `${body.request || "Find music"}; prefer extended mixes when available`;
   }
+  return body;
+}
 
-  if (event.target.dataset.moveSaved) {
-    const button = event.target;
-    const group = button.closest(".savedMoveGroup");
-    const toListId = group?.querySelector("[data-move-list]")?.value || "";
-    if (!toListId) return alert("Choose a destination candidate list first.");
-    const destination = candidateListById(toListId);
-    const originalText = button.textContent;
-    button.disabled = true;
-    button.textContent = "Moving...";
-    try {
-      const result = await api("/api/saved/move", {
-        key: button.dataset.moveSaved,
-        fromListId: state.activeSavedListId,
-        toListId
-      });
-      applySavedChange(result);
-      $("#busy").textContent = result.duplicate
-        ? `Already in ${destination.name}; removed from current list`
-        : `Moved to ${destination.name}`;
-      setTimeout(() => {
-        $("#busy").textContent = "";
-      }, 1800);
-    } catch (error) {
-      button.textContent = originalText;
-      alert(error.message);
-    } finally {
-      setTimeout(() => {
-        button.textContent = originalText;
-        button.disabled = false;
-      }, 900);
-    }
-    return;
+async function agentSearchRabbitHole(input = {}) {
+  const body = currentPlaylistFormBody(input);
+  const result = await api("/api/ai/playlist", body);
+  renderResults(result);
+  return compactAgentResult(result);
+}
+
+async function agentQueueDisplayedTracks(input = {}) {
+  const zone = activeZone();
+  if (!zone) throw new Error("Select a Roon zone first.");
+  const count = Math.max(1, Math.min(40, Number(input.count || state.displayedTracks.length || 0)));
+  const tracks = state.displayedTracks.slice(0, count).map(trackPayload);
+  if (!tracks.length) throw new Error("There are no displayed Rabbit Hole tracks to queue.");
+  const result = await api("/api/roon/queue-tracks", {
+    zoneId: cleanAgentText(input.zoneId) || zone.zone_id,
+    tracks,
+    alternates: state.lastResult?.alternates || [],
+    targetCount: count,
+    mode: input.mode === "next" ? "next" : "append",
+    preferExtendedMixes: input.preferExtendedMixes ?? currentRequestPrefersExtendedMixes()
+  });
+  showQueueReport(result);
+  return {
+    requested: result.requested || count,
+    queuedCount: result.queuedCount || 0,
+    failedCount: result.failedCount || 0,
+    topOfQueue: Boolean(result.topOfQueue),
+    appendOnly: Boolean(result.appendOnly),
+    queued: (result.queued || []).slice(0, 40).map((item) => compactAgentTrack(item.track || item)),
+    failed: (result.failed || []).slice(0, 12).map((item) => ({
+      track: compactAgentTrack(item.track || item),
+      reason: item.reason || ""
+    }))
+  };
+}
+
+async function agentSendDisplayedTracksToTidal(input = {}) {
+  const count = Math.max(1, Math.min(40, Number(input.count || state.displayedTracks.length || 0)));
+  const tracks = state.displayedTracks.slice(0, count).map(trackPayload);
+  if (!tracks.length) throw new Error("There are no displayed Rabbit Hole tracks to send to TIDAL.");
+  const result = await api("/api/tidal/queue-playlist", {
+    tracks,
+    title: cleanAgentText(input.title) || `Rabbit Hole Queue - ${new Date().toLocaleString()}`,
+    description: cleanAgentText(input.description) || "Temporary Rabbit Hole queue created by a WebMCP tool."
+  });
+  showTidalPlaylistReport(result);
+  state.tidalMixesNeedsRefresh = true;
+  return {
+    title: result.playlist?.title || result.title || "",
+    addedCount: result.addedCount || 0,
+    skippedCount: result.skippedCount || 0,
+    playlist: result.playlist || null,
+    added: (result.added || []).slice(0, 40).map(compactAgentTrack)
+  };
+}
+
+async function agentGetStandbyPool() {
+  const result = await getJson("/api/standby");
+  renderStandbyPool(result);
+  return {
+    count: result.count || 0,
+    targetCount: result.targetCount || 25,
+    ready: Boolean(result.ready),
+    refreshing: Boolean(result.refreshing),
+    lastRefreshAt: result.lastRefreshAt || "",
+    nextRefreshAt: result.nextRefreshAt || "",
+    lastError: result.lastError || "",
+    tracks: (result.tracks || []).slice(0, 25).map(compactAgentTrack)
+  };
+}
+
+async function agentRefreshStandbyPool(input = {}) {
+  const result = await api("/api/standby/refresh", {
+    reason: cleanAgentText(input.reason) || "webmcp",
+    options: currentPlaylistFormBody(input.options || input)
+  });
+  renderStandbyPool(result);
+  return {
+    count: result.count || 0,
+    targetCount: result.targetCount || 25,
+    ready: Boolean(result.ready),
+    refreshing: Boolean(result.refreshing),
+    lastError: result.lastError || "",
+    tracks: (result.tracks || []).slice(0, 25).map(compactAgentTrack)
+  };
+}
+
+async function agentQueueStandbyTracks(input = {}) {
+  const zone = activeZone();
+  if (!zone) throw new Error("Select a Roon zone first.");
+  if (!state.standbyTracks.length) await agentGetStandbyPool();
+  const count = Math.max(1, Math.min(25, Number(input.count || state.standbyTracks.length || 0)));
+  const tracks = standbyPayloadTracks(count);
+  if (!tracks.length) throw new Error("There are no standby tracks to queue.");
+  const result = await api("/api/roon/queue-tracks", {
+    zoneId: cleanAgentText(input.zoneId) || zone.zone_id,
+    tracks,
+    targetCount: count,
+    mode: input.mode === "next" ? "next" : "append",
+    preferExtendedMixes: input.preferExtendedMixes ?? currentRequestPrefersExtendedMixes()
+  });
+  showQueueReport(result);
+  return {
+    requested: result.requested || count,
+    queuedCount: result.queuedCount || 0,
+    failedCount: result.failedCount || 0,
+    topOfQueue: Boolean(result.topOfQueue),
+    queued: (result.queued || []).slice(0, 25).map((item) => compactAgentTrack(item.track || item)),
+    failed: (result.failed || []).slice(0, 12).map((item) => ({
+      track: compactAgentTrack(item.track || item),
+      reason: item.reason || ""
+    }))
+  };
+}
+
+async function agentSendStandbyTracksToTidal(input = {}) {
+  if (!state.standbyTracks.length) await agentGetStandbyPool();
+  const count = Math.max(1, Math.min(25, Number(input.count || state.standbyTracks.length || 0)));
+  const tracks = standbyPayloadTracks(count);
+  if (!tracks.length) throw new Error("There are no standby tracks to send to TIDAL.");
+  const result = await api("/api/tidal/queue-playlist", {
+    tracks,
+    title: cleanAgentText(input.title) || `Rabbit Hole Standby - ${new Date().toLocaleString()}`,
+    description: cleanAgentText(input.description) || "Rabbit Hole standby pool created by a WebMCP tool."
+  });
+  showTidalPlaylistReport(result);
+  state.tidalMixesNeedsRefresh = true;
+  return {
+    title: result.playlist?.title || result.title || "",
+    addedCount: result.addedCount || 0,
+    skippedCount: result.skippedCount || 0,
+    playlist: result.playlist || null,
+    added: (result.added || []).slice(0, 25).map(compactAgentTrack)
+  };
+}
+
+async function agentCreateTidalPlaylist(input = {}) {
+  const title = cleanAgentText(input.title || input.name);
+  if (!title) throw new Error("A playlist title is required.");
+  const result = await api("/api/tidal/playlist", {
+    title,
+    description: cleanAgentText(input.description) || "Created from Rabbit Hole WebMCP."
+  });
+  const playlist = result.playlist || {};
+  if (playlist.id) {
+    state.tidalPlaylistsLoaded = true;
+    state.tidalPlaylistsError = "";
+    state.tidalPlaylists = [
+      playlist,
+      ...state.tidalPlaylists.filter((item) => item.id !== playlist.id)
+    ];
+    state.selectedTidalPlaylistId = playlist.id;
+    localStorage.setItem("tidalPlaylistId", playlist.id);
+    renderNowTidalPlaylistControl();
+    renderTidalPlaylistSeedControl();
   }
+  return {
+    connected: result.connected !== false,
+    playlist
+  };
+}
 
-  const key = event.target.dataset.removeSaved;
-  if (!key) return;
-  await api("/api/saved/remove", { key, listId: state.activeSavedListId });
-  await refreshSaved();
-});
+async function agentAddNowPlayingToTidal(input = {}) {
+  const track = state.nowTrack || nowPlayingTrack(activeZone());
+  if (!track) throw new Error("There is no current track to add.");
+  if (!state.tidalPlaylistsLoaded || input.refreshPlaylists) await loadTidalPlaylists({ force: agentBoolean(input.refreshPlaylists) });
+  const playlistTitle = cleanAgentText(input.playlistTitle || input.title);
+  const playlistId = cleanAgentText(input.playlistId || input.playlist_id);
+  const playlist = state.tidalPlaylists.find((item) => (
+    (playlistId && item.id === playlistId) ||
+    (playlistTitle && normalizeMatchText(item.title) === normalizeMatchText(playlistTitle))
+  )) || selectedTidalPlaylist();
+  if (!playlist?.id) throw new Error("Choose or create a TIDAL playlist first.");
+
+  const result = await api("/api/tidal/playlist-track", {
+    playlistId: playlist.id,
+    playlistTitle: playlist.title,
+    track
+  });
+  return {
+    playlist: {
+      id: playlist.id,
+      title: playlist.title || ""
+    },
+    track: compactAgentTrack(result.track || track),
+    resolvedBy: result.resolvedBy || "",
+    added: result.added !== false,
+    result
+  };
+}
+
+async function agentRateNowPlaying(input = {}) {
+  const rating = normalizeFeedbackValue(input.rating || "");
+  if (!rating) throw new Error("A rating is required.");
+  const track = state.nowTrack || nowPlayingTrack(activeZone());
+  if (!track) throw new Error("There is no current track to rate.");
+  const result = await api("/api/feedback", {
+    track: trackPayload(track),
+    rating,
+    reason: cleanAgentText(input.reason)
+  });
+  applyFeedbackResponse(result);
+  state.feedbackByKey[trackKeyFor(track)] = rating;
+  updateResultTrackFeedback(track, rating);
+  updateNowDiscoveryTools();
+  return {
+    rating,
+    track: compactAgentTrack({ ...track, feedback: rating }),
+    taste: result.profile || null,
+    genreProfiles: result.genreProfiles || null
+  };
+}
+
+async function agentExplainLastRejections(input = {}) {
+  if (!state.lastResult) await refreshSession();
+  const result = state.lastResult || {};
+  const discarded = Array.isArray(result.discarded) ? result.discarded : [];
+  const limit = Math.max(1, Math.min(50, Number(input.limit || 20)));
+  return {
+    discardedCount: discarded.length,
+    poolDiagnostics: result.verification?.poolDiagnostics || null,
+    queryYield: result.verification?.queryYield || null,
+    examples: discarded.slice(0, limit).map((track) => ({
+      artist: track.artist || "",
+      title: track.title || "",
+      album: track.album || "",
+      label: track.label || "",
+      year: track.year || null,
+      query: track.query || "",
+      reason: track.reason || ""
+    }))
+  };
+}
+
+async function agentInspectGenreProfile(input = {}) {
+  const payload = await getJson("/api/status");
+  const profileKey = normalizeMatchText(input.genre || input.name || "");
+  const profiles = payload.app?.genreProfiles?.profiles || [];
+  const matching = profileKey
+    ? profiles.filter((profile) => normalizeMatchText(profile.name || profile.key || "").includes(profileKey))
+    : profiles;
+  return {
+    genreProfiles: payload.app?.genreProfiles || null,
+    matchingProfiles: matching,
+    lastIntent: payload.app?.session?.result?.verification?.intent || payload.app?.session?.options || null
+  };
+}
+
+window.RabbitHoleWebMcpBridge = {
+  version: "1",
+  getStatus: async () => compactAgentStatus(await getJson("/api/status")),
+  searchRabbitHole: agentSearchRabbitHole,
+  queueDisplayedTracks: agentQueueDisplayedTracks,
+  sendDisplayedTracksToTidal: agentSendDisplayedTracksToTidal,
+  getStandbyPool: agentGetStandbyPool,
+  refreshStandbyPool: agentRefreshStandbyPool,
+  queueStandbyTracks: agentQueueStandbyTracks,
+  sendStandbyTracksToTidal: agentSendStandbyTracksToTidal,
+  createTidalPlaylist: agentCreateTidalPlaylist,
+  addNowPlayingToTidal: agentAddNowPlayingToTidal,
+  rateNowPlaying: agentRateNowPlaying,
+  explainLastRejections: agentExplainLastRejections,
+  inspectGenreProfile: agentInspectGenreProfile
+};
 
 const events = new EventSource("/api/events");
+events.onopen = () => {
+  if (eventSourceOfflineTimer) {
+    clearTimeout(eventSourceOfflineTimer);
+    eventSourceOfflineTimer = null;
+  }
+};
 events.onmessage = (event) => {
+  if (eventSourceOfflineTimer) {
+    clearTimeout(eventSourceOfflineTimer);
+    eventSourceOfflineTimer = null;
+  }
   const payload = JSON.parse(event.data);
   renderState(payload);
   applyAppState(payload.app);
   state.historyNeedsRefresh = true;
 };
+events.onerror = () => {
+  if (eventSourceOfflineTimer) clearTimeout(eventSourceOfflineTimer);
+  eventSourceOfflineTimer = setTimeout(() => {
+    if (!lastRabbitStatusAt || Date.now() - lastRabbitStatusAt > 7000) {
+      markRabbitConnectionLost(new Error("Live updates disconnected."));
+    }
+  }, 2500);
+};
 applyPlayerMaximized();
 applyPlayerFullscreenState();
 refresh().catch(() => {});
+setInterval(() => {
+  if (!lastRabbitStatusAt || Date.now() - lastRabbitStatusAt > 15_000) {
+    refresh().catch(() => {});
+  }
+}, 5_000);
 refreshLlmStatus().catch(() => {});
 setInterval(() => {
   refreshLlmStatus().catch(() => {});
 }, 10_000);
 refreshSession().catch(() => {});
-refreshSaved().catch(() => {});
 refreshPlaylists().catch(() => {});
 loadTidalPlaylists().catch(() => {});
 refreshHistoryReport().catch(() => {});

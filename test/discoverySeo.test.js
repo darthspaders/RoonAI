@@ -2,7 +2,12 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { buildDiscoveryProfile, rejectReason, scoreBreakdownFor } = require("../src/discoveryEngine");
+const {
+  buildDiscoveryProfile,
+  candidateIdentityKeys,
+  rejectReason,
+  scoreBreakdownFor
+} = require("../src/discoveryEngine");
 
 test("genre date catalogue filler is rejected as SEO sludge", () => {
   const options = {
@@ -65,6 +70,49 @@ test("genre style descriptor title is rejected as SEO sludge", () => {
   assert.match(reason, /genre\/style descriptor keywords/i);
 });
 
+test("genre style parenthetical with ampersand is rejected as SEO sludge", () => {
+  const options = {
+    request: "Find underground melodic house tracks",
+    genres: "melodic house",
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+
+  const reason = rejectReason({
+    artist: "Max Oazo, Moonessa",
+    title: "Once Upon A Time (Melodic House & Techno Mix)",
+    album: "Once Upon A Time (Melodic House & Techno Mix)",
+    label: "Moonessa Music",
+    durationMs: 328000,
+    query: "melodic house underground"
+  }, options, profile);
+
+  assert.match(reason, /genre\/style descriptor keywords/i);
+});
+
+test("candidate identity collapses SEO genre parentheticals without collapsing remix titles", () => {
+  const base = {
+    artist: "Max Oazo, Moonessa",
+    title: "Once Upon A Time"
+  };
+  const seoTitle = {
+    artist: "Max Oazo, Moonessa",
+    title: "Once Upon A Time (Melodic House & Techno Mix)"
+  };
+  const remixTitle = {
+    artist: "DNA Presents",
+    title: "Ecstasy (CM Low Gear Remix)"
+  };
+  const remixBase = {
+    artist: "DNA Presents",
+    title: "Ecstasy"
+  };
+
+  const baseKeys = new Set(candidateIdentityKeys(base));
+  assert.ok(candidateIdentityKeys(seoTitle).some((key) => baseKeys.has(key)));
+  assert.equal(candidateIdentityKeys(remixTitle).some((key) => candidateIdentityKeys(remixBase).includes(key)), false);
+});
+
 test("functional music catalogue results are rejected as SEO sludge", () => {
   const options = {
     request: "Find progressive house tracks with great synths and basslines",
@@ -105,6 +153,80 @@ test("functional music catalogue results are rejected as SEO sludge", () => {
   for (const track of examples) {
     assert.match(rejectReason(track, options, profile), /functional\/background music/i);
   }
+});
+
+test("acid house requests reject generic house without acid evidence", () => {
+  const options = {
+    request: "Find acid house with organic textures and hypnotic rhythms",
+    genres: "Acid house",
+    years: "2020-2026",
+    scoringMode: "pure"
+  };
+  const profile = buildDiscoveryProfile(options);
+
+  assert.equal(profile.targetGenres.includes("acid house"), true);
+  assert.equal(profile.targetGenres.includes("house"), false);
+
+  const reason = rejectReason({
+    artist: "Sidney Charles",
+    title: "House 2 Heal",
+    album: "House 2 Heal",
+    label: "Moxy Muzik",
+    genre: "House",
+    year: 2023,
+    releaseEvidence: { albumYear: true },
+    durationMs: 390000,
+    query: "acid house 2023"
+  }, options, profile);
+
+  assert.match(reason, /acid house requested/i);
+});
+
+test("acid house requests accept acid or 303 metadata evidence", () => {
+  const options = {
+    request: "Find acid house with organic textures and hypnotic rhythms",
+    genres: "Acid house",
+    years: "2020-2026",
+    scoringMode: "pure"
+  };
+  const profile = buildDiscoveryProfile(options);
+
+  const reason = rejectReason({
+    artist: "Tin Man",
+    title: "Nonneo",
+    album: "Acid Test 19",
+    label: "Acid Test",
+    genre: "Electronic",
+    year: 2024,
+    releaseEvidence: { albumYear: true },
+    durationMs: 430000,
+    query: "acid house 2024"
+  }, options, profile);
+
+  assert.equal(reason, "");
+});
+
+test("multi-genre music-channel artists are rejected as SEO sludge", () => {
+  const options = {
+    request: "Find acid house with organic textures and hypnotic rhythms",
+    genres: "Acid house",
+    years: "2020-2026",
+    scoringMode: "pure"
+  };
+  const profile = buildDiscoveryProfile(options);
+
+  const reason = rejectReason({
+    artist: "Deep House Lounge, Minimal House Nation, Nightlife Music Zone",
+    title: "The Hypnotic Collision of Our World",
+    album: "Prime Evening: Cooling Down Until Tomorrow's Arrival",
+    label: "Ethereal Rest Foundation",
+    year: 2024,
+    releaseEvidence: { albumYear: true },
+    durationMs: 194000,
+    query: "acid house hypnotic 2024"
+  }, options, profile);
+
+  assert.match(reason, /genre\/SEO catalogue filler/i);
 });
 
 test("requested genre must be corroborated by metadata, not only the search query", () => {
@@ -265,4 +387,62 @@ test("progressive house scene labels still corroborate progressive house", () =>
   }, options, profile);
 
   assert.equal(reason, "");
+});
+
+test("requested vibe traits are weak when they only appear in the search query", () => {
+  const options = {
+    request: "Find psychedelic cosmic hypnotic progressive house tracks",
+    genres: "progressive house",
+    mood: "psychedelic cosmic hypnotic",
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const breakdown = scoreBreakdownFor({
+    artist: "Low Detail Artist",
+    title: "Plain Horizon",
+    album: "Plain Horizon",
+    label: "Anjunadeep",
+    genre: "Electronic",
+    durationMs: 420000,
+    query: "psychedelic cosmic hypnotic progressive house"
+  }, options, null, profile);
+
+  assert.equal(breakdown.vibeInference.queryOnly, true);
+  assert.equal(breakdown.vibeInference.corroboratesRequested, false);
+  assert.ok(breakdown.vibeInference.confidence <= 15);
+  assert.ok(breakdown.vibeInference.evidence.every((item) => item.queryOnly));
+});
+
+test("requested vibe traits score higher when metadata corroborates them", () => {
+  const options = {
+    request: "Find psychedelic cosmic hypnotic progressive house tracks",
+    genres: "progressive house",
+    mood: "psychedelic cosmic hypnotic",
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const queryOnly = scoreBreakdownFor({
+    artist: "Low Detail Artist",
+    title: "Plain Horizon",
+    album: "Plain Horizon",
+    label: "Anjunadeep",
+    genre: "Electronic",
+    durationMs: 420000,
+    query: "psychedelic cosmic hypnotic progressive house"
+  }, options, null, profile);
+  const metadata = scoreBreakdownFor({
+    artist: "Deep Signal",
+    title: "Cosmic Hypnotic Ritual",
+    album: "Psychedelic Spacey Forms",
+    label: "Anjunadeep",
+    genre: ["Progressive House", "Cosmic"],
+    durationMs: 444000,
+    query: "progressive house"
+  }, options, null, profile);
+
+  assert.equal(metadata.vibeInference.queryOnly, false);
+  assert.equal(metadata.vibeInference.corroboratesRequested, true);
+  assert.ok(metadata.vibeInference.confidence >= queryOnly.vibeInference.confidence + 40);
+  assert.ok(metadata.genreMatch > queryOnly.genreMatch);
+  assert.match(metadata.vibeInference.summary, /cosmic|hypnotic|psychedelic/i);
 });

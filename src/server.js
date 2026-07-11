@@ -19,7 +19,9 @@ const {
   nearYearFallbackOptions,
   normalizeScoringMode,
   parseRequestedCount,
+  previouslyRecommendedArtistReason,
   releaseFilterRequiresVerification,
+  requestPrefersExtendedMixes,
   reasonFor,
   rejectReason,
   scoreBreakdownFor,
@@ -36,33 +38,44 @@ const {
   recordModelReviewAudit
 } = require("./modelReviewAudit");
 const { QueryYieldTracker } = require("./queryYieldTracker");
+const { GenreProfileStore } = require("./genreProfileStore");
 const { HQPlayerStatus } = require("./hqplayerStatus");
 const { RoonClient } = require("./roonClient");
 const { RabbitHoleGraph } = require("./rabbitHoleGraph");
 const { RadioMetadataResolver, parseRadioTrack } = require("./radioMetadataResolver");
-const { SavedPlaylist } = require("./savedPlaylist");
 const { SessionStore, trackKey } = require("./sessionStore");
+const { StandbyCandidateStore } = require("./standbyCandidateStore");
 const { TidalPinnedMixStore } = require("./tidalPinnedMixes");
-const { TasteProfile, normalizeRating } = require("./tasteProfile");
+const { TasteProfile, normalizeRating, ratingDelta } = require("./tasteProfile");
 const { TidalProfileMixes } = require("./tidalProfileMixes");
-const { TidalVerifier } = require("./tidalVerifier");
+const { TidalVerifier, trackSourceQualityFromMetadata } = require("./tidalVerifier");
 const { TrackMemory } = require("./trackMemory");
 const yearRangeUtil = require("./yearRange");
 
 const publicDir = path.join(__dirname, "..", "public");
 const MAX_JSON_BODY_BYTES = 5 * 1024 * 1024;
+const TIDAL_QUALITY_LOOKUP_TIMEOUT_MS = 8_000;
+const TIDAL_PLAYLIST_VERIFY_TIMEOUT_MS = Math.max(8_000, Math.min(45_000, Number(process.env.TIDAL_PLAYLIST_VERIFY_TIMEOUT_MS || 18_000)));
+const TIDAL_PLAYLIST_FALLBACK_TIMEOUT_MS = Math.max(6_000, Math.min(30_000, Number(process.env.TIDAL_PLAYLIST_FALLBACK_TIMEOUT_MS || 12_000)));
+const STANDBY_TARGET_COUNT = Math.max(1, Math.min(100, Number(process.env.STANDBY_TARGET_COUNT || 25)));
+const STANDBY_REFRESH_INTERVAL_MS = Math.max(5 * 60_000, Number(process.env.STANDBY_REFRESH_INTERVAL_MS || 20 * 60_000));
+const STANDBY_PARTIAL_REFRESH_INTERVAL_MS = Math.max(2 * 60_000, Number(process.env.STANDBY_PARTIAL_REFRESH_INTERVAL_MS || 5 * 60_000));
+const STANDBY_ERROR_REFRESH_INTERVAL_MS = Math.max(5 * 60_000, Number(process.env.STANDBY_ERROR_REFRESH_INTERVAL_MS || 10 * 60_000));
+const STANDBY_REFRESH_TIMEOUT_MS = Math.max(12_000, Math.min(90_000, Number(process.env.STANDBY_REFRESH_TIMEOUT_MS || 35_000)));
+const STANDBY_MODEL_TIMEOUT_MS = Math.max(8_000, Math.min(60_000, Number(process.env.STANDBY_MODEL_TIMEOUT_MS || 25_000)));
 const roon = new RoonClient();
 const tidal = new TidalVerifier(config.tidal);
 const discoveryHistory = new DiscoveryHistory();
 const listeningHistory = new ListeningHistory();
-const savedPlaylist = new SavedPlaylist();
 const sessionStore = new SessionStore();
 const tasteProfile = new TasteProfile();
 const trackMemory = new TrackMemory();
+const standbyStore = new StandbyCandidateStore({ targetCount: STANDBY_TARGET_COUNT });
 const lastfm = new LastFmClient(config.lastfm);
 const tidalProfileMixes = new TidalProfileMixes(config.tidalProfileMixes);
 const tidalPinnedMixes = new TidalPinnedMixStore({ file: config.tidalProfileMixes.pinnedFile });
 const queryYieldTracker = new QueryYieldTracker();
+const genreProfileStore = new GenreProfileStore();
 const rabbitHoleGraph = new RabbitHoleGraph();
 const radioMetadataResolver = new RadioMetadataResolver({
   enabled: config.radioMetadata.enabled,
@@ -95,6 +108,8 @@ const STATE_UPDATE_DEBOUNCE_MS = 1000;
 const OPENAI_COMPATIBLE_PROVIDERS = new Set(["openai-compatible", "openai_compatible", "lmstudio", "llamacpp"]);
 let broadcastTimer = null;
 let lastBroadcastData = "";
+let standbyRefreshTimer = null;
+let standbyRefreshInFlight = null;
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -106,6 +121,26 @@ const mimeTypes = {
   ".jpeg": "image/jpeg",
   ".webp": "image/webp"
 };
+
+const webMcpHeaders = {
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Embedder-Policy": "credentialless",
+  "Origin-Agent-Cluster": "?1",
+  "Permissions-Policy": "tools=(self)"
+};
+
+const noStoreHeaders = {
+  "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+  "pragma": "no-cache",
+  "expires": "0"
+};
+
+function responseHeaders(headers = {}) {
+  return {
+    ...webMcpHeaders,
+    ...headers
+  };
+}
 
 const lastSession = sessionStore.read();
 trackMemory.record([
@@ -127,12 +162,18 @@ function getNetworkUrls() {
 
 function sendJson(res, status, body) {
   const payload = body === undefined ? { ok: true } : body;
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  res.writeHead(status, responseHeaders({
+    ...noStoreHeaders,
+    "content-type": "application/json; charset=utf-8"
+  }));
   res.end(JSON.stringify(payload));
 }
 
 function sendHtml(res, status, html) {
-  res.writeHead(status, { "content-type": "text/html; charset=utf-8" });
+  res.writeHead(status, responseHeaders({
+    ...noStoreHeaders,
+    "content-type": "text/html; charset=utf-8"
+  }));
   res.end(html);
 }
 
@@ -216,6 +257,43 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 2500) {
   }
 }
 
+function openAiCompatibleOrigin(baseUrl = "") {
+  try {
+    return new URL(baseUrl).origin;
+  } catch {
+    return "";
+  }
+}
+
+function modelStateMessage(label, model, state, modelFound = true) {
+  if (!modelFound) return `${label} reachable, configured model not found`;
+  if (state === "loaded") return "Local model ready";
+  if (state === "loading") return `${label} model is loading`;
+  if (state === "not-loaded") return `${label} reachable, configured model not loaded`;
+  if (state) return `${label} model state: ${state}`;
+  return `${label} reachable, model runtime state unavailable`;
+}
+
+async function lmStudioRuntimeModels(baseUrl, headers = {}) {
+  const origin = openAiCompatibleOrigin(baseUrl);
+  if (!origin) return null;
+  try {
+    const { response, body } = await fetchJsonWithTimeout(`${origin}/api/v0/models`, { headers }, 2500);
+    if (!response.ok || !Array.isArray(body?.data)) return null;
+    return body.data
+      .map((model) => ({
+        id: model.id || "",
+        state: model.state || "",
+        type: model.type || "",
+        loadedContextLength: model.loaded_context_length || null,
+        maxContextLength: model.max_context_length || null
+      }))
+      .filter((model) => model.id);
+  } catch {
+    return null;
+  }
+}
+
 async function llmHealth() {
   const snapshot = llmSnapshot();
   const headers = {};
@@ -227,6 +305,27 @@ async function llmHealth() {
       const baseUrl = normalizeBaseUrl(config.openAiCompatibleBaseUrl);
       const { response, body } = await fetchJsonWithTimeout(`${baseUrl}/models`, { headers }, 2500);
       const models = Array.isArray(body?.data) ? body.data.map((model) => model.id).filter(Boolean) : [];
+      const runtimeModels = await lmStudioRuntimeModels(baseUrl, headers);
+      if (runtimeModels?.length) {
+        const runtimeModel = snapshot.model
+          ? runtimeModels.find((model) => model.id === snapshot.model)
+          : runtimeModels.find((model) => model.state === "loaded");
+        const modelFound = !snapshot.model || Boolean(runtimeModel);
+        const runtimeState = runtimeModel?.state || "";
+        const loaded = Boolean(modelFound && runtimeState === "loaded");
+        return {
+          ...snapshot,
+          online: response.ok && loaded,
+          reachable: response.ok,
+          loaded,
+          models,
+          runtimeModels,
+          runtimeState,
+          message: response.ok
+            ? modelStateMessage(snapshot.label, snapshot.model, runtimeState, modelFound)
+            : `${snapshot.label} returned HTTP ${response.status}`
+        };
+      }
       const loaded = !snapshot.model || models.includes(snapshot.model);
       return {
         ...snapshot,
@@ -305,6 +404,17 @@ function summarizeZoneTrack(zone = {}) {
 
 function cleanRadioText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function cleanHttpUrl(value) {
+  const text = cleanRadioText(value);
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    return ["http:", "https:"].includes(url.protocol) ? url.toString() : "";
+  } catch {
+    return "";
+  }
 }
 
 function normalizeRadioText(value) {
@@ -415,6 +525,55 @@ function radioEnrichmentKey(track = {}) {
   return artist && title ? `${artist}|${title}` : "";
 }
 
+function radioEnrichmentResultKey(result = {}) {
+  return cleanRadioText(result.radioTrackKey || result.key) || radioEnrichmentKey(result.lookup || result);
+}
+
+function parseRoonPresenceNowState(body = {}) {
+  const version = cleanRadioText(body?.version);
+  if (!version || version === "idle") return null;
+
+  const parts = version.split("|").map(cleanRadioText);
+  const artist = parts[0] || "";
+  const title = parts[1] || "";
+  const albumArtUrl = cleanHttpUrl(parts[2]);
+  if (!artist || !title || !albumArtUrl) return null;
+
+  return {
+    key: radioEnrichmentKey({ artist, title }),
+    title,
+    artist,
+    albumArtUrl,
+    tidalUrl: cleanHttpUrl(parts[3]),
+    signalPath: parts.slice(4).join("|"),
+    source: "roonpresence"
+  };
+}
+
+async function lookupRoonPresenceRadioArtwork(lookup = {}, key = "") {
+  const url = cleanHttpUrl(config.radioMetadata.roonPresenceNowStateUrl);
+  if (!url || !key) return null;
+
+  try {
+    const { response, body } = await fetchJsonWithTimeout(url, {
+      headers: { accept: "application/json" }
+    }, Math.max(300, Math.min(5000, Number(config.radioMetadata.roonPresenceTimeoutMs || 1200))));
+    if (!response.ok) return null;
+
+    const mirror = parseRoonPresenceNowState(body);
+    if (!mirror?.albumArtUrl || mirror.key !== key) return null;
+
+    return {
+      ...mirror,
+      key,
+      title: lookup.title,
+      artist: lookup.artist
+    };
+  } catch {
+    return null;
+  }
+}
+
 function attachRadioEnrichment(state = {}) {
   return {
     ...state,
@@ -422,6 +581,7 @@ function attachRadioEnrichment(state = {}) {
       const lookup = radioTrackFromZone(zone);
       const key = radioEnrichmentKey(lookup);
       const cached = key ? radioEnrichmentCache.get(key) : null;
+      const cachedResult = cached?.result && radioEnrichmentResultKey(cached.result) === key ? cached.result : null;
       if (!lookup && !cached?.result) return zone;
       if (lookup?.catalogEnrichmentAllowed === false) return {
         ...zone,
@@ -436,7 +596,7 @@ function attachRadioEnrichment(state = {}) {
         now_playing: {
           ...(zone.now_playing || {}),
           radio_lookup: lookup,
-          ...(cached?.result ? { radio_enrichment: cached.result } : {})
+          ...(cachedResult ? { radio_enrichment: cachedResult } : {})
         }
       };
     })
@@ -470,11 +630,15 @@ function radioMetadataToEnrichment(lookup = {}, metadata = {}, tidalResult = nul
   const tidalUrl = cleanRadioText(exactTidalResult?.tidalUrl || exactTidalResult?.url || exactMetadata?.tidalUrl);
   const album = cleanRadioText(exactTidalResult?.album || exactMetadata?.album);
   const durationMs = Number(exactTidalResult?.durationMs || exactMetadata?.durationMs || 0) || lookup.durationMs || null;
+  const radioTrackKey = radioEnrichmentKey(lookup);
 
   if (!imageUrl && !tidalUrl && !album && !durationMs && !exactTidalResult) return null;
 
   return {
     ...(exactTidalResult || {}),
+    key: radioTrackKey,
+    radioTrackKey,
+    radioArtworkResolved: Boolean(imageUrl),
     title: cleanRadioText(exactTidalResult?.title || exactMetadata?.title || lookup.title),
     artist: cleanRadioText(exactTidalResult?.artist || exactMetadata?.artist || lookup.artist),
     album,
@@ -489,6 +653,9 @@ function radioMetadataToEnrichment(lookup = {}, metadata = {}, tidalResult = nul
 
 async function resolveRadioEnrichment(lookup, key) {
   if (lookup?.catalogEnrichmentAllowed === false) return null;
+  const roonPresence = await lookupRoonPresenceRadioArtwork(lookup, key);
+  if (roonPresence) return radioMetadataToEnrichment(lookup, roonPresence, null);
+
   const metadataPromise = config.radioMetadata.enabled
     ? radioMetadataResolver.lookup(lookup, key).catch((error) => {
       console.warn("Radio metadata resolver failed", error.message);
@@ -811,6 +978,316 @@ function mergeTrackLists(...lists) {
   return merged;
 }
 
+function standbyCleanText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function standbyOptionValue(overrides = {}, sessionOptions = {}, key, fallback = "", behavior = {}) {
+  const override = standbyCleanText(overrides[key]);
+  if (override) return override;
+  if (behavior.useSession === false) return fallback;
+  const sessionValue = standbyCleanText(sessionOptions[key]);
+  return sessionValue || fallback;
+}
+
+function standbyRequestText(request = "") {
+  const text = standbyCleanText(request);
+  if (!text) return "";
+  if (/\bstandby pool\b/i.test(text)) return text;
+  return `${text} Standby pool: prioritize fresh adjacent artists, labels, remixers, and radio-like sources; avoid repeating top liked or previously recommended artists unless the prompt names them directly.`;
+}
+
+function standbySearchOptions(overrides = {}, behavior = {}) {
+  const session = sessionStore.read();
+  const sessionOptions = session.options || {};
+  const optionBehavior = { useSession: behavior.useSession !== false };
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const topArtists = tasteProfile.getTopArtists(10);
+  const tastePrompt = topArtists.length
+    ? `Taste anchors: ${topArtists.join(", ")}. Use them as gravity, not repeats.`
+    : "Taste anchors are still forming. Favor high-confidence adjacent discoveries.";
+  const request = standbyRequestText(standbyOptionValue(
+    overrides,
+    sessionOptions,
+    "request",
+    `Find tracks that fit my current Rabbit Hole taste profile. ${tastePrompt} Prioritize adjacent artists, labels, remixers, radio-like sources, long-form versions, and non-obvious discoveries.`,
+    optionBehavior
+  ));
+
+  const options = {
+    request,
+    reference: standbyOptionValue(overrides, sessionOptions, "reference", "", optionBehavior),
+    genres: standbyOptionValue(overrides, sessionOptions, "genres", "progressive house, melodic house, organic house, melodic techno", optionBehavior),
+    years: standbyOptionValue(overrides, sessionOptions, "years", `${Math.max(2000, currentYear - 6)}-${currentYear}`, optionBehavior),
+    mood: standbyOptionValue(overrides, sessionOptions, "mood", "hypnotic, deep, melodic, cosmic, psychedelic, underground, long / extended", optionBehavior),
+    language: standbyOptionValue(overrides, sessionOptions, "language", "", optionBehavior),
+    minScore: standbyOptionValue(overrides, sessionOptions, "minScore", "", optionBehavior),
+    scoringMode: standbyOptionValue(overrides, sessionOptions, "scoringMode", "explore", optionBehavior),
+    releasePreset: standbyOptionValue(overrides, sessionOptions, "releasePreset", "", optionBehavior),
+    releaseExactDate: standbyOptionValue(overrides, sessionOptions, "releaseExactDate", "", optionBehavior),
+    releaseStartDate: standbyOptionValue(overrides, sessionOptions, "releaseStartDate", "", optionBehavior),
+    releaseEndDate: standbyOptionValue(overrides, sessionOptions, "releaseEndDate", "", optionBehavior),
+    count: String(STANDBY_TARGET_COUNT),
+    standbyPool: "true",
+    requireRoonQueueable: "",
+    nowPlaying: overrides.nowPlaying || sessionOptions.nowPlaying || null
+  };
+
+  for (const [key, value] of Object.entries(overrides || {})) {
+    if (value === undefined || value === null) continue;
+    if (["zoneId", "count", "requireRoonQueueable", "strictRoonQueueable", "roonStrict"].includes(key)) continue;
+    if (typeof value === "string" && !value.trim()) continue;
+    if (options[key] === undefined) options[key] = value;
+  }
+  for (const [key, value] of Object.entries(options)) {
+    if (typeof value === "string" && !value.trim()) delete options[key];
+  }
+  return options;
+}
+
+function standbyNextRefreshIso(delayMs = STANDBY_REFRESH_INTERVAL_MS) {
+  return new Date(Date.now() + Math.max(0, Number(delayMs || 0))).toISOString();
+}
+
+function standbyTidalBackoffDelayMs() {
+  const circuit = tidal.status()?.circuit || {};
+  const retryAfterMs = Number(circuit.retryAfterMs || 0);
+  return Math.max(STANDBY_ERROR_REFRESH_INTERVAL_MS, retryAfterMs);
+}
+
+function standbyTidalBackoffMessage() {
+  const circuit = tidal.status()?.circuit || {};
+  const detail = standbyCleanText(circuit.lastError || "");
+  return detail
+    ? `TIDAL search is backing off after fetch failures (${detail}). Current standby tracks were kept.`
+    : "TIDAL search is backing off after fetch failures. Current standby tracks were kept.";
+}
+
+function standbyResultLooksLikeTidalBackoff(result = {}) {
+  const tracks = mergeTrackLists(result.tracks || [], result.alternates || []);
+  if (tracks.length) return false;
+
+  const diagnostics = result.verification?.poolDiagnostics || {};
+  const buckets = Array.isArray(diagnostics.buckets) ? diagnostics.buckets : [];
+  const tidalIssueCount = buckets
+    .filter((bucket) => /tidal|api|fetch|timeout|circuit/i.test(String(bucket.label || "")))
+    .reduce((sum, bucket) => sum + Number(bucket.count || 0), 0);
+  const discarded = Number(result.verification?.discarded || result.discarded?.length || 0);
+  const queryYield = diagnostics.queryYield || result.verification?.queryYield || {};
+  const queryErrors = Number(queryYield.errors || queryYield.errorCount || 0);
+
+  return Boolean(
+    discarded > 0 &&
+    (tidalIssueCount >= Math.max(1, Math.ceil(discarded * 0.75)) || queryErrors >= Math.max(1, Number(queryYield.attempted || 0) * 0.75))
+  );
+}
+
+async function refreshStandbyPool({ force = false, reason = "background", options = {} } = {}) {
+  if (standbyRefreshInFlight) return standbyRefreshInFlight;
+
+  const current = standbyStore.summary();
+  if (!force && current.count >= STANDBY_TARGET_COUNT) {
+    return current;
+  }
+
+  if (tidal.status()?.circuit?.state === "open") {
+    standbyStore.markRefreshStart({ reason });
+    const summary = standbyStore.markRefreshEnd({
+      reason,
+      error: standbyTidalBackoffMessage(),
+      kept: current.count,
+      nextRefreshAt: standbyNextRefreshIso(standbyTidalBackoffDelayMs())
+    });
+    scheduleBroadcast();
+    return summary;
+  }
+
+  standbyRefreshInFlight = (async () => {
+    const startedAt = Date.now();
+    standbyStore.markRefreshStart({ reason });
+    scheduleBroadcast();
+
+    try {
+      const hasExplicitOptions = Boolean(options && Object.keys(options).length);
+      const useSession = reason !== "background" || hasExplicitOptions;
+      let searchBody = withNormalizedYearFilter(standbySearchOptions(options, { useSession }));
+      searchBody.scoringMode = normalizeScoringMode(searchBody);
+      searchBody = genreProfileStore.augmentOptions(searchBody);
+      let searchProfile = buildDiscoveryProfile(searchBody);
+      const requestedCount = Math.max(STANDBY_TARGET_COUNT, effectiveDiscoveryCount(searchBody, searchProfile));
+      let modelResult = { plan: null };
+      let modelError = "";
+      try {
+        modelResult = await withTimeout(
+          generateSearchPlan(config, {
+            ...searchBody,
+            effectiveCount: requestedCount,
+            originalRequestedCount: STANDBY_TARGET_COUNT
+          }),
+          STANDBY_MODEL_TIMEOUT_MS,
+          "Standby model planning took too long."
+        );
+      } catch (error) {
+        modelError = error.message || "Standby model planning failed.";
+        modelResult = { plan: null };
+      }
+      searchBody = {
+        ...searchBody,
+        count: String(requestedCount),
+        effectiveCount: requestedCount,
+        originalRequestedCount: STANDBY_TARGET_COUNT,
+        llmSearchPlan: modelResult?.plan || null,
+        llmCandidates: [],
+        requireRoonQueueable: "",
+        modelReviewTimeoutMs: STANDBY_MODEL_TIMEOUT_MS,
+        discoveryRuntimeMs: Math.max(8_000, Math.min(30_000, STANDBY_REFRESH_TIMEOUT_MS - 5_000))
+      };
+      if (normalizeScoringMode(searchBody) !== "pure") {
+        searchBody = await withSimilarArtistSeeds(searchBody, requestedCount);
+        searchProfile = buildDiscoveryProfile(searchBody);
+      }
+
+      const scrobbleHistory = await lastFmHistoryForDiscovery();
+      let discovered = await withTimeout(
+        discoverTracks({
+          tidal,
+          options: searchBody,
+          history: discoveryHistory,
+          tasteProfile,
+          scrobbleHistory,
+          queryYieldTracker
+        }),
+        STANDBY_REFRESH_TIMEOUT_MS,
+        "Standby discovery took too long."
+      );
+      discovered = await runAutoBroadenSearches(
+        discovered,
+        searchBody,
+        searchProfile,
+        requestedCount,
+        scrobbleHistory,
+        {
+          discoveryTimeoutMs: STANDBY_REFRESH_TIMEOUT_MS,
+          modelTimeoutMs: 0,
+          roonQueueTimeoutMs: 0,
+          roonFirstTimeoutMs: 0
+        }
+      );
+      discovered.verification = {
+        ...(discovered.verification || {}),
+        modelPlanQueryCount: modelResult?.plan?.searchQueries?.length || 0,
+        modelPlan: modelResult?.plan || null,
+        modelError,
+        modelProvider: config.llmProvider,
+        modelName: config.llmProvider === "openrouter"
+          ? config.openRouterModel
+          : (OPENAI_COMPATIBLE_PROVIDERS.has(config.llmProvider)
+            ? config.openAiCompatibleModel
+            : config.ollamaModel)
+      };
+      let modelCandidateReview = { enabled: false, scored: 0, rejected: 0, error: "" };
+      try {
+        const reviewed = await withTimeout(
+          applyModelCandidateReview(discovered, searchBody),
+          STANDBY_MODEL_TIMEOUT_MS + 5_000,
+          "Standby model candidate review took too long."
+        );
+        discovered = reviewed.result;
+        modelCandidateReview = reviewed.review;
+        if (modelError && !modelCandidateReview.error) {
+          modelCandidateReview.planningError = modelError;
+        }
+      } catch (error) {
+        modelCandidateReview = {
+          enabled: false,
+          scored: 0,
+          rejected: 0,
+          error: error.message,
+          planningError: modelError || ""
+        };
+      }
+      discovered.verification = {
+        ...(discovered.verification || {}),
+        modelCandidateReview
+      };
+
+      const result = syncFinalResultVerification(
+        tidalPlaylistBridgeResult(discovered, requestedCount),
+        requestedCount
+      );
+      const poolTracks = mergeTrackLists(result.tracks, result.alternates).slice(0, STANDBY_TARGET_COUNT);
+      if (!poolTracks.length && standbyResultLooksLikeTidalBackoff(result)) {
+        const summary = standbyStore.markRefreshEnd({
+          reason,
+          runtimeMs: Date.now() - startedAt,
+          generated: Number(result.verification?.generated || (result.discarded || []).length),
+          kept: current.count,
+          discarded: Number(result.verification?.discarded || (result.discarded || []).length),
+          error: standbyTidalBackoffMessage(),
+          nextRefreshAt: standbyNextRefreshIso(standbyTidalBackoffDelayMs())
+        });
+        scheduleBroadcast();
+        return summary;
+      }
+
+      const addResult = standbyStore.add(poolTracks, {
+        reason,
+        source: "Standby discovery"
+      });
+      if (poolTracks.length) {
+        trackMemory.record(poolTracks, Date.now(), { incrementSeen: false });
+      }
+      const nextDelayMs = addResult.summary.count < STANDBY_TARGET_COUNT
+        ? STANDBY_PARTIAL_REFRESH_INTERVAL_MS
+        : STANDBY_REFRESH_INTERVAL_MS;
+      const summary = standbyStore.markRefreshEnd({
+        reason,
+        runtimeMs: Date.now() - startedAt,
+        generated: Number(result.verification?.generated || poolTracks.length + (result.discarded || []).length),
+        kept: addResult.summary.count,
+        discarded: Number(result.verification?.discarded || (result.discarded || []).length),
+        nextRefreshAt: addResult.summary.count < STANDBY_TARGET_COUNT ? standbyNextRefreshIso(nextDelayMs) : ""
+      });
+      scheduleBroadcast();
+      return summary;
+    } catch (error) {
+      const summary = standbyStore.markRefreshEnd({
+        reason,
+        runtimeMs: Date.now() - startedAt,
+        error: error.message || "Standby discovery failed.",
+        nextRefreshAt: standbyNextRefreshIso(STANDBY_ERROR_REFRESH_INTERVAL_MS)
+      });
+      scheduleBroadcast();
+      return summary;
+    }
+  })();
+
+  try {
+    return await standbyRefreshInFlight;
+  } finally {
+    standbyRefreshInFlight = null;
+  }
+}
+
+function scheduleStandbyRefresh(delayMs = STANDBY_REFRESH_INTERVAL_MS) {
+  if (standbyRefreshTimer) clearTimeout(standbyRefreshTimer);
+  standbyRefreshTimer = setTimeout(async () => {
+    standbyRefreshTimer = null;
+    let nextDelayMs = STANDBY_REFRESH_INTERVAL_MS;
+    try {
+      const summary = await refreshStandbyPool({ reason: "background" });
+      nextDelayMs = summary?.lastError
+        ? STANDBY_ERROR_REFRESH_INTERVAL_MS
+        : (Number(summary?.count || 0) < STANDBY_TARGET_COUNT
+          ? STANDBY_PARTIAL_REFRESH_INTERVAL_MS
+          : STANDBY_REFRESH_INTERVAL_MS);
+    } finally {
+      scheduleStandbyRefresh(nextDelayMs);
+    }
+  }, Math.max(1_000, Number(delayMs || STANDBY_REFRESH_INTERVAL_MS)));
+}
+
 function discoveryPoolCount(result = {}) {
   return mergeTrackLists(result.tracks, result.alternates).length;
 }
@@ -986,6 +1463,41 @@ function normalizeMatchText(value) {
     .trim();
 }
 
+function boundedEditDistance(left, right, maxDistance) {
+  if (left === right) return 0;
+  if (Math.abs(left.length - right.length) > maxDistance) return maxDistance + 1;
+
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    const current = [i];
+    let rowMin = current[0];
+    for (let j = 1; j <= right.length; j += 1) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + cost
+      );
+      rowMin = Math.min(rowMin, current[j]);
+    }
+    if (rowMin > maxDistance) return maxDistance + 1;
+    previous = current;
+  }
+  return previous[right.length];
+}
+
+function artistNameLooksClose(left, right) {
+  if (left === right) return true;
+  if (left.length >= 4 && right.length >= 4 && (left.includes(right) || right.includes(left))) return true;
+  const maxLength = Math.max(left.length, right.length);
+  const minLength = Math.min(left.length, right.length);
+  if (minLength < 6) return false;
+  const maxDistance = maxLength >= 10 ? 2 : 1;
+  if (Math.abs(left.length - right.length) > maxDistance) return false;
+  if (left.slice(0, 3) !== right.slice(0, 3)) return false;
+  return boundedEditDistance(left, right, maxDistance) <= maxDistance;
+}
+
 function llmScoreKey(track = {}) {
   const direct = track.tidal?.id || track.tidalId || track.id || track.trackId || track.tidal?.tidalUrl || track.tidalUrl;
   if (direct) return String(direct).trim();
@@ -1087,7 +1599,7 @@ async function applyModelCandidateReview(discovered = {}, options = {}) {
     tracks: combined,
     options,
     tasteProfile: tasteProfile.read(),
-    timeoutMs: 30_000
+    timeoutMs: Math.max(5_000, Math.min(60_000, Number(options.modelReviewTimeoutMs || 30_000)))
   });
   const scoreMap = new Map();
   for (const score of review.scores || []) {
@@ -1095,11 +1607,68 @@ async function applyModelCandidateReview(discovered = {}, options = {}) {
   }
 
   let rejected = 0;
+  let rejectedKept = 0;
   const audit = createModelReviewAudit();
   const discarded = [...(discovered.discarded || [])];
-  function applyList(list = []) {
+  const rejectedCandidates = [];
+  const requestedCount = Math.max(0, Math.min(50, Number(
+    discovered.verification?.requested ||
+    discovered.requestedCount ||
+    options.effectiveCount ||
+    options.count ||
+    0
+  )));
+
+  function hasSeenCandidate(track = {}, seen = new Set()) {
+    const keys = candidateIdentityKeys(track);
+    return keys.length && keys.some((key) => seen.has(key));
+  }
+
+  function markSeenCandidate(track = {}, seen = new Set()) {
+    for (const key of candidateIdentityKeys(track)) seen.add(key);
+  }
+
+  function keepRejectedCandidate(record = {}) {
+    const reviewedTrack = applyModelReview(record.track, record.score);
+    const afterScore = Number(reviewedTrack.score || reviewedTrack.scoreBreakdown?.total || 0) || record.beforeScore;
+    const item = modelReviewAuditItem(reviewedTrack, record.score, record.beforeScore, afterScore, "warning");
+    recordModelReviewAudit(audit, item, "warning");
+    rejectedKept += 1;
+    return {
+      ...reviewedTrack,
+      modelRejectedKept: true,
+      reason: `${reviewedTrack.reason || record.track.reason || "Model-reviewed candidate"}; model flagged candidate but it was kept because review would undershoot the requested count`,
+      statusChecks: Array.from(new Set([
+        ...(Array.isArray(reviewedTrack.statusChecks) ? reviewedTrack.statusChecks : []),
+        `Model warning: ${item.reason}`,
+        "Kept to satisfy requested count after model review"
+      ])),
+      modelReview: {
+        action: "warning",
+        before: item.before,
+        after: item.after,
+        delta: item.delta,
+        modelScore: item.modelScore,
+        genreConfidence: item.genreConfidence,
+        reason: item.reason,
+        keptAfterReject: true
+      }
+    };
+  }
+
+  function discardRejectedCandidate(record = {}) {
+    rejected += 1;
+    recordModelReviewAudit(audit, record.item, "rejected");
+    discarded.push({
+      ...record.track,
+      llmReview: record.score,
+      reason: `Model rejected candidate: ${record.score.rejectionReason || "low-confidence catalogue result"}`
+    });
+  }
+
+  function applyList(list = [], source = "track") {
     const next = [];
-    for (const track of list) {
+    for (const [index, track] of list.entries()) {
       const key = llmScoreKey(track);
       const score = scoreMap.get(key);
       if (!score) {
@@ -1108,14 +1677,8 @@ async function applyModelCandidateReview(discovered = {}, options = {}) {
       }
       const beforeScore = Number(track.score || track.scoreBreakdown?.total || 0) || Number(score.finalScore || 0) || 0;
       if (hardModelReject(score)) {
-        rejected += 1;
         const item = modelReviewAuditItem(track, score, beforeScore, null, "rejected");
-        recordModelReviewAudit(audit, item, "rejected");
-        discarded.push({
-          ...track,
-          llmReview: score,
-          reason: `Model rejected candidate: ${score.rejectionReason || "low-confidence catalogue result"}`
-        });
+        rejectedCandidates.push({ track, score, beforeScore, item, source, index });
         continue;
       }
       const reviewedTrack = applyModelReview(track, score);
@@ -1139,17 +1702,55 @@ async function applyModelCandidateReview(discovered = {}, options = {}) {
     return next;
   }
 
+  const reviewedTracks = applyList(discovered.tracks, "track");
+  const reviewedAlternates = applyList(discovered.alternates, "alternate");
+  const selectedKeys = new Set();
+  for (const track of reviewedTracks) markSeenCandidate(track, selectedKeys);
+
+  const remainingAlternates = [];
+  for (const alternate of reviewedAlternates) {
+    if (requestedCount && reviewedTracks.length < requestedCount && !hasSeenCandidate(alternate, selectedKeys)) {
+      reviewedTracks.push({
+        ...alternate,
+        modelReviewBackfill: true,
+        statusChecks: Array.from(new Set([
+          ...(Array.isArray(alternate.statusChecks) ? alternate.statusChecks : []),
+          "Backfilled after model review"
+        ]))
+      });
+      markSeenCandidate(alternate, selectedKeys);
+    } else {
+      remainingAlternates.push(alternate);
+    }
+  }
+
+  const rescuedRejectIds = new Set();
+  for (const record of rejectedCandidates.filter((item) => item.source === "track")) {
+    if (!requestedCount || reviewedTracks.length >= requestedCount) break;
+    if (hasSeenCandidate(record.track, selectedKeys)) continue;
+    const rescued = keepRejectedCandidate(record);
+    reviewedTracks.push(rescued);
+    markSeenCandidate(rescued, selectedKeys);
+    rescuedRejectIds.add(`${record.source}:${record.index}`);
+  }
+
+  for (const record of rejectedCandidates) {
+    const id = `${record.source}:${record.index}`;
+    if (!rescuedRejectIds.has(id)) discardRejectedCandidate(record);
+  }
+
   return {
     result: {
       ...discovered,
-      tracks: applyList(discovered.tracks),
-      alternates: applyList(discovered.alternates),
+      tracks: reviewedTracks,
+      alternates: remainingAlternates,
       discarded
     },
     review: {
       enabled: true,
       scored: scoreMap.size,
       rejected,
+      rejectedKept,
       rawCount: review.rawCount || 0,
       audit,
       error: ""
@@ -1170,6 +1771,69 @@ function splitArtistForMatch(value) {
     .filter((part) => part && part.length > 1);
 }
 
+const GENERIC_VERSION_WORDS = new Set([
+  "mix",
+  "remix",
+  "remixes",
+  "edit",
+  "version",
+  "extended",
+  "original",
+  "radio",
+  "club",
+  "dub",
+  "instrumental",
+  "vip"
+]);
+
+function versionDescriptorTokens(value = "") {
+  const descriptors = [];
+  for (const match of String(value || "").matchAll(/[\[(]([^\])]+)[\])]/g)) {
+    descriptors.push(match[1]);
+  }
+  const text = normalizeMatchText(descriptors.join(" "));
+  if (!text) return [];
+  return Array.from(new Set(text
+    .split(/\s+/)
+    .filter((token) => token.length > 1 && !GENERIC_VERSION_WORDS.has(token))));
+}
+
+function playlistTitleMatches(track = {}, verified = {}) {
+  const targetTitle = normalizeMatchText(track.title);
+  const actualTitle = normalizeMatchText(verified.title);
+  if (!targetTitle || !actualTitle) return false;
+  if (targetTitle === actualTitle) return true;
+
+  const targetBase = baseTitleForMatch(track.title);
+  const actualBase = baseTitleForMatch(verified.title);
+  if (!targetBase || targetBase !== actualBase) return false;
+
+  const targetDescriptors = versionDescriptorTokens(track.title);
+  if (!targetDescriptors.length) return false;
+  return targetDescriptors.every((token) => actualTitle.includes(token));
+}
+
+function durationLooksClose(track = {}, verified = {}) {
+  const target = Number(track.durationMs || 0);
+  const actual = Number(verified.durationMs || 0);
+  if (!target || !actual) return false;
+  const difference = Math.abs(target - actual);
+  return difference <= Math.max(15_000, Math.round(Math.min(target, actual) * 0.06));
+}
+
+function weakTidalArtistHint(value = "") {
+  const text = normalizeMatchText(value);
+  if (!text) return true;
+  return /\b(?:unknown artist|various artists?|collection|compilation|playlist|soundtrack|album|volume|vol|top tracks?|selected|selection)\b/.test(text);
+}
+
+function albumHintMatches(track = {}, verified = {}) {
+  const album = normalizeMatchText(track.album);
+  const verifiedAlbum = normalizeMatchText(verified.album);
+  if (!album || !verifiedAlbum) return false;
+  return album === verifiedAlbum || album.includes(verifiedAlbum) || verifiedAlbum.includes(album);
+}
+
 function tidalEnrichmentMatches(track = {}, verified = {}) {
   const targetTitle = normalizeMatchText(track.title);
   const actualTitle = normalizeMatchText(verified.title);
@@ -1185,9 +1849,37 @@ function tidalEnrichmentMatches(track = {}, verified = {}) {
   const artistOk = Boolean(
     targetArtists.length &&
     actualArtists.length &&
-    targetArtists.some((target) => actualArtists.some((actual) => target === actual || target.includes(actual) || actual.includes(target)))
+    targetArtists.some((target) => actualArtists.some((actual) => artistNameLooksClose(target, actual)))
   );
   return titleOk && artistOk;
+}
+
+function tidalPlaylistFallbackMatches(track = {}, verified = {}) {
+  if (!playlistTitleMatches(track, verified)) return false;
+  if (tidalEnrichmentMatches(track, verified)) return true;
+  return weakTidalArtistHint(track.artist) || albumHintMatches(track, verified) || durationLooksClose(track, verified);
+}
+
+async function findTidalPlaylistFallback(track = {}) {
+  const title = String(track.title || "").trim();
+  if (!title) return null;
+  const artist = String(track.artist || "").trim();
+  const titleBase = String(baseTitleForMatch(title) || "").trim();
+  const weakArtist = weakTidalArtistHint(artist);
+  const queries = Array.from(new Set([
+    !weakArtist && artist ? `${artist} ${title}` : "",
+    !weakArtist && artist ? `${title} ${artist}` : "",
+    title,
+    titleBase && normalizeMatchText(titleBase) !== normalizeMatchText(title) ? titleBase : ""
+  ].filter(Boolean)));
+
+  for (const query of queries.slice(0, 4)) {
+    const results = await tidal.searchTracks(query, { limit: 8, detailLimit: 8 });
+    const match = results.find((result) => tidalPlaylistFallbackMatches(track, result));
+    if (match) return match;
+  }
+
+  return null;
 }
 
 function scoreWithRoonFloor(breakdown = {}, track = {}) {
@@ -1255,6 +1947,212 @@ function trackHasTidalId(track = {}) {
   return /\/track\/[^/?#]+/i.test(url);
 }
 
+function extractTidalTrackId(track = {}) {
+  const direct = String(track.tidal?.id || track.tidalId || track.id || track.trackId || "").trim();
+  if (direct && !/^https?:\/\//i.test(direct)) return direct;
+  const url = String(track.tidal?.tidalUrl || track.tidalUrl || track.url || "").trim();
+  const match = url.match(/\/track\/([^/?#]+)/i);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+function currentTrackQualityPayload(track = {}, resolved = null, resolvedBy = "", playbackSource = null) {
+  const tidalMetadata = track.tidal && typeof track.tidal === "object" ? track.tidal : {};
+  const merged = {
+    ...tidalMetadata,
+    ...track,
+    ...(resolved || {}),
+    mediaTags: (resolved?.mediaTags && resolved.mediaTags.length) ? resolved.mediaTags : (tidalMetadata.mediaTags || track.mediaTags || []),
+    audioQuality: resolved?.audioQuality || tidalMetadata.audioQuality || track.audioQuality || "",
+    sampleRateKhz: resolved?.sampleRateKhz || tidalMetadata.sampleRateKhz || track.sampleRateKhz || playbackSource?.sampleRateKhz || null,
+    bitDepth: resolved?.bitDepth || tidalMetadata.bitDepth || track.bitDepth || playbackSource?.bitDepth || null,
+    channels: resolved?.channels || tidalMetadata.channels || track.channels || playbackSource?.channels || null
+  };
+  const quality = trackSourceQualityFromMetadata(merged, { source: "TIDAL" });
+  return {
+    connected: true,
+    resolvedBy,
+    ...quality,
+    playbackSource: playbackSource ? {
+      source: playbackSource.sourceName || "",
+      sampleRateKhz: playbackSource.sampleRateKhz || null,
+      bitDepth: playbackSource.bitDepth || null,
+      channels: playbackSource.channels || null,
+      display: playbackSource.display || ""
+    } : null,
+    track: {
+      id: resolved?.id || extractTidalTrackId(track),
+      title: resolved?.title || track.title || tidalMetadata.title || "",
+      artist: resolved?.artist || track.artist || tidalMetadata.artist || "",
+      album: resolved?.album || track.album || tidalMetadata.album || "",
+      tidalUrl: resolved?.tidalUrl || track.tidalUrl || tidalMetadata.tidalUrl || ""
+    }
+  };
+}
+
+function currentTrackPayload(track = {}, resolved = null) {
+  const tidalMetadata = track.tidal && typeof track.tidal === "object" ? track.tidal : {};
+  return {
+    id: resolved?.id || extractTidalTrackId(track),
+    title: resolved?.title || track.title || tidalMetadata.title || "",
+    artist: resolved?.artist || track.artist || tidalMetadata.artist || "",
+    album: resolved?.album || track.album || tidalMetadata.album || "",
+    tidalUrl: resolved?.tidalUrl || track.tidalUrl || tidalMetadata.tidalUrl || ""
+  };
+}
+
+function isRadioPlaybackTrack(track = {}) {
+  const text = [
+    track.sourceType,
+    track.discoverySource,
+    track.tidal?.source,
+    track.playbackSource?.sourceName
+  ].filter(Boolean).join(" ");
+  return Boolean(track.isLiveRadio || track.isRadio || track.radio || /\bradio\b/i.test(text));
+}
+
+function hasProvidedTidalQuality(track = {}) {
+  const tidalMetadata = track.tidal && typeof track.tidal === "object" ? track.tidal : {};
+  const mediaTags = Array.isArray(tidalMetadata.mediaTags) ? tidalMetadata.mediaTags : (Array.isArray(track.mediaTags) ? track.mediaTags : []);
+  return Boolean(
+    trackHasTidalId(track) ||
+    tidalMetadata.tidalUrl ||
+    track.tidalUrl ||
+    mediaTags.length ||
+    tidalMetadata.audioQuality ||
+    track.audioQuality ||
+    tidalMetadata.sampleRateKhz ||
+    track.sampleRateKhz ||
+    tidalMetadata.bitDepth ||
+    track.bitDepth
+  );
+}
+
+function fallbackQualityPayload(track = {}, playbackSource = null, resolvedBy = "") {
+  if (hasProvidedTidalQuality(track)) {
+    return currentTrackQualityPayload(track, null, resolvedBy || (trackHasTidalId(track) ? "provided-tidal-id" : "provided-metadata"), playbackSource);
+  }
+  return playbackSourceQualityPayload(track, playbackSource, resolvedBy || (playbackSource?.display ? "live-playback-source" : "provided-metadata"));
+}
+
+function playbackSourceQualityPayload(track = {}, playbackSource = null, resolvedBy = "playback-source") {
+  const source = playbackSource || {};
+  const display = String(source.display || "").trim();
+  const sampleRateKhz = Number(source.sampleRateKhz || 0) || null;
+  const bitDepth = Number(source.bitDepth || 0) || null;
+  const channels = Number(source.channels || 0) || null;
+  const bitrate = Number(source.bitrate || 0) || null;
+  const codec = String(source.codec || "").trim().toUpperCase();
+  const sourceName = String(source.sourceName || "").trim();
+  return {
+    connected: true,
+    resolvedBy,
+    source: codec || sourceName.toUpperCase() || "ROON",
+    codec,
+    quality: "",
+    mediaTags: [],
+    audioQuality: "",
+    sampleRateKhz,
+    bitDepth,
+    channels,
+    bitrate,
+    exact: Boolean(sampleRateKhz || display),
+    display: display || "",
+    playbackSource: source ? {
+      source: sourceName,
+      codec,
+      sampleRateKhz,
+      bitDepth,
+      channels,
+      bitrate,
+      display
+    } : null,
+    track: currentTrackPayload(track)
+  };
+}
+
+async function currentPlaybackSourceQuality() {
+  try {
+    const status = typeof hqplayerStatus.refreshNow === "function"
+      ? await hqplayerStatus.refreshNow()
+      : hqplayerStatus.getStatus();
+    const source = status?.source || null;
+    return source?.sampleRateKhz ? source : null;
+  } catch {
+    return hqplayerStatus.getStatus()?.source || null;
+  }
+}
+
+async function resolveCurrentTrackQuality(track = {}) {
+  const candidate = {
+    ...track,
+    artist: String(track.artist || track.tidal?.artist || "").trim(),
+    title: String(track.title || track.tidal?.title || "").trim()
+  };
+  const playbackSource = await currentPlaybackSourceQuality();
+  if (isRadioPlaybackTrack(candidate)) {
+    return {
+      ...playbackSourceQualityPayload(candidate, playbackSource, playbackSource?.display ? "live-playback-source" : "live-radio"),
+      configured: tidal.isConfigured(),
+      connected: true,
+      reason: playbackSource?.display
+        ? "Live radio quality comes from the active Roon/HQPlayer playback source."
+        : "Waiting for live Roon/HQPlayer source format."
+    };
+  }
+
+  const fallback = fallbackQualityPayload(candidate, playbackSource);
+  const tidalId = extractTidalTrackId(candidate);
+
+  if (!tidal.isConfigured()) {
+    return {
+      ...fallback,
+      connected: false,
+      configured: false,
+      reason: fallback.display ? "" : "TIDAL catalogue verification is not configured."
+    };
+  }
+
+  let resolved = null;
+  let resolvedBy = "";
+  let lookupError = "";
+  try {
+    if (tidalId) {
+      resolved = await withTimeout(
+        tidal.getTrack(tidalId, `${candidate.artist || ""} ${candidate.title || ""}`),
+        TIDAL_QUALITY_LOOKUP_TIMEOUT_MS,
+        "TIDAL catalogue detail lookup took too long."
+      );
+      resolvedBy = "tidal-detail";
+    } else if (candidate.title && candidate.artist) {
+      const verified = await withTimeout(
+        tidal.verify(candidate, { strict: false }),
+        TIDAL_QUALITY_LOOKUP_TIMEOUT_MS,
+        "TIDAL catalogue verification took too long."
+      );
+      if (verified && tidalEnrichmentMatches(candidate, verified)) {
+        resolved = verified;
+        resolvedBy = "tidal-catalogue";
+      }
+    }
+  } catch (error) {
+    lookupError = error.message || "TIDAL catalogue lookup failed.";
+  }
+
+  if (!resolved) {
+    return {
+      ...fallback,
+      configured: true,
+      connected: true,
+      reason: lookupError || (fallback.display ? "" : "No exact TIDAL catalogue match for the current track.")
+    };
+  }
+
+  return {
+    ...currentTrackQualityPayload(candidate, resolved, resolvedBy, playbackSource),
+    configured: true
+  };
+}
+
 async function resolveTidalTrackForPlaylist(track = {}) {
   const candidate = {
     ...track,
@@ -1275,17 +2173,37 @@ async function resolveTidalTrackForPlaylist(track = {}) {
     throw error;
   }
 
-  const verified = await withTimeout(
-    tidal.verify(candidate, { strict: false }),
-    8_000,
-    "TIDAL catalogue verification took too long."
-  );
+  let verified = null;
+  let verifyError = null;
+  try {
+    verified = await withTimeout(
+      tidal.verify(candidate, { strict: false }),
+      TIDAL_PLAYLIST_VERIFY_TIMEOUT_MS,
+      `TIDAL catalogue verification took too long after ${Math.round(TIDAL_PLAYLIST_VERIFY_TIMEOUT_MS / 1000)}s.`
+    );
+  } catch (error) {
+    verifyError = error;
+  }
+
+  if (!verified || !tidalEnrichmentMatches(candidate, verified)) {
+    try {
+      const fallback = await withTimeout(
+        findTidalPlaylistFallback(candidate),
+        TIDAL_PLAYLIST_FALLBACK_TIMEOUT_MS,
+        `TIDAL title fallback lookup took too long after ${Math.round(TIDAL_PLAYLIST_FALLBACK_TIMEOUT_MS / 1000)}s.`
+      );
+      if (fallback) verified = fallback;
+    } catch (error) {
+      if (!verifyError) verifyError = error;
+    }
+  }
+
   if (!verified) {
-    const error = new Error(`Could not find a TIDAL catalogue match for ${candidate.artist} - ${candidate.title}.`);
+    const error = new Error(verifyError?.message || `Could not find a TIDAL catalogue match for ${candidate.artist} - ${candidate.title}.`);
     error.statusCode = 400;
     throw error;
   }
-  if (!tidalEnrichmentMatches(candidate, verified)) {
+  if (!tidalPlaylistFallbackMatches(candidate, verified)) {
     const error = new Error(`TIDAL found ${verified.artist || "unknown artist"} - ${verified.title || "unknown title"}, which does not exactly match the current track.`);
     error.statusCode = 400;
     throw error;
@@ -1616,6 +2534,15 @@ async function decorateRoonFirstResult(roonResult, options = {}) {
       continue;
     }
 
+    const artistNoveltyReason = previouslyRecommendedArtistReason(scoringTrack, discoveryHistory, profileForTrack, scoringOptionsForTrack);
+    if (artistNoveltyReason) {
+      discarded.push({
+        ...candidateTrack,
+        reason: artistNoveltyReason
+      });
+      continue;
+    }
+
     const rawBreakdown = scoreBreakdownFor(scoringTrack, scoringOptionsForTrack, tasteProfile, profileForTrack);
     const scoreBreakdown = scoreWithRoonFloor(rawBreakdown, candidateTrack);
     let belowMinimumReason = "";
@@ -1832,6 +2759,15 @@ function decorateRoonFirstTimeoutFallback(roonResult = {}, options = {}, error =
       continue;
     }
 
+    const artistNoveltyReason = previouslyRecommendedArtistReason(scoringTrack, discoveryHistory, profileForTrack, scoringOptionsForTrack);
+    if (artistNoveltyReason) {
+      discarded.push({
+        ...candidateTrack,
+        reason: artistNoveltyReason
+      });
+      continue;
+    }
+
     const rawBreakdown = scoreBreakdownFor(scoringTrack, scoringOptionsForTrack, tasteProfile, profileForTrack);
     const scoreBreakdown = scoreWithRoonFloor(rawBreakdown, candidateTrack);
     let belowMinimumReason = "";
@@ -1951,21 +2887,33 @@ function decorateRoonFirstTimeoutFallback(roonResult = {}, options = {}, error =
 
 function appSnapshot() {
   const taste = tasteProfile.read();
-  const saved = savedPlaylist.snapshot();
-  const session = sessionStore.read();
+  const session = sessionSnapshot();
   return {
     updatedAt: new Date().toISOString(),
     session,
-    saved,
     taste: tasteProfile.summary(taste),
     feedback: taste.feedback || {},
+    genreProfiles: genreProfileStore.summary(),
     memory: trackMemory.summary(),
+    standby: standbyStore.summary(),
     queryYield: queryYieldTracker.summary(),
     lastfm: lastfm.status(),
     tidal: tidal.status(),
     tidalProfileMixes: tidalProfileMixes.status(),
     radioMetadata: radioMetadataResolver.status(),
     llm: llmSnapshot()
+  };
+}
+
+function sessionSnapshot() {
+  const session = sessionStore.read();
+  if (!session.result) return session;
+  return {
+    ...session,
+    result: syncFinalResultVerification(
+      session.result,
+      Number(session.result?.verification?.requested || 0) || parseRequestedCount(session.options || {})
+    )
   };
 }
 
@@ -1981,16 +2929,31 @@ function sessionTrackFor(track = {}) {
   return pools.find((candidate) => trackKey(candidate) === key) || null;
 }
 
-function feedbackTrackWithSessionContext(track = {}) {
+function feedbackTrackWithSessionContext(track = {}, rating = "") {
   const sessionTrack = sessionTrackFor(track) || {};
-  return {
+  const merged = {
     ...sessionTrack,
     ...track,
     scoreBreakdown: track.scoreBreakdown || sessionTrack.scoreBreakdown || null,
     llmReview: track.llmReview || sessionTrack.llmReview || null,
     modelReview: track.modelReview || sessionTrack.modelReview || null,
     discoverySource: track.discoverySource || sessionTrack.discoverySource || "",
-    discoveryLane: track.discoveryLane || sessionTrack.discoveryLane || ""
+    discoveryLane: track.discoveryLane || sessionTrack.discoveryLane || "",
+    tasteScore: ratingDelta(rating)
+  };
+  if (!isRadioPlaybackTrack(merged)) return merged;
+
+  const source = cleanRadioText(merged.discoverySource);
+  const lane = cleanRadioText(merged.discoveryLane);
+  const statusChecks = Array.isArray(merged.statusChecks) ? merged.statusChecks : [];
+  return {
+    ...merged,
+    sourceType: "radio",
+    isRadio: true,
+    isLiveRadio: merged.isLiveRadio !== false,
+    discoverySource: !source || /^now playing$/i.test(source) ? "Live radio" : source,
+    discoveryLane: lane || "radio",
+    statusChecks: Array.from(new Set([...statusChecks, "Live radio feedback"]))
   };
 }
 
@@ -2003,6 +2966,7 @@ function feedbackCalibrationContext(track = {}, request = {}) {
     beforeScore: modelReview.before,
     afterScore: modelReview.after,
     delta: modelReview.delta,
+    score: track.score ?? track.scoreBreakdown?.total,
     modelScore: modelReview.modelScore ?? llmReview.finalScore,
     genreConfidence: modelReview.genreConfidence ?? llmReview.genreConfidence,
     promptMatch: track.promptMatch ?? track.scoreBreakdown?.promptMatch,
@@ -2060,10 +3024,10 @@ function serveStatic(req, res, pathname) {
 
   fs.readFile(filePath, (error, data) => {
     if (error) return sendJson(res, 404, { error: "Not found" });
-    res.writeHead(200, {
+    res.writeHead(200, responseHeaders({
+      ...noStoreHeaders,
       "content-type": mimeTypes[path.extname(filePath)] || "application/octet-stream",
-      "cache-control": "no-cache"
-    });
+    }));
     res.end(data);
   });
 }
@@ -2331,6 +3295,10 @@ function isStrictRoonQueueMode(options = {}) {
   return /^(1|true|yes)$/i.test(String(options.strictRoonQueueable || options.roonStrict || ""));
 }
 
+function booleanFlag(value) {
+  return /^(1|true|yes)$/i.test(String(value || ""));
+}
+
 function strictSearchBudgets(options = {}, requestedCount = 8) {
   const yearRange = yearRangeUtil.parseYearRange(options);
   const minScore = minimumScoreFor(options);
@@ -2403,14 +3371,19 @@ async function filterForRoonQueueable(result, zoneId, options = {}) {
   const pool = [];
   const seen = new Set();
   for (const track of [...(result.tracks || []), ...(result.alternates || [])]) {
-    const key = String(track.tidal?.tidalUrl || `${track.artist || ""}|${track.title || ""}`).toLowerCase();
-    if (!key || seen.has(key)) continue;
+    const keys = candidateIdentityKeys(track);
+    const key = keys[0] || `${normalizeMatchText(track.artist || "")}|${normalizeMatchText(track.title || "")}`;
+    if (!key || seen.has(key) || keys.some((candidateKey) => seen.has(candidateKey))) continue;
+    for (const candidateKey of keys) seen.add(candidateKey);
     seen.add(key);
     pool.push(track);
   }
 
   const accepted = [];
   const rejected = [];
+  const roonSearchOptions = {
+    preferExtendedMixes: requestPrefersExtendedMixes(options)
+  };
   const maxChecks = Math.min(
     pool.length,
     strictFilteredRequest
@@ -2456,7 +3429,7 @@ async function filterForRoonQueueable(result, zoneId, options = {}) {
 
     checked += 1;
     try {
-      const search = await roon.canQueueTrack(track, zoneId);
+      const search = await roon.canQueueTrack(track, zoneId, roonSearchOptions);
       if (search.success) {
         accepted.push({
           ...track,
@@ -2549,6 +3522,106 @@ function tidalPlaylistBridgeResult(result = {}, requestedCount = 8) {
       kept: tracks.length,
       generated: Number(result.verification?.generated || (tracks.length + discarded.length)),
       discarded: Number(result.verification?.discarded || discarded.length)
+    }
+  };
+}
+
+function compactDiagnosticText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function upsertDiagnosticBucket(buckets = [], label = "", count = 0, examples = []) {
+  const safeLabel = compactDiagnosticText(label) || "Other discarded";
+  const safeCount = Math.max(0, Number(count || 0));
+  if (!safeCount) return Array.isArray(buckets) ? buckets : [];
+
+  const next = Array.isArray(buckets) ? buckets.map((bucket) => ({ ...bucket })) : [];
+  const key = normalizeMatchText(safeLabel);
+  const index = next.findIndex((bucket) => normalizeMatchText(bucket.label) === key);
+  const normalizedExamples = (examples || [])
+    .map((item) => ({
+      label: compactDiagnosticText(item.label || [item.artist, item.title].filter(Boolean).join(" - ")) || "Unknown candidate",
+      reason: compactDiagnosticText(item.reason || "No reason provided")
+    }))
+    .filter((item) => item.label || item.reason)
+    .slice(0, 3);
+
+  if (index >= 0) {
+    const existing = next[index];
+    next[index] = {
+      ...existing,
+      count: Number(existing.count || 0) + safeCount,
+      examples: [...(Array.isArray(existing.examples) ? existing.examples : []), ...normalizedExamples].slice(0, 3)
+    };
+  } else {
+    next.push({
+      label: safeLabel,
+      count: safeCount,
+      examples: normalizedExamples
+    });
+  }
+
+  return next
+    .sort((left, right) => Number(right.count || 0) - Number(left.count || 0) || String(left.label || "").localeCompare(String(right.label || "")))
+    .slice(0, 8);
+}
+
+function syncFinalResultVerification(result = {}, requestedCount = 0) {
+  const tracks = Array.isArray(result.tracks) ? result.tracks : [];
+  const alternates = Array.isArray(result.alternates) ? result.alternates : [];
+  const discarded = Array.isArray(result.discarded) ? result.discarded : [];
+  const verification = result.verification || {};
+  const requested = Number(verification.requested || result.requestedCount || requestedCount || tracks.length || 0);
+  const minScore = Number(verification.minScore || 0);
+  const generated = Math.max(
+    Number(verification.generated || 0),
+    tracks.length + alternates.length + discarded.length
+  );
+  const belowMinimumKept = tracks.filter((track) => track.belowMinimum).length;
+  const belowMinimumAlternates = alternates.filter((track) => track.belowMinimum).length;
+  const aboveMinimumKept = minScore ? Math.max(0, tracks.length - belowMinimumKept) : tracks.length;
+  const review = verification.modelCandidateReview || {};
+  const audit = review.audit || {};
+  const rejected = Number(review.rejected || 0);
+  const rejectedKept = Number(review.rejectedKept || 0);
+  let poolDiagnostics = verification.poolDiagnostics;
+
+  if (poolDiagnostics && typeof poolDiagnostics === "object") {
+    const notes = Array.isArray(poolDiagnostics.notes) ? [...poolDiagnostics.notes] : [];
+    if (rejected) notes.push(`${rejected} candidate${rejected === 1 ? "" : "s"} removed by model review after initial pool scoring.`);
+    if (rejectedKept) notes.push(`${rejectedKept} model-flagged candidate${rejectedKept === 1 ? "" : "s"} kept because the run would otherwise undershoot the requested count.`);
+
+    poolDiagnostics = {
+      ...poolDiagnostics,
+      requested,
+      generated,
+      kept: tracks.length,
+      alternates: alternates.length,
+      discarded: discarded.length,
+      retainedPool: tracks.length + alternates.length,
+      buckets: rejected
+        ? upsertDiagnosticBucket(poolDiagnostics.buckets, "Model rejected", rejected, audit.rejected || [])
+        : (Array.isArray(poolDiagnostics.buckets) ? poolDiagnostics.buckets : []),
+      notes: Array.from(new Set(notes.filter(Boolean)))
+    };
+  }
+
+  return {
+    ...result,
+    tracks,
+    alternates,
+    discarded,
+    verification: {
+      ...verification,
+      requested,
+      generated,
+      kept: tracks.length,
+      discarded: discarded.length,
+      belowMinimumKept,
+      belowMinimumAlternates,
+      aboveMinimumKept,
+      minScoreSoftFallback: Boolean(minScore && belowMinimumKept),
+      ...(poolDiagnostics ? { poolDiagnostics } : {})
     }
   };
 }
@@ -2914,11 +3987,12 @@ async function handleApi(req, res, url) {
   const pathname = url.pathname;
 
   if (pathname === "/api/events") {
-    res.writeHead(200, {
+    res.writeHead(200, responseHeaders({
+      ...noStoreHeaders,
       "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-      "connection": "keep-alive"
-    });
+      "connection": "keep-alive",
+      "x-accel-buffering": "no"
+    }));
     clients.add(res);
     res.write(`data: ${JSON.stringify(eventPayload())}\n\n`);
     req.on("close", () => clients.delete(res));
@@ -3034,7 +4108,8 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, listeningHistory.report({
       roonState: state,
       tasteProfile,
-      discoveryHistory
+      discoveryHistory,
+      trackMemory
     }));
   }
 
@@ -3044,12 +4119,18 @@ async function handleApi(req, res, url) {
     }));
   }
 
-  if (req.method === "GET" && pathname === "/api/saved") {
-    return sendJson(res, 200, savedPlaylist.snapshot());
+  if (req.method === "GET" && pathname === "/api/roon/radio") {
+    return sendJson(res, 200, await roon.listRadioStations(url.searchParams.get("zoneId") || "", {
+      refresh: /^(1|true|yes)$/i.test(String(url.searchParams.get("refresh") || "")),
+      itemKey: url.searchParams.get("itemKey") || "",
+      hierarchy: url.searchParams.get("hierarchy") || "",
+      session: url.searchParams.get("session") || "",
+      count: Number(url.searchParams.get("count") || 300)
+    }));
   }
 
   if (req.method === "GET" && pathname === "/api/session") {
-    return sendJson(res, 200, sessionStore.read());
+    return sendJson(res, 200, sessionSnapshot());
   }
 
   if (req.method === "GET" && pathname === "/api/taste") {
@@ -3062,6 +4143,10 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && pathname === "/api/query-yield") {
     return sendJson(res, 200, queryYieldTracker.summary());
+  }
+
+  if (req.method === "GET" && pathname === "/api/standby") {
+    return sendJson(res, 200, standbyStore.summary());
   }
 
   if (req.method === "GET" && pathname === "/api/lastfm/status") {
@@ -3102,6 +4187,23 @@ async function handleApi(req, res, url) {
   if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
 
   let body = await readJson(req);
+  if (pathname === "/api/standby/refresh") {
+    return sendJson(res, 200, await refreshStandbyPool({
+      force: true,
+      reason: standbyCleanText(body.reason || "manual") || "manual",
+      options: body.options || body
+    }));
+  }
+  if (pathname === "/api/standby/clear") {
+    const summary = standbyStore.clear();
+    scheduleBroadcast();
+    return sendJson(res, 200, summary);
+  }
+  if (pathname === "/api/standby/remove") {
+    const summary = standbyStore.remove(Array.isArray(body.keys) ? body.keys : [body.key]);
+    scheduleBroadcast();
+    return sendJson(res, 200, summary);
+  }
   if (pathname === "/api/tidal/pinned-mixes") {
     tidalPinnedMixes.add(body.url || body.input || body.value || "");
     return sendJson(res, 200, await tidalMixesResponse({ force: true }));
@@ -3110,6 +4212,16 @@ async function handleApi(req, res, url) {
     const result = await roon.control(body.zoneId, body.control);
     scheduleBroadcast();
     return sendJson(res, 200, { ok: true, result: result || null });
+  }
+  if (pathname === "/api/roon/radio/play") {
+    const result = await roon.playRadioStation(body.itemKey || body.id || body.stationId, body.zoneId, {
+      hierarchy: body.hierarchy || "",
+      session: body.session || "",
+      title: body.title || "",
+      subtitle: body.subtitle || ""
+    });
+    scheduleBroadcast();
+    return sendJson(res, 200, result);
   }
   if (pathname === "/api/seek") {
     const result = await roon.seek(body.zoneId, body.seconds);
@@ -3125,6 +4237,7 @@ async function handleApi(req, res, url) {
   if (pathname === "/api/ai/playlist") {
     body = withNormalizedYearFilter(body);
     body.scoringMode = normalizeScoringMode(body);
+    body = genreProfileStore.augmentOptions(body);
     const originalRequestedCount = parseRequestedCount(body);
     const requestedCount = effectiveDiscoveryCount(body, buildDiscoveryProfile(body));
     const effectiveBody = {
@@ -3167,6 +4280,7 @@ async function handleApi(req, res, url) {
       llmSearchPlan: modelResult?.plan || null,
       llmCandidates: []
     };
+    searchBody = genreProfileStore.augmentOptions(searchBody);
     let searchProfile = buildDiscoveryProfile(searchBody);
     const strictRoonMode = strictRoonRequested || isStrictRoonQueueMode(searchBody);
     if (!strictRoonMode) {
@@ -3359,6 +4473,7 @@ async function handleApi(req, res, url) {
       ...(discovered.verification || {}),
       modelCandidateReview
     };
+    discovered = syncFinalResultVerification(discovered, requestedCount);
     let result = null;
     if (strictRoonMode) {
       try {
@@ -3373,6 +4488,7 @@ async function handleApi(req, res, url) {
     } else {
       result = tidalPlaylistBridgeResult(discovered, requestedCount);
     }
+    result = syncFinalResultVerification(result, requestedCount);
     if (strictRoonMode && shouldRunRoonFirstRescue(result)) {
       result = await runFreshRoonRescue(
         result,
@@ -3381,6 +4497,7 @@ async function handleApi(req, res, url) {
         budgets,
         result.verification?.discoveryError || result.verification?.roonVerificationError || "TIDAL-first path returned no queueable tracks."
       );
+      result = syncFinalResultVerification(result, requestedCount);
     }
     discoveryHistory.record(result.tracks || []);
     trackMemory.record([...(result.tracks || []), ...(result.alternates || [])]);
@@ -3394,7 +4511,6 @@ async function handleApi(req, res, url) {
       tidal,
       discoveryHistory,
       trackMemory,
-      savedPlaylist,
       tasteProfile,
       contextTracks: body.contextTracks || []
     }, {
@@ -3404,12 +4520,14 @@ async function handleApi(req, res, url) {
   }
   if (pathname === "/api/feedback") {
     const rating = normalizeRating(body.rating);
-    const feedbackTrack = feedbackTrackWithSessionContext(body.track || {});
+    const feedbackTrack = feedbackTrackWithSessionContext(body.track || {}, rating);
     const result = tasteProfile.record(feedbackTrack, rating, feedbackCalibrationContext(feedbackTrack, body));
+    const session = sessionStore.read();
+    const genreProfiles = genreProfileStore.recordFeedback(session.options || {}, feedbackTrack, rating);
     sessionStore.updateFeedback(feedbackTrack, rating);
     trackMemory.updateFeedback(feedbackTrack, rating);
     scheduleBroadcast();
-    return sendJson(res, 200, result);
+    return sendJson(res, 200, { ...result, genreProfiles });
   }
   if (pathname === "/api/roon/playlist-tracks") {
     return sendJson(res, 200, await roon.loadPlaylistTracks(body.itemKey, body.title));
@@ -3439,6 +4557,19 @@ async function handleApi(req, res, url) {
       description: body.description || ""
     }));
   }
+  if (pathname === "/api/tidal/playlist") {
+    const playlist = await tidalProfileMixes.createPlaylist({
+      title: body.title || body.name || "",
+      description: body.description || ""
+    });
+    return sendJson(res, 200, {
+      connected: true,
+      playlist
+    });
+  }
+  if (pathname === "/api/tidal/track-quality") {
+    return sendJson(res, 200, await resolveCurrentTrackQuality(body.track || {}));
+  }
   if (pathname === "/api/tidal/playlist-track") {
     const resolved = await resolveTidalTrackForPlaylist(body.track || {});
     const result = await tidalProfileMixes.addTrackToPlaylist(body.playlistId || body.playlist_id || "", resolved.track, {
@@ -3465,6 +4596,9 @@ async function handleApi(req, res, url) {
     const primary = Array.isArray(body.tracks) ? body.tracks.slice(0, 50) : [];
     const alternates = Array.isArray(body.alternates) ? body.alternates.slice(0, 50) : [];
     const targetCount = Math.min(50, Math.max(1, Number(body.targetCount || primary.length || 0)));
+    const roonSearchOptions = {
+      preferExtendedMixes: booleanFlag(body.preferExtendedMixes || body.prefer_extended_mixes)
+    };
     const tracks = [...primary.map((track) => ({ track, isAlternate: false })), ...alternates.map((track) => ({ track, isAlternate: true }))];
     const queueable = [];
     const failed = [];
@@ -3473,7 +4607,7 @@ async function handleApi(req, res, url) {
       if (queueable.length >= targetCount) break;
       const { track, isAlternate } = request;
       try {
-        const result = await roon.canQueueTrack(track, body.zoneId);
+        const result = await roon.canQueueTrack(track, body.zoneId, roonSearchOptions);
         if (result.success) {
           queueable.push({
             index,
@@ -3512,46 +4646,9 @@ async function handleApi(req, res, url) {
     const result = await roon.queueTracks(body.tracks || [], body.zoneId, {
       mode: body.mode || "append",
       alternates: body.alternates || [],
-      targetCount: body.targetCount
+      targetCount: body.targetCount,
+      preferExtendedMixes: booleanFlag(body.preferExtendedMixes || body.prefer_extended_mixes)
     });
-    scheduleBroadcast();
-    return sendJson(res, 200, result);
-  }
-  if (pathname === "/api/saved/add") {
-    const result = savedPlaylist.add(body.track || {}, body.listId || body.list_id || "");
-    if (result.added && typeof tasteProfile.recordCandidate === "function") {
-      result.taste = tasteProfile.recordCandidate(result.track || body.track || {});
-    }
-    scheduleBroadcast();
-    return sendJson(res, 200, result);
-  }
-  if (pathname === "/api/saved/remove") {
-    const result = savedPlaylist.remove(body.key, body.listId || body.list_id || "");
-    scheduleBroadcast();
-    return sendJson(res, 200, result);
-  }
-  if (pathname === "/api/saved/move") {
-    const result = savedPlaylist.move(body.key, body.fromListId || body.from_list_id || "", body.toListId || body.to_list_id || "");
-    scheduleBroadcast();
-    return sendJson(res, 200, result);
-  }
-  if (pathname === "/api/saved/list/select") {
-    const result = savedPlaylist.select(body.listId || body.list_id || "");
-    scheduleBroadcast();
-    return sendJson(res, 200, result);
-  }
-  if (pathname === "/api/saved/list/create") {
-    const result = savedPlaylist.create(body.name || "");
-    scheduleBroadcast();
-    return sendJson(res, 200, result);
-  }
-  if (pathname === "/api/saved/list/rename") {
-    const result = savedPlaylist.rename(body.listId || body.list_id || "", body.name || "");
-    scheduleBroadcast();
-    return sendJson(res, 200, result);
-  }
-  if (pathname === "/api/saved/list/delete") {
-    const result = savedPlaylist.delete(body.listId || body.list_id || "");
     scheduleBroadcast();
     return sendJson(res, 200, result);
   }
@@ -3590,4 +4687,5 @@ server.listen(config.port, config.host, () => {
     console.log(`Phone/LAN URL: ${url}`);
   }
   console.log("Enable the extension in Roon Settings > Extensions if prompted.");
+  scheduleStandbyRefresh(45_000);
 });

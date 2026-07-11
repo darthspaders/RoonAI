@@ -49,6 +49,31 @@ test("TIDAL candidate selection rejects same-title wrong-artist radio artwork", 
   assert.equal(matched.album, "Trouble");
 });
 
+test("TIDAL candidate selection tolerates a small radio artist typo", () => {
+  const searchJson = {
+    tracks: {
+      items: [{
+        id: "2",
+        title: "Xciter (Deestopia Remix)",
+        duration: 418,
+        artists: [{ name: "Orkidea" }],
+        album: {
+          title: "Xciter",
+          cover: COVER_UUID
+        }
+      }]
+    }
+  };
+
+  const matched = chooseTidalTrack(searchJson, {
+    artist: "Orkidera",
+    title: "Xciter (Deestopia Remix)"
+  });
+
+  assert.equal(matched.album, "Xciter");
+  assert.match(matched.coverImage, /resources\.tidal\.com/);
+});
+
 test("TIDAL web scraping is skipped when radio lookup has an artist", async () => {
   let fetched = false;
   const resolver = new RadioMetadataResolver({
@@ -65,6 +90,47 @@ test("TIDAL web scraping is skipped when radio lookup has an artist", async () =
 
   assert.equal(result, null);
   assert.equal(fetched, false);
+});
+
+test("TIDAL detail fallback rejects album art when artist validation is missing", async () => {
+  const resolver = new RadioMetadataResolver({
+    tidalAccessToken: "token"
+  });
+  resolver.fetchTidalSearchJson = async (url) => {
+    if (String(url).includes("/tracks/1")) {
+      return {
+        data: {
+          id: "1",
+          type: "tracks",
+          attributes: { title: "Voyage" },
+          relationships: {
+            albums: { data: { id: "album-1", type: "albums" } }
+          }
+        },
+        included: [{
+          id: "album-1",
+          type: "albums",
+          attributes: { title: "Discovery" }
+        }]
+      };
+    }
+    return {};
+  };
+  resolver.fetchTidalAlbum = async () => ({
+    data: {
+      id: "album-1",
+      type: "albums",
+      attributes: { title: "Discovery", cover: COVER_UUID }
+    }
+  });
+  resolver.fetchTidalAlbumCoverImage = async () => "https://resources.tidal.com/images/12/34/cover.jpg";
+
+  const result = await resolver.lookupTidalTrackDetails({ id: "1", title: "Voyage" }, {
+    artist: "Mode Apart",
+    title: "Voyage (Original Mix)"
+  });
+
+  assert.equal(result, null);
 });
 
 test("radio metadata TIDAL circuit opens after fetch failures", async () => {

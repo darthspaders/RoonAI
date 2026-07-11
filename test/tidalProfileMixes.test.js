@@ -766,6 +766,59 @@ test("TIDAL profile mix client creates queue playlist from TIDAL track ids", asy
   ]);
 });
 
+test("TIDAL profile mix client creates an empty playlist and clears playlist cache", async () => {
+  const calls = [];
+  const client = new TidalProfileMixes({
+    accessToken: "profile-token",
+    scopes: "user.read playlists.read playlists.write",
+    tokenFile: tempTokenFile(),
+    countryCode: "US",
+    fetchImpl: async (url, options) => {
+      calls.push({
+        url,
+        method: options.method || "GET",
+        headers: options.headers,
+        body: options.body ? JSON.parse(options.body) : null
+      });
+      const parsed = new URL(url);
+      if (parsed.pathname === "/v2/playlists" && options.method === "POST") {
+        return new Response(JSON.stringify({
+          data: {
+            id: "new-playlist",
+            type: "playlists",
+            attributes: {
+              name: "Fresh Finds",
+              description: "Created from Rabbit Hole.",
+              externalLinks: [{ href: "https://listen.tidal.com/playlist/new-playlist" }]
+            }
+          }
+        }), { status: 201, headers: { "content-type": "application/vnd.api+json" } });
+      }
+      return new Response("{}", { status: 404 });
+    }
+  });
+  client.playlistCache = {
+    result: { playlists: [{ id: "old-playlist", title: "Old Playlist" }] },
+    fetchedAtMs: Date.now()
+  };
+
+  const result = await client.createPlaylist({
+    title: "Fresh Finds",
+    description: "Created from Rabbit Hole."
+  });
+
+  assert.equal(result.id, "new-playlist");
+  assert.equal(result.title, "Fresh Finds");
+  assert.equal(result.description, "Created from Rabbit Hole.");
+  assert.equal(result.url, "https://listen.tidal.com/playlist/new-playlist");
+  assert.equal(client.playlistCache, null);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].headers.authorization, "Bearer profile-token");
+  assert.equal(calls[0].headers["content-type"], "application/vnd.api+json");
+  assert.equal(calls[0].body.data.attributes.name, "Fresh Finds");
+  assert.equal(calls[0].body.data.attributes.description, "Created from Rabbit Hole.");
+});
+
 test("TIDAL profile mix client lists user playlists with titles", async () => {
   const calls = [];
   const client = new TidalProfileMixes({

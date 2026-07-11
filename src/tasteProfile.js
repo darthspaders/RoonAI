@@ -107,6 +107,7 @@ function modelReviewFrom(track = {}, context = {}) {
 function feedbackCalibrationEntry(track = {}, rating = "", context = {}) {
   const normalizedRating = normalizeRating(rating);
   const review = modelReviewFrom(track, context);
+  const score = numberOrNull(context.score ?? track.score ?? track.scoreBreakdown?.total);
   const source = cleanText(track.discoverySource || context.discoverySource || "Unknown source");
   const lane = cleanText(track.discoveryLane || context.discoveryLane || "unknown");
   const label = labelFor(track);
@@ -117,9 +118,11 @@ function feedbackCalibrationEntry(track = {}, rating = "", context = {}) {
   const promptMismatch = normalizedRating === "wrong_genre";
   const modelMiss = (negativeFeedback && modelApproved) || (positiveFeedback && ["downranked", "rejected"].includes(review.action));
   const missedLike = positiveFeedback && ["downranked", "rejected"].includes(review.action);
+  const likedLongShot = positiveFeedback && score !== null && score > 0 && score < 60;
 
   return {
     rating: normalizedRating,
+    score,
     modelAction: review.action,
     modelScore: review.modelScore,
     genreConfidence: review.genreConfidence,
@@ -132,6 +135,7 @@ function feedbackCalibrationEntry(track = {}, rating = "", context = {}) {
     modelMiss,
     badBoost,
     missedLike,
+    likedLongShot,
     issue: promptMismatch
       ? "wrong_genre"
       : normalizedRating === "reject_similar"
@@ -140,7 +144,9 @@ function feedbackCalibrationEntry(track = {}, rating = "", context = {}) {
           ? "bad_boost"
           : missedLike
             ? "liked_downranked"
-            : (negativeFeedback && modelApproved ? "negative_model_approved" : ""),
+            : (likedLongShot
+              ? "liked_longshot"
+              : (negativeFeedback && modelApproved ? "negative_model_approved" : "")),
     reason: review.reason,
     recordedAt: new Date().toISOString()
   };
@@ -154,6 +160,7 @@ function emptyCalibration() {
     modelMisses: 0,
     badBoosts: 0,
     missedLikes: 0,
+    likedLongShots: 0,
     ratingCounts: {},
     actionCounts: {},
     sources: [],
@@ -179,11 +186,12 @@ function rebuildCalibration(feedback = {}) {
   function addBucket(map, key, detail = {}) {
     const name = cleanText(key);
     if (!name) return;
-    const entry = map[name] || { name, total: 0, modelMisses: 0, badBoosts: 0, promptMismatches: 0 };
+    const entry = map[name] || { name, total: 0, modelMisses: 0, badBoosts: 0, promptMismatches: 0, likedLongShots: 0 };
     entry.total += 1;
     if (detail.modelMiss) entry.modelMisses += 1;
     if (detail.badBoost) entry.badBoosts += 1;
     if (detail.promptMismatch) entry.promptMismatches += 1;
+    if (detail.likedLongShot) entry.likedLongShots += 1;
     map[name] = entry;
   }
 
@@ -197,6 +205,7 @@ function rebuildCalibration(feedback = {}) {
     if (detail.modelMiss) calibration.modelMisses += 1;
     if (detail.badBoost) calibration.badBoosts += 1;
     if (detail.missedLike) calibration.missedLikes += 1;
+    if (detail.likedLongShot) calibration.likedLongShots += 1;
     increment(calibration.ratingCounts, detail.rating);
     increment(calibration.actionCounts, detail.modelAction);
 
@@ -205,7 +214,7 @@ function rebuildCalibration(feedback = {}) {
     addBucket(laneCounts, detail.lane || "unknown", detail);
     addBucket(labelCounts, detail.label || entry.label, detail);
 
-    if (detail.issue || detail.modelMiss || detail.promptMismatch) {
+    if (detail.issue || detail.modelMiss || detail.promptMismatch || detail.likedLongShot) {
       recent.push({
         artist: cleanText(entry.artist),
         title: cleanText(entry.title),
@@ -223,7 +232,8 @@ function rebuildCalibration(feedback = {}) {
   const rankedBuckets = (map) => Object.values(map)
     .map((entry) => ({
       ...entry,
-      missRate: entry.total ? Number((entry.modelMisses / entry.total).toFixed(2)) : 0
+      missRate: entry.total ? Number((entry.modelMisses / entry.total).toFixed(2)) : 0,
+      longShotLikeRate: entry.total ? Number((entry.likedLongShots / entry.total).toFixed(2)) : 0
     }))
     .sort((left, right) => right.modelMisses - left.modelMisses || right.total - left.total || left.name.localeCompare(right.name))
     .slice(0, 8);
@@ -251,6 +261,20 @@ function calibrationBucketPenalty(entry = {}, weight = 1) {
   if (total >= 3 && missRate >= 0.5) penalty -= 1;
   if (badBoosts >= 2 || promptMismatches >= 2) penalty -= 1;
   return Math.round(penalty * weight);
+}
+
+function calibrationBucketSerendipity(entry = {}, weight = 1) {
+  if (!entry) return 0;
+  const total = Number(entry.total || 0);
+  const liked = Number(entry.likedLongShots || 0);
+  if (!total || !liked) return 0;
+
+  const likeRate = liked / total;
+  let bonus = 1;
+  if (liked >= 2 || likeRate >= 0.34) bonus += 1;
+  if (liked >= 3 || likeRate >= 0.5) bonus += 1;
+  if (Number(entry.promptMismatches || 0) >= liked || Number(entry.badBoosts || 0) >= liked) bonus -= 1;
+  return Math.max(0, Math.round(bonus * weight));
 }
 
 function findCalibrationBucket(items = [], key = "", property = "name") {
@@ -351,6 +375,13 @@ class TasteProfile {
       title: cleanText(track.title),
       label: labelFor(track),
       tidalUrl: cleanText(track.tidal?.tidalUrl || track.tidalUrl),
+      score: numberOrNull(track.score ?? track.scoreBreakdown?.total),
+      tasteScore: nextDelta,
+      sourceType: cleanText(track.sourceType),
+      isRadio: Boolean(track.isRadio),
+      isLiveRadio: Boolean(track.isLiveRadio),
+      discoverySource: cleanText(track.discoverySource),
+      discoveryLane: cleanText(track.discoveryLane),
       promptMismatch: normalizedRating === "wrong_genre",
       artistSignalBlocked: normalizedRating === "wrong_genre" || normalizedRating === "reject_similar" || shouldBlockArtistSignal(track, nextDelta),
       calibration: feedbackCalibrationEntry(track, normalizedRating, context),
@@ -470,6 +501,34 @@ class TasteProfile {
     };
   }
 
+  serendipityAdjustmentFor(track = {}) {
+    const calibration = this.read().calibration || emptyCalibration();
+    const reasons = [];
+    let value = 0;
+
+    const sourceEntry = findCalibrationBucket(calibration.sources, track.discoverySource || "Unknown source", "source");
+    const laneEntry = findCalibrationBucket(calibration.lanes, track.discoveryLane || "unknown", "lane");
+    const labelEntry = findCalibrationBucket(calibration.labels, labelFor(track), "label");
+    const buckets = [
+      ["source", sourceEntry, 0.75],
+      ["lane", laneEntry, 1],
+      ["label", labelEntry, 1.25]
+    ];
+
+    for (const [kind, entry, weight] of buckets) {
+      const bonus = calibrationBucketSerendipity(entry, weight);
+      if (!bonus) continue;
+      value += bonus;
+      const name = entry.source || entry.lane || entry.label || entry.name || kind;
+      reasons.push(`${kind} ${name} ${entry.likedLongShots}/${entry.total} liked long shots +${bonus}`);
+    }
+
+    return {
+      value: Math.max(0, Math.min(6, value)),
+      reasons: reasons.slice(0, 4)
+    };
+  }
+
   summary(profile = this.read()) {
     return {
       updatedAt: profile.updatedAt,
@@ -489,6 +548,7 @@ module.exports = {
   feedbackCalibrationEntry,
   normalize,
   normalizeRating,
+  ratingDelta,
   rebuildCalibration,
   splitArtists
 };

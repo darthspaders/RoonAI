@@ -25,6 +25,7 @@
         <nav class="viewTabs" aria-label="App views">
           <button type="button" class="active" data-view="player">Now Playing</button>
           <button type="button" data-view="history">History Report</button>
+          <button type="button" data-view="radio">Radio</button>
           <button type="button" data-view="tidal">TIDAL Mixes</button>
         </nav>
         <div class="topControls">
@@ -51,24 +52,24 @@
                 <p class="eyebrow">Now Playing</p>
                 <h2 id="nowTitle">No active zone</h2>
                 <p id="nowSubtitle"></p>
+                <p id="nowSourceFormat" class="nowSourceFormat" hidden></p>
               </div>
             </div>
             <div id="nowDiscoveryTools" class="nowDiscoveryTools" hidden>
               <div id="nowFeedback" class="feedbackButtons nowFeedback" aria-label="Now playing feedback"></div>
               <div id="nowDiscoveryBadge" class="nowDiscoveryBadge"></div>
               <div class="nowDiscoveryActions">
-                <div class="nowCandidateAddGroup">
-                  <button type="button" id="saveNowCandidate">Add candidate</button>
-                  <div id="nowCandidateListMenu" class="candidateListMenu" hidden></div>
-                </div>
                 <button type="button" id="addNowToTidalPlaylist" disabled>Add to TIDAL</button>
-                <button type="button" id="jumpToCandidatesList">Jump to candidates</button>
                 <button type="button" id="openRabbitHole">Open Rabbit Hole</button>
               </div>
               <div class="nowTidalPlaylistGroup">
                 <select id="nowTidalPlaylistSelect" aria-label="TIDAL playlist">
                   <option value="">Load TIDAL playlists...</option>
                 </select>
+                <div class="nowTidalPlaylistCreate">
+                  <input id="nowTidalPlaylistName" type="text" placeholder="New TIDAL playlist name" autocomplete="off">
+                  <button type="button" id="createNowTidalPlaylist">Create playlist</button>
+                </div>
                 <span id="nowTidalPlaylistStatus" class="nowTidalPlaylistStatus" aria-live="polite"></span>
               </div>
             </div>
@@ -211,6 +212,24 @@
           </form>
         </section>
 
+        <section class="panel standbyPanel">
+          <div class="formHead standbyHead">
+            <div>
+              <p class="eyebrow">Standby Discovery</p>
+              <h2 id="standbyTitle">0/25 standby tracks</h2>
+              <p id="standbyStatus" class="muted">Waiting for background search.</p>
+            </div>
+            <div class="resultActions standbyActions">
+              <button type="button" id="standbyRefresh">Refresh</button>
+              <button type="button" id="standbyQueue" disabled>Queue</button>
+              <button type="button" id="standbyQueueNext" disabled>Queue next</button>
+              <button type="button" id="standbySendTidal" disabled>Send to TIDAL</button>
+              <button type="button" id="standbyClear" disabled>Clear</button>
+            </div>
+          </div>
+          <div id="standbyTracks" class="standbyTracks"></div>
+        </section>
+
         <section class="panel results">
           <div class="formHead">
             <div>
@@ -239,35 +258,6 @@
           <div id="rejectedDebug" class="rejectedDebug" hidden></div>
         </section>
 
-        <section id="candidatesPanel" class="panel saved">
-          <div class="formHead">
-            <div>
-              <p class="eyebrow">Playlist Candidates</p>
-              <h2 id="savedTitle">0 playlist candidates</h2>
-            </div>
-            <div class="resultActions">
-              <button type="button" id="queueSaved" disabled>Add candidates to queue</button>
-              <button type="button" id="queueSavedNext" disabled>Add candidates next</button>
-              <button type="button" id="sendSavedTidalQueue" disabled>Send candidates to TIDAL</button>
-              <button type="button" id="copySaved" disabled>Copy candidates</button>
-              <button type="button" id="exportSaved" disabled>Export candidates</button>
-              <button type="button" id="purgeMemory">Purge memory</button>
-            </div>
-          </div>
-          <div class="savedListTools">
-            <label>Candidate list
-              <select id="savedListSelect"></select>
-            </label>
-            <label>List name
-              <input id="savedListName" type="text" placeholder="New candidate list">
-            </label>
-            <button type="button" id="createSavedList">Create list</button>
-            <button type="button" id="renameSavedList">Rename selected</button>
-            <button type="button" id="deleteSavedList">Delete selected</button>
-          </div>
-          <p id="memoryStatus" class="muted memoryStatus">Track memory loading...</p>
-          <div id="savedTracks" class="tracks"></div>
-        </section>
       </section>
 
       <section id="historyView" class="view">
@@ -305,6 +295,23 @@
         </section>
       </section>
 
+      <section id="radioView" class="view">
+        <section class="panel radioHero">
+          <div>
+            <p class="eyebrow">Roon Radio</p>
+            <h2>Radio Stations</h2>
+            <p id="radioStatus" class="tasteNarrative">Radio stations have not been loaded yet.</p>
+          </div>
+          <div class="resultActions">
+            <button type="button" id="radioRoot" hidden>Radio root</button>
+            <button type="button" id="resetRadioOrder" hidden>Reset order</button>
+            <button type="button" id="refreshRadioStations">Refresh stations</button>
+          </div>
+        </section>
+
+        <section id="radioStations" class="radioGrid"></section>
+      </section>
+
       <section id="tidalView" class="view">
         <section class="panel tidalMixHero">
           <div>
@@ -331,5 +338,6 @@
     </main>
     <button type="button" id="jumpTop" class="jumpTop" hidden>Now Playing</button>
     <script src="/app.js"></script>
+    <script src="/webmcpTools.js"></script>
   </body>
 </html>

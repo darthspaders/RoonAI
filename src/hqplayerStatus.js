@@ -61,6 +61,22 @@ function formatDsdRate(rateKhz) {
   return Number.isFinite(multiple) && multiple > 0 ? `DSD${multiple}` : "";
 }
 
+function codecFromSource(uri = "", mime = "") {
+  const text = `${mime || ""} ${uri || ""}`.toLowerCase();
+  if (/\b(?:audio\/mpeg|audio\/mp3)\b|\.mp3(?:[?#]|$)/.test(text)) return "MP3";
+  if (/\b(?:audio\/flac|application\/flac|audio\/x-flac)\b|\.flac(?:[?#]|$)/.test(text)) return "FLAC";
+  if (/\b(?:audio\/aac|audio\/aacp|audio\/mp4)\b|\.m4a(?:[?#]|$)|\.aac(?:[?#]|$)/.test(text)) return "AAC";
+  if (/\b(?:audio\/ogg|application\/ogg)\b|\.ogg(?:[?#]|$)/.test(text)) return "OGG";
+  return "";
+}
+
+function formatBitrate(bitrate) {
+  const value = Number(bitrate || 0);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  if (value >= 1000) return `${Math.round(value / 1000)}kbps`;
+  return `${Math.round(value)}bps`;
+}
+
 function parseStateOutput(output) {
   const clean = stripAnsi(output);
   const rateMatch = clean.match(/\b(\d+):(\d{5,9})\b/);
@@ -87,6 +103,50 @@ function parseTransportRateKhz(output) {
 
   const value = Number(match[1]);
   return Number.isFinite(value) && value > 0 ? (value * 800) / 1000 : null;
+}
+
+function parsePlaylistSource(output) {
+  const clean = stripAnsi(output);
+  const line = clean
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .find((entry) => /^\[\d+]\s+\(\d+\/\d+\/\d+\/\d+\)/.test(entry));
+  if (!line) return null;
+
+  const match = line.match(/^\[(\d+)]\s+\((\d+)\/(\d+)\/(\d+)\/(\d+)\)\s+(\S+)(?:\s+\{([^}]*)})?/);
+  if (!match) return null;
+
+  const rate = Number(match[2]);
+  const bits = Number(match[3]);
+  const channels = Number(match[4]);
+  const bitrate = Number(match[5]);
+  if (!Number.isFinite(rate) || rate <= 0) return null;
+
+  const sourceName = clean.match(/\/\/\/\/([^"\r\n]+?)(?:\s+\d|\s*$)/m)?.[1]?.trim() || "";
+  const sampleRateKhz = Math.round((rate / 1000) * 10) / 10;
+  const codec = codecFromSource(match[6], match[7]);
+  const lossyCodec = /^(?:MP3|AAC|OGG)$/i.test(codec);
+  const display = [
+    codec,
+    formatRate(sampleRateKhz),
+    !lossyCodec && Number.isFinite(bits) && bits > 0 ? `${bits}bit` : "",
+    Number.isFinite(channels) && channels > 0 ? `${channels}ch` : "",
+    lossyCodec ? formatBitrate(bitrate) : ""
+  ].filter(Boolean).join(" ");
+
+  return {
+    index: Number(match[1]),
+    codec,
+    sampleRateHz: rate,
+    sampleRateKhz,
+    bitDepth: Number.isFinite(bits) && bits > 0 ? bits : null,
+    channels: Number.isFinite(channels) && channels > 0 ? channels : null,
+    bitrate: Number.isFinite(bitrate) && bitrate > 0 ? bitrate : null,
+    uri: match[6] || "",
+    mime: match[7] || "",
+    sourceName,
+    display
+  };
 }
 
 function parseNamedList(output) {
@@ -142,6 +202,9 @@ async function runCommand(command, timeoutMs = 4000, ptyWorkerPath = "") {
   const [file, ...args] = splitCommand(command);
   if (!file) return "";
 
+  const ptyOutput = await runPtyCommand(command, timeoutMs, ptyWorkerPath);
+  if (ptyOutput) return ptyOutput;
+
   const directOutput = await new Promise((resolve) => {
     execFile(file, args, {
       timeout: timeoutMs,
@@ -152,7 +215,7 @@ async function runCommand(command, timeoutMs = 4000, ptyWorkerPath = "") {
     });
   });
 
-  return directOutput || runPtyCommand(command, timeoutMs, ptyWorkerPath);
+  return directOutput;
 }
 
 function defaultRateCommand() {
@@ -199,24 +262,29 @@ class HQPlayerStatus {
   }
 
   async poll() {
-    if (this.inFlight || !this.rateCommand) return;
-    if (this.isPlaybackActive()) return;
+    if (this.inFlight || !this.rateCommand) return this.getStatus();
     this.inFlight = true;
 
     try {
       const output = await runCommand(this.rateCommand, this.timeoutMs, this.ptyWorkerPath);
       const state = parseStateOutput(output);
+      const source = await this.fetchPlaylistSource();
       if (!state) {
         const rate = parseTransportRateKhz(output);
-        if (rate) this.setStatus(this.statusFromState({ outputRateKhz: rate }));
-        return;
+        if (rate) this.setStatus(this.withSource(this.statusFromState({ outputRateKhz: rate }), source));
+        return this.getStatus();
       }
 
       await this.refreshNames(state);
-      this.setStatus(this.statusFromState(state));
+      this.setStatus(this.withSource(this.statusFromState(state), source));
+      return this.getStatus();
     } finally {
       this.inFlight = false;
     }
+  }
+
+  async refreshNow() {
+    return this.poll();
   }
 
   isPlaybackActive() {
@@ -225,6 +293,20 @@ class HQPlayerStatus {
     } catch {
       return false;
     }
+  }
+
+  async fetchPlaylistSource() {
+    const playlistCommand = siblingCommand(this.rateCommand, "--playlist-get");
+    if (!playlistCommand) return null;
+    const output = await runCommand(playlistCommand, this.timeoutMs, this.ptyWorkerPath);
+    return parsePlaylistSource(output);
+  }
+
+  withSource(status = {}, source = null) {
+    return {
+      ...status,
+      source: source || null
+    };
   }
 
   setStatus(nextStatus) {
@@ -299,11 +381,13 @@ class HQPlayerStatus {
       shaper: "",
       format: normalizeOutputFormat(format),
       rate,
-      signalPath: cleanPart(signalPath)
+      signalPath: cleanPart(signalPath),
+      source: null
     };
   }
 }
 
 module.exports = {
-  HQPlayerStatus
+  HQPlayerStatus,
+  parsePlaylistSource
 };

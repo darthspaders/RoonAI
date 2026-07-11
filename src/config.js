@@ -85,7 +85,9 @@ module.exports = {
     spotifyArtworkEnabled: /^(1|true|yes)$/i.test(process.env.SPOTIFY_ARTWORK_LOOKUP || ""),
     spotifyMarket: process.env.SPOTIFY_MARKET || "US",
     spotifyClientId: process.env.SPOTIFY_CLIENT_ID || "",
-    spotifyClientSecret: process.env.SPOTIFY_CLIENT_SECRET || ""
+    spotifyClientSecret: process.env.SPOTIFY_CLIENT_SECRET || "",
+    roonPresenceNowStateUrl: process.env.ROONPRESENCE_NOW_STATE_URL || "http://127.0.0.1:8787/now-state",
+    roonPresenceTimeoutMs: Number(process.env.ROONPRESENCE_NOW_STATE_TIMEOUT_MS || 1200)
   },
   hqplayer: {
     signalPathPrefix: process.env.HQPLAYER_SIGNAL_PATH_PREFIX || "poly-sinc-gauss-hires-mp, TPDF, PCM",

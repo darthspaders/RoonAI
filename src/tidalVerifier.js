@@ -78,6 +78,115 @@ function titleKeysMatch(leftKeys, rightKeys) {
   return leftKeys.some((left) => rightKeys.some((right) => left === right || left.includes(right) || right.includes(left)));
 }
 
+function boundedEditDistance(left, right, maxDistance) {
+  if (left === right) return 0;
+  if (Math.abs(left.length - right.length) > maxDistance) return maxDistance + 1;
+
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    const current = [i];
+    let rowMin = current[0];
+    for (let j = 1; j <= right.length; j += 1) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + cost
+      );
+      rowMin = Math.min(rowMin, current[j]);
+    }
+    if (rowMin > maxDistance) return maxDistance + 1;
+    previous = current;
+  }
+  return previous[right.length];
+}
+
+function artistNameLooksClose(left, right) {
+  if (left === right) return true;
+  if (left.length >= 4 && right.length >= 4 && (left.includes(right) || right.includes(left))) return true;
+  const maxLength = Math.max(left.length, right.length);
+  const minLength = Math.min(left.length, right.length);
+  if (minLength < 6) return false;
+  const maxDistance = maxLength >= 10 ? 2 : 1;
+  if (Math.abs(left.length - right.length) > maxDistance) return false;
+  if (left.slice(0, 3) !== right.slice(0, 3)) return false;
+  return boundedEditDistance(left, right, maxDistance) <= maxDistance;
+}
+
+const GENERIC_VERSION_TOKENS = new Set([
+  "mix",
+  "remix",
+  "edit",
+  "version",
+  "extended",
+  "original",
+  "radio",
+  "club",
+  "dub",
+  "instrumental",
+  "vip",
+  "remaster",
+  "remastered",
+  "anniversary",
+  "edition"
+]);
+
+function descriptorTokens(value) {
+  const descriptors = [];
+  for (const match of String(value || "").matchAll(/[\[(]([^\])]+)[\])]/g)) {
+    descriptors.push(match[1]);
+  }
+  const text = normalizeMatchText(descriptors.join(" "));
+  if (!text) return [];
+  return Array.from(new Set(text
+    .split(/\s+/)
+    .filter((token) => token.length > 1 && !GENERIC_VERSION_TOKENS.has(token))));
+}
+
+function titleMatchScore(resultTitle = "", trackTitle = "", { strict = false } = {}) {
+  const resultFull = normalizeMatchText(resultTitle);
+  const trackFull = normalizeMatchText(trackTitle);
+  const resultBase = normalizeMatchText(stripMixVersionSuffix(resultTitle));
+  const trackBase = normalizeMatchText(stripMixVersionSuffix(trackTitle));
+  const resultKeys = getTitleMatchKeys(resultTitle);
+  const trackKeys = getTitleMatchKeys(trackTitle);
+  if (!resultFull || !trackFull || !resultKeys.length || !trackKeys.length) return 0;
+
+  let score = 0;
+  if (resultFull === trackFull) score = 130;
+  else if (resultBase && trackBase && resultBase === trackBase) score = 105;
+  else if (!strict && titleKeysMatch(resultKeys, trackKeys)) score = 35;
+  else return 0;
+
+  const wantedDescriptors = descriptorTokens(trackTitle);
+  const resultDescriptors = descriptorTokens(resultTitle);
+  if (wantedDescriptors.length) {
+    const matched = wantedDescriptors.filter((token) => resultDescriptors.includes(token) || resultFull.includes(token)).length;
+    if (matched === wantedDescriptors.length) score += 15;
+    else if (resultBase && trackBase && resultBase === trackBase) score -= 45;
+    else score -= 30;
+  } else if (resultDescriptors.length && resultBase && trackBase && resultBase === trackBase) {
+    score -= 5;
+  }
+
+  return Math.max(0, score);
+}
+
+function artistMatchScore(item = {}, track = {}, searchJson = {}) {
+  const trackArtists = getArtistLookupAliases(track.artist).map(normalizeMatchText).filter(Boolean);
+  const resultArtists = getArtistLookupAliases(getArtistNames(item, searchJson).join(", ")).map(normalizeMatchText).filter(Boolean);
+  if (!trackArtists.length || !resultArtists.length) return 0;
+  return trackArtists.some((artist) => resultArtists.some((resultArtist) => artistNameLooksClose(artist, resultArtist))) ? 45 : 0;
+}
+
+function candidateMatchScore(item = {}, track = {}, searchJson = {}, options = {}) {
+  const titleScore = titleMatchScore(item.title || item.attributes?.title, track.title, options);
+  if (!titleScore) return 0;
+  const artistScore = artistMatchScore(item, track, searchJson);
+  if (!artistScore) return 0;
+  return titleScore + artistScore;
+}
+
 function createSearchQueries(track, { strict = false } = {}) {
   const searches = [];
   const baseTitle = stripMixVersionSuffix(track.title);
@@ -238,24 +347,196 @@ function getTidalTrackUrl(item = {}) {
   return /^\d+$/.test(id) ? `https://tidal.com/browse/track/${id}` : "";
 }
 
-function isTidalTrackMatch(item = {}, track = {}, searchJson = {}, { strict = false } = {}) {
-  const resultTitleKeys = getTitleMatchKeys(item.title || item.attributes?.title);
-  const trackTitleKeys = getTitleMatchKeys(track.title);
-  const trackArtists = getArtistLookupAliases(track.artist).map(normalizeMatchText).filter(Boolean);
-  const resultArtist = normalizeMatchText(getArtistNames(item, searchJson).join(" "));
+function normalizeMediaTags(value) {
+  const raw = Array.isArray(value) ? value : (value ? [value] : []);
+  const tags = raw.flatMap((entry) => {
+    if (!entry) return [];
+    if (Array.isArray(entry)) return normalizeMediaTags(entry);
+    if (typeof entry === "object") return [entry.name, entry.value, entry.label, entry.type].filter(Boolean);
+    return String(entry).split(/[,|]+/);
+  });
 
-  if (!resultTitleKeys.length || !trackTitleKeys.length) return false;
-  if (strict) {
-    if (!trackTitleKeys.some((trackTitle) => resultTitleKeys.includes(trackTitle))) return false;
-  } else if (!titleKeysMatch(resultTitleKeys, trackTitleKeys)) {
-    return false;
+  return Array.from(new Set(tags
+    .map((tag) => cleanText(tag).replace(/\s+/g, "_").toUpperCase())
+    .filter(Boolean)));
+}
+
+function getMediaTags(item = {}) {
+  return normalizeMediaTags([
+    item.mediaTags,
+    item.media_tags,
+    item.audioModes,
+    item.audio_modes,
+    item.tags,
+    item.attributes?.mediaTags,
+    item.attributes?.media_tags,
+    item.attributes?.audioModes,
+    item.attributes?.audio_modes,
+    item.attributes?.tags
+  ]);
+}
+
+function getAudioQuality(item = {}) {
+  return cleanText(
+    item.audioQuality ||
+    item.audio_quality ||
+    item.quality ||
+    item.attributes?.audioQuality ||
+    item.attributes?.audio_quality ||
+    item.attributes?.quality
+  );
+}
+
+function firstNumber(values = []) {
+  for (const value of values) {
+    const number = Number(String(value ?? "").replace(/[^\d.]+/g, ""));
+    if (Number.isFinite(number) && number > 0) return number;
   }
-  if (trackArtists.length && resultArtist && !trackArtists.some((artist) => resultArtist.includes(artist) || artist.includes(resultArtist))) return false;
-  return true;
+  return null;
+}
+
+function getSampleRateKhz(item = {}) {
+  const value = firstNumber([
+    item.sampleRateKhz,
+    item.sample_rate_khz,
+    item.sampleRate,
+    item.sample_rate,
+    item.audioSampleRate,
+    item.audio_sample_rate,
+    item.attributes?.sampleRateKhz,
+    item.attributes?.sample_rate_khz,
+    item.attributes?.sampleRate,
+    item.attributes?.sample_rate,
+    item.attributes?.audioSampleRate,
+    item.attributes?.audio_sample_rate
+  ]);
+  if (!value) return null;
+  return value > 1000 ? Math.round((value / 1000) * 10) / 10 : Math.round(value * 10) / 10;
+}
+
+function getBitDepth(item = {}) {
+  return firstNumber([
+    item.bitDepth,
+    item.bit_depth,
+    item.bitsPerSample,
+    item.bits_per_sample,
+    item.audioBitDepth,
+    item.audio_bit_depth,
+    item.attributes?.bitDepth,
+    item.attributes?.bit_depth,
+    item.attributes?.bitsPerSample,
+    item.attributes?.bits_per_sample,
+    item.attributes?.audioBitDepth,
+    item.attributes?.audio_bit_depth
+  ]);
+}
+
+function getChannelCount(item = {}) {
+  return firstNumber([
+    item.channels,
+    item.channelCount,
+    item.channel_count,
+    item.audioChannels,
+    item.audio_channels,
+    item.attributes?.channels,
+    item.attributes?.channelCount,
+    item.attributes?.channel_count,
+    item.attributes?.audioChannels,
+    item.attributes?.audio_channels
+  ]);
+}
+
+function codecFromMetadata(metadata = {}, tags = []) {
+  const explicit = cleanText(
+    metadata.codec ||
+    metadata.audioCodec ||
+    metadata.audio_codec ||
+    metadata.format ||
+    metadata.container ||
+    metadata.attributes?.codec ||
+    metadata.attributes?.audioCodec ||
+    metadata.attributes?.audio_codec ||
+    metadata.attributes?.format ||
+    metadata.attributes?.container
+  ).toUpperCase();
+  if (explicit) return explicit.replace(/^AUDIO_/, "");
+  if (tags.some((tag) => /(?:HIRES|HI_RES|LOSSLESS|MQA)/.test(tag))) return "FLAC";
+  return "";
+}
+
+function qualityLabelFromTags(tags = [], audioQuality = "") {
+  const tagSet = new Set(tags);
+  if (tagSet.has("DOLBY_ATMOS")) return "Dolby Atmos";
+  if (tagSet.has("SONY_360RA") || tagSet.has("SONY_360_REALITY_AUDIO")) return "360 Reality Audio";
+  if (tagSet.has("HIRES_LOSSLESS") || tagSet.has("HI_RES_LOSSLESS") || tagSet.has("HI_RES")) return "HiRes Lossless";
+  if (tagSet.has("MQA")) return "MQA";
+  if (tagSet.has("LOSSLESS")) return "Lossless";
+
+  const quality = cleanText(audioQuality).replace(/_/g, " ").toLowerCase();
+  if (!quality) return "";
+  if (/hi.?res/.test(quality) && /lossless/.test(quality)) return "HiRes Lossless";
+  if (/lossless/.test(quality)) return "Lossless";
+  if (/high/.test(quality)) return "High";
+  if (/low/.test(quality)) return "Low";
+  return quality.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatSampleRateKhz(value) {
+  const sampleRate = Number(value || 0);
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0) return "";
+  return `${Number.isInteger(sampleRate) ? sampleRate : sampleRate.toFixed(1)}kHz`;
+}
+
+function trackSourceQualityFromMetadata(metadata = {}, options = {}) {
+  const mediaTags = getMediaTags(metadata);
+  const audioQuality = getAudioQuality(metadata);
+  const sampleRateKhz = getSampleRateKhz(metadata);
+  const bitDepth = getBitDepth(metadata);
+  const channels = getChannelCount(metadata);
+  const codec = codecFromMetadata(metadata, mediaTags);
+  const source = cleanText(options.source || metadata.sourceLabel || metadata.provider || "TIDAL").toUpperCase();
+  const exactParts = [
+    formatSampleRateKhz(sampleRateKhz),
+    bitDepth ? `${Math.round(bitDepth)}bit` : "",
+    channels ? `${Math.round(channels)}ch` : ""
+  ].filter(Boolean);
+  const quality = qualityLabelFromTags(mediaTags, audioQuality);
+  const displayParts = [source, codec].filter(Boolean);
+
+  if (exactParts.length) displayParts.push(...exactParts);
+  else if (quality) displayParts.push(quality);
+
+  return {
+    source,
+    codec,
+    quality,
+    mediaTags,
+    audioQuality,
+    sampleRateKhz,
+    bitDepth,
+    channels,
+    exact: exactParts.length > 0,
+    display: displayParts.length > 1 ? displayParts.join(" ") : ""
+  };
+}
+
+function isTidalTrackMatch(item = {}, track = {}, searchJson = {}, { strict = false } = {}) {
+  return candidateMatchScore(item, track, searchJson, { strict }) > 0;
+}
+
+function chooseCandidateResult(searchJson, track = {}, options = {}) {
+  return getItems(searchJson)
+    .map((entry, index) => ({
+      entry,
+      index,
+      score: candidateMatchScore(entry, track, searchJson, options)
+    }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index)[0] || null;
 }
 
 function chooseCandidate(searchJson, track = {}, options = {}) {
-  return getItems(searchJson).find((entry) => isTidalTrackMatch(entry, track, searchJson, options)) || null;
+  return chooseCandidateResult(searchJson, track, options)?.entry || null;
 }
 
 function yearFromValue(value) {
@@ -548,6 +829,11 @@ function buildResult(item, searchJson, query) {
     durationMs: getDurationMs(item),
     imageUrl: getImageUrl(item, album),
     tidalUrl: getTidalTrackUrl(item),
+    mediaTags: getMediaTags(item),
+    audioQuality: getAudioQuality(item),
+    sampleRateKhz: getSampleRateKhz(item),
+    bitDepth: getBitDepth(item),
+    channels: getChannelCount(item),
     source: "tidal"
   };
 }
@@ -570,6 +856,7 @@ class TidalVerifier {
     this.clientId = config.clientId || "";
     this.clientSecret = config.clientSecret || "";
     this.accessToken = config.accessToken || "";
+    this.staticAccessTokenRejected = false;
     this.fetchImpl = config.fetchImpl || globalThis.fetch;
     this.clock = config.clock || (() => Date.now());
     this.timeoutMs = positiveNumber(config.timeoutMs, DEFAULT_TIDAL_FETCH_TIMEOUT_MS, { min: 500, max: 120_000 });
@@ -629,6 +916,8 @@ class TidalVerifier {
     if (this.cache.has(cacheKey)) return this.cache.get(cacheKey);
 
     let lastError = null;
+    let fallbackResult = null;
+    const highConfidenceScore = strict ? 175 : 145;
 
     for (const query of createSearchQueries(track, { strict })) {
       let result = null;
@@ -646,10 +935,21 @@ class TidalVerifier {
         }
       }
       if (result) {
-        const verified = await this.withPageYear(await this.withDetailYear(result));
-        this.cache.set(cacheKey, verified);
-        return verified;
+        if (Number(result.matchScore || 0) >= highConfidenceScore) {
+          const verified = await this.withPageYear(await this.withDetailYear(result));
+          this.cache.set(cacheKey, verified);
+          return verified;
+        }
+        if (!fallbackResult || Number(result.matchScore || 0) > Number(fallbackResult.matchScore || 0)) {
+          fallbackResult = result;
+        }
       }
+    }
+
+    if (fallbackResult) {
+      const verified = await this.withPageYear(await this.withDetailYear(fallbackResult));
+      this.cache.set(cacheKey, verified);
+      return verified;
     }
 
     if (lastError) {
@@ -794,6 +1094,11 @@ class TidalVerifier {
       durationMs: null,
       label: "",
       tidalUrl: `https://tidal.com/browse/track/${id}`,
+      mediaTags: [],
+      audioQuality: "",
+      sampleRateKhz: null,
+      bitDepth: null,
+      channels: null,
       source: "tidal"
     });
 
@@ -857,6 +1162,11 @@ class TidalVerifier {
         releaseEvidence: getReleaseEvidence(track, album),
         durationMs: getDurationMs(track) || result.durationMs,
         imageUrl: getImageUrl(track, album) || result.imageUrl || "",
+        mediaTags: getMediaTags(track).length ? getMediaTags(track) : (result.mediaTags || []),
+        audioQuality: getAudioQuality(track) || result.audioQuality || "",
+        sampleRateKhz: getSampleRateKhz(track) || result.sampleRateKhz || null,
+        bitDepth: getBitDepth(track) || result.bitDepth || null,
+        channels: getChannelCount(track) || result.channels || null,
         yearSource: year ? "tidal-detail" : result.yearSource
       };
     } catch {
@@ -868,22 +1178,28 @@ class TidalVerifier {
     const searchUrl = new URL(`${TIDAL_SEARCH_ROOT}/${encodeURIComponent(query)}/relationships/tracks`);
     searchUrl.searchParams.set("countryCode", this.countryCode);
     searchUrl.searchParams.set("include", "tracks,albums,artists");
-    searchUrl.searchParams.set("limit", "5");
+    searchUrl.searchParams.set("limit", "20");
 
     const searchJson = await this.fetchTidalJson(searchUrl.toString());
-    const candidate = chooseCandidate(searchJson, track, options);
-    return candidate ? buildResult(candidate, searchJson, query) : null;
+    const candidate = chooseCandidateResult(searchJson, track, options);
+    return candidate ? {
+      ...buildResult(candidate.entry, searchJson, query),
+      matchScore: candidate.score
+    } : null;
   }
 
   async searchLegacy(track, query, options = {}) {
     const searchUrl = new URL(TIDAL_LEGACY_SEARCH_URL);
     searchUrl.searchParams.set("query", query);
     searchUrl.searchParams.set("countryCode", this.countryCode);
-    searchUrl.searchParams.set("limit", "10");
+    searchUrl.searchParams.set("limit", "20");
 
     const searchJson = await this.fetchTidalJson(searchUrl.toString());
-    const candidate = chooseCandidate(searchJson, track, options);
-    return candidate ? buildResult(candidate, searchJson, query) : null;
+    const candidate = chooseCandidateResult(searchJson, track, options);
+    return candidate ? {
+      ...buildResult(candidate.entry, searchJson, query),
+      matchScore: candidate.score
+    } : null;
   }
 
   async fetchTidalJson(url, attempt = 0) {
@@ -911,16 +1227,46 @@ class TidalVerifier {
 
     this.nextRequestAt = this.clock() + 275;
     if (response.status === 404) return null;
+    if (response.status === 401) {
+      if (attempt < 1 && this.invalidateRejectedAccessToken(token)) {
+        return this.fetchTidalJson(url, attempt + 1);
+      }
+      const error = new Error(this.accessToken
+        ? "Configured TIDAL_ACCESS_TOKEN was rejected by TIDAL. Remove it or configure TIDAL_CLIENT_ID/TIDAL_CLIENT_SECRET so Rabbit Hole can fetch a fresh catalog token."
+        : "TIDAL catalog token was rejected. Check TIDAL_CLIENT_ID and TIDAL_CLIENT_SECRET.");
+      error.status = 401;
+      error.source = "tidal";
+      throw error;
+    }
     if (!response.ok) throw httpStatusError("TIDAL API lookup", response.status);
     return response.json();
   }
 
+  invalidateRejectedAccessToken(token = "") {
+    const rejected = cleanText(token);
+    if (!rejected) return false;
+    if (this.token?.accessToken && rejected === this.token.accessToken) {
+      this.token = null;
+      return Boolean(this.clientId && this.clientSecret);
+    }
+    if (this.accessToken && rejected === this.accessToken) {
+      this.staticAccessTokenRejected = true;
+      return Boolean(this.clientId && this.clientSecret);
+    }
+    return false;
+  }
+
   async getAccessToken() {
-    if (this.accessToken) return this.accessToken;
+    if (this.accessToken && !this.staticAccessTokenRejected) return this.accessToken;
 
     const now = this.clock();
     if (this.token?.accessToken && this.token.expiresAtMs - now > 60_000) return this.token.accessToken;
-    if (!this.clientId || !this.clientSecret) throw new Error("TIDAL credentials are missing.");
+    if (!this.clientId || !this.clientSecret) {
+      if (this.accessToken && this.staticAccessTokenRejected) {
+        throw new Error("Configured TIDAL_ACCESS_TOKEN was rejected by TIDAL. Remove it or configure TIDAL_CLIENT_ID/TIDAL_CLIENT_SECRET so Rabbit Hole can fetch a fresh catalog token.");
+      }
+      throw new Error("TIDAL credentials are missing.");
+    }
 
     const auth = Buffer.from(`${this.clientId}:${this.clientSecret}`, "utf8").toString("base64");
     const response = await this.fetchTidalResponse(TIDAL_TOKEN_URL, {
@@ -949,5 +1295,6 @@ class TidalVerifier {
 
 module.exports = {
   TidalVerifier,
-  createSearchQueries
+  createSearchQueries,
+  trackSourceQualityFromMetadata
 };

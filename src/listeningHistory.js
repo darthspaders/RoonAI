@@ -2,6 +2,12 @@
 
 const fs = require("fs");
 const path = require("path");
+const {
+  detectGenreTerms,
+  detectTrackCharacteristics,
+  detectVibeTerms
+} = require("./musicOntology");
+const { normalizeRating, ratingDelta } = require("./tasteProfile");
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -65,6 +71,7 @@ function trackFromZone(zone = {}) {
   const now = zone.now_playing || {};
   const lookup = now.radio_lookup || {};
   const enriched = now.radio_enrichment || {};
+  const hasRadioLookup = Boolean(now.radio_lookup);
   const title = cleanText(enriched.title || lookup.title || now.two_line?.line1 || now.three_line?.line1 || now.one_line?.line1);
   const artist = cleanText(enriched.artist || lookup.artist || now.two_line?.line2 || now.three_line?.line2 || now.one_line?.line2);
   const album = cleanText(enriched.album || lookup.album || now.three_line?.line3 || "");
@@ -77,9 +84,9 @@ function trackFromZone(zone = {}) {
     album,
     lengthSeconds: Number(now.length || 0),
     imageUrl: cleanText(enriched.imageUrl),
-    imageKey: cleanText(now.image_key),
-    artistImageKey: firstImageKey(now.artist_image_keys),
-    artistImageKeys: Array.isArray(now.artist_image_keys) ? now.artist_image_keys.map(cleanText).filter(Boolean) : [],
+    imageKey: hasRadioLookup ? "" : cleanText(now.image_key),
+    artistImageKey: hasRadioLookup ? "" : firstImageKey(now.artist_image_keys),
+    artistImageKeys: hasRadioLookup ? [] : (Array.isArray(now.artist_image_keys) ? now.artist_image_keys.map(cleanText).filter(Boolean) : []),
     zoneId: zone.zone_id || "",
     zoneName: zone.display_name || "",
     state: zone.state || "",
@@ -116,6 +123,277 @@ function topWeighted(map = {}, direction = 1, limit = 8) {
     .slice(0, limit);
 }
 
+function titleCase(value = "") {
+  return cleanText(value).replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+}
+
+function signedScore(value) {
+  const rounded = Number(Number(value || 0).toFixed(1));
+  return rounded > 0 ? `+${rounded}` : String(rounded);
+}
+
+function signalKey(value = "") {
+  return normalize(value);
+}
+
+function addSignal(map, name, amount = 0, note = "") {
+  const label = titleCase(name);
+  const key = signalKey(label);
+  const value = Number(amount || 0);
+  if (!key || !value) return;
+  const current = map.get(key) || {
+    name: label,
+    score: 0,
+    count: 0,
+    up: 0,
+    down: 0,
+    notes: new Map()
+  };
+  current.score += value;
+  current.count += 1;
+  if (value > 0) current.up += 1;
+  if (value < 0) current.down += 1;
+  if (note) current.notes.set(note, (current.notes.get(note) || 0) + 1);
+  map.set(key, current);
+}
+
+function rankedSignals(map = new Map(), direction = 1, limit = 6) {
+  return [...map.values()]
+    .filter((entry) => direction > 0 ? entry.score > 0 : entry.score < 0)
+    .sort((left, right) => (
+      direction * (right.score - left.score) ||
+      right.count - left.count ||
+      left.name.localeCompare(right.name)
+    ))
+    .slice(0, limit)
+    .map((entry) => {
+      const topNote = [...entry.notes.entries()]
+        .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0] || "";
+      return {
+        name: entry.name,
+        score: signedScore(entry.score),
+        rawScore: Number(entry.score.toFixed(2)),
+        count: entry.count,
+        note: topNote || `${entry.up} positive, ${entry.down} negative`
+      };
+    });
+}
+
+function signalBaseName(value = "") {
+  return normalize(cleanText(value).replace(/\s+(?:source|label|lane)$/i, ""));
+}
+
+function trackMemoryEntries(trackMemory = null) {
+  if (trackMemory?.entries instanceof Map) return [...trackMemory.entries.values()];
+  if (Array.isArray(trackMemory?.entries)) return trackMemory.entries;
+  return [];
+}
+
+function memoryLookup(trackMemory = null) {
+  const lookup = new Map();
+  for (const entry of trackMemoryEntries(trackMemory)) {
+    const keys = [
+      cleanText(entry.key).toLowerCase(),
+      cleanText(entry.tidal?.tidalUrl || entry.tidalUrl).toLowerCase(),
+      `${normalize(entry.artist)}|${normalize(entry.title)}`
+    ].filter(Boolean);
+    for (const key of keys) lookup.set(key, entry);
+  }
+  return lookup;
+}
+
+function feedbackMatchKeys(entry = {}) {
+  return [
+    cleanText(entry.tidalUrl || entry.tidal?.tidalUrl).toLowerCase(),
+    `${normalize(entry.artist)}|${normalize(entry.title)}`,
+    cleanText(entry.key).toLowerCase()
+  ].filter(Boolean);
+}
+
+function enrichedFeedbackEntries(profile = {}, trackMemory = null) {
+  const lookup = memoryLookup(trackMemory);
+  return Object.entries(profile.feedback || {}).map(([key, entry]) => {
+    const directKeys = [cleanText(key).toLowerCase(), ...feedbackMatchKeys(entry)];
+    const memory = directKeys.map((candidateKey) => lookup.get(candidateKey)).find(Boolean) || {};
+    const rating = normalizeRating(entry.rating);
+    return {
+      ...memory,
+      ...entry,
+      rating,
+      tasteScore: Number.isFinite(Number(entry.tasteScore)) ? Number(entry.tasteScore) : ratingDelta(rating),
+      scoreBreakdown: memory.scoreBreakdown || entry.scoreBreakdown || null,
+      durationMs: memory.durationMs || entry.durationMs || null,
+      reason: cleanText(memory.reason || entry.reason),
+      why: Array.isArray(memory.why) ? memory.why : [],
+      discoverySource: cleanText(entry.discoverySource || memory.discoverySource),
+      discoveryLane: cleanText(entry.discoveryLane || memory.discoveryLane),
+      label: cleanText(entry.label || memory.label || memory.tidal?.label),
+      isRadio: Boolean(entry.isRadio || memory.isRadio),
+      isLiveRadio: Boolean(entry.isLiveRadio || memory.isLiveRadio),
+      memoryMatched: Boolean(memory.artist || memory.title || memory.scoreBreakdown)
+    };
+  });
+}
+
+function termsFromTrack(entry = {}) {
+  const breakdown = entry.scoreBreakdown || {};
+  const text = [
+    entry.artist,
+    entry.title,
+    entry.album,
+    entry.label,
+    entry.reason,
+    ...(entry.why || [])
+  ].join(" ");
+  const vibeTerms = [
+    ...(breakdown.vibeInference?.matchedTerms || []),
+    ...detectVibeTerms(text, { limit: 8 }).terms
+  ];
+  const genreTerms = [
+    ...(breakdown.genreInference?.inferredGenres || []),
+    ...detectGenreTerms(text, { includeAliases: false, limit: 8 }).terms
+  ];
+  const characteristicTerms = [
+    ...detectTrackCharacteristics(text, { limit: 8 }).terms
+  ];
+  return {
+    vibes: Array.from(new Set(vibeTerms.map(cleanText).filter(Boolean))).slice(0, 8),
+    genres: Array.from(new Set(genreTerms.map(cleanText).filter(Boolean))).slice(0, 8),
+    characteristics: Array.from(new Set(characteristicTerms.map(cleanText).filter(Boolean))).slice(0, 8)
+  };
+}
+
+function durationShape(entry = {}) {
+  const minutes = Number(entry.durationMs || 0) / 60000;
+  if (!minutes) return "";
+  if (minutes >= 8) return "long-form 8+ min";
+  if (minutes >= 6) return "extended 6-8 min";
+  if (minutes >= 4) return "club-length 4-6 min";
+  return "short/edit under 4 min";
+}
+
+function buildTasteDna({ profile = {}, contributoryPlays = [], trackMemory = null } = {}) {
+  const feedback = enrichedFeedbackEntries(profile, trackMemory);
+  const calibration = profile.calibration || {};
+  const traits = new Map();
+  const genres = new Map();
+  const formats = new Map();
+  const sources = new Map();
+  const avoid = new Map();
+  const ratingCounts = {};
+  let positiveCount = 0;
+  let negativeCount = 0;
+  let radioFeedbackCount = 0;
+  let detailedMemoryCount = 0;
+  let positiveDurationMs = 0;
+  let positiveDurationCount = 0;
+  let negativeDurationMs = 0;
+  let negativeDurationCount = 0;
+
+  for (const entry of feedback) {
+    const delta = Number(entry.tasteScore || ratingDelta(entry.rating) || 0);
+    if (!delta) continue;
+    ratingCounts[entry.rating] = Number(ratingCounts[entry.rating] || 0) + 1;
+    if (delta > 0) positiveCount += 1;
+    if (delta < 0) negativeCount += 1;
+    if (entry.isRadio || entry.isLiveRadio || /^live radio$/i.test(entry.discoverySource)) radioFeedbackCount += 1;
+    if (entry.scoreBreakdown) detailedMemoryCount += 1;
+
+    const note = `${entry.rating} on ${[entry.artist, entry.title].filter(Boolean).join(" - ") || "track"}`;
+    const terms = termsFromTrack(entry);
+    for (const term of terms.vibes) addSignal(traits, term, delta, note);
+    for (const term of terms.genres) addSignal(genres, term, delta, note);
+    for (const term of terms.characteristics) addSignal(formats, term, delta * 0.75, note);
+    const shape = durationShape(entry);
+    if (shape) addSignal(formats, shape, delta, note);
+
+    if (entry.discoverySource) addSignal(sources, entry.discoverySource, delta, note);
+    if (entry.discoveryLane) addSignal(sources, `${entry.discoveryLane} lane`, delta * 0.75, note);
+    if (entry.label) addSignal(sources, `${entry.label} label`, delta * 0.75, note);
+
+    if (delta < 0) {
+      if (entry.discoverySource) addSignal(avoid, `${entry.discoverySource} source`, delta, note);
+      if (entry.label) addSignal(avoid, `${entry.label} label`, delta, note);
+      for (const term of [...terms.vibes, ...terms.genres].slice(0, 4)) addSignal(avoid, term, delta * 0.75, note);
+    }
+
+    const duration = Number(entry.durationMs || 0);
+    if (duration && delta > 0) {
+      positiveDurationMs += duration;
+      positiveDurationCount += 1;
+    } else if (duration && delta < 0) {
+      negativeDurationMs += duration;
+      negativeDurationCount += 1;
+    }
+  }
+
+  for (const source of calibration.sources || []) {
+    const sourceMisses = Number(source.modelMisses || 0) + Number(source.promptMismatches || 0);
+    const sourceLongShots = Number(source.likedLongShots || 0);
+    if (Number(source.likedLongShots || 0) > 0) {
+      addSignal(sources, source.source || source.name, Number(source.likedLongShots) * 1.5, `${source.likedLongShots}/${source.total} liked long shots`);
+    }
+    if (sourceMisses > sourceLongShots) {
+      addSignal(avoid, `${source.source || source.name} source`, -sourceMisses, `${source.modelMisses || 0}/${source.total || 0} model misses`);
+    }
+  }
+
+  for (const label of calibration.labels || []) {
+    const labelMisses = Number(label.modelMisses || 0) + Number(label.promptMismatches || 0);
+    const labelLongShots = Number(label.likedLongShots || 0);
+    if (Number(label.likedLongShots || 0) > 0) {
+      addSignal(sources, `${label.label || label.name} label`, Number(label.likedLongShots) * 1.75, `${label.likedLongShots}/${label.total} liked long shots`);
+    }
+    if (labelMisses > labelLongShots) {
+      addSignal(avoid, `${label.label || label.name} label`, -labelMisses, `${label.modelMisses || 0}/${label.total || 0} model misses`);
+    }
+  }
+
+  const avgPositiveMinutes = positiveDurationCount ? Number((positiveDurationMs / positiveDurationCount / 60000).toFixed(1)) : 0;
+  const avgNegativeMinutes = negativeDurationCount ? Number((negativeDurationMs / negativeDurationCount / 60000).toFixed(1)) : 0;
+  const depthScore = Math.min(100, Math.round(
+    Math.min(50, feedback.length) +
+    Math.min(25, detailedMemoryCount * 2) +
+    Math.min(15, radioFeedbackCount * 3) +
+    Math.min(10, Number(calibration.likedLongShots || 0) * 2)
+  ));
+  const traitSignals = rankedSignals(traits, 1, 6);
+  const genreSignals = rankedSignals(genres, 1, 6);
+  const formatSignals = rankedSignals(formats, 1, 6);
+  const sourceSignals = rankedSignals(sources, 1, 6);
+  const positiveBases = new Set([
+    ...traitSignals,
+    ...genreSignals,
+    ...formatSignals,
+    ...sourceSignals
+  ].map((entry) => signalBaseName(entry.name)).filter(Boolean));
+  const avoidSignals = rankedSignals(avoid, -1, 10)
+    .filter((entry) => !positiveBases.has(signalBaseName(entry.name)))
+    .slice(0, 6);
+
+  return {
+    traits: traitSignals,
+    genres: genreSignals,
+    formats: formatSignals,
+    sources: sourceSignals,
+    avoid: avoidSignals,
+    confidence: {
+      depthScore,
+      depthLabel: depthScore >= 75 ? "Deep" : (depthScore >= 45 ? "Growing" : "Early"),
+      feedbackCount: feedback.length,
+      positiveCount,
+      negativeCount,
+      detailedMemoryCount,
+      radioFeedbackCount,
+      likedLongShots: Number(calibration.likedLongShots || 0),
+      observedPlays: contributoryPlays.length,
+      avgPositiveMinutes,
+      avgNegativeMinutes,
+      ratingCounts
+    }
+  };
+}
+
 function dedupePlays(plays = []) {
   const kept = [];
   for (const rawPlay of plays.sort((left, right) => Number(right.playedAt || 0) - Number(left.playedAt || 0))) {
@@ -150,15 +428,24 @@ function normalizeStoredPlay(play = {}) {
   };
 }
 
-function tasteNarrative({ topArtists, topLabels, likedArtists, likedLabels, plays, discoveryCount, nowPlaying }) {
+function tasteNarrative({ topArtists, topLabels, likedArtists, likedLabels, plays, discoveryCount, nowPlaying, tasteDna }) {
   const artistNames = likedArtists.length
     ? likedArtists.slice(0, 4).map((entry) => entry.name)
     : topArtists.slice(0, 4).map((entry) => entry.name);
   const labelNames = likedLabels.slice(0, 4).map((entry) => entry.name);
+  const traitNames = (tasteDna?.traits || []).slice(0, 4).map((entry) => entry.name.toLowerCase());
+  const genreNames = (tasteDna?.genres || []).slice(0, 3).map((entry) => entry.name.toLowerCase());
+  const formatNames = (tasteDna?.formats || []).slice(0, 2).map((entry) => entry.name.toLowerCase());
+  const sourceNames = (tasteDna?.sources || []).slice(0, 3).map((entry) => entry.name);
+  const avoidNames = (tasteDna?.avoid || []).slice(0, 2).map((entry) => entry.name.toLowerCase());
+  const confidence = tasteDna?.confidence || {};
   const signals = [];
 
   if (artistNames.length) signals.push(`artist gravity around ${artistNames.join(", ")}`);
   if (labelNames.length) signals.push(`label pull from ${labelNames.join(", ")}`);
+  if (traitNames.length) signals.push(`traits like ${traitNames.join(", ")}`);
+  if (formatNames.length) signals.push(`format bias toward ${formatNames.join(" and ")}`);
+  if (sourceNames.length) signals.push(`discovery sources that have worked: ${sourceNames.join(", ")}`);
   if (discoveryCount) signals.push(`${discoveryCount} recent discovery candidates`);
   if (nowPlaying?.title) signals.push(`currently on ${nowPlaying.artist} - ${nowPlaying.title}`);
 
@@ -166,8 +453,16 @@ function tasteNarrative({ topArtists, topLabels, likedArtists, likedLabels, play
     return "I do not have enough local history yet. Keep this app running while Roon plays, then use thumbs up/down on discoveries so the profile has real signal.";
   }
 
-  const base = "Your current taste is leaning toward detailed progressive and melodic electronic music: hypnotic, deep, club-capable, and more focused on texture than big-room obviousness.";
-  return signals.length ? `${base} The strongest signals are ${signals.join("; ")}.` : base;
+  const base = confidence.feedbackCount
+    ? `Taste depth is ${String(confidence.depthLabel || "growing").toLowerCase()} from ${confidence.feedbackCount} ratings, ${confidence.detailedMemoryCount || 0} scored memories, and ${confidence.radioFeedbackCount || 0} radio feedback signals.`
+    : "Taste depth is still based mostly on listening history, not enough explicit ratings.";
+  const lane = genreNames.length
+    ? ` The strongest lane evidence points to ${genreNames.join(", ")}.`
+    : " The genre lane is still mostly inferred from artists and labels.";
+  const caution = avoidNames.length
+    ? ` Be careful with ${avoidNames.join(" and ")}.`
+    : "";
+  return signals.length ? `${base}${lane} Strongest signals: ${signals.join("; ")}.${caution}` : `${base}${lane}${caution}`;
 }
 
 class ListeningHistory {
@@ -224,7 +519,7 @@ class ListeningHistory {
     if (changed) this.save();
   }
 
-  report({ roonState = {}, tasteProfile, discoveryHistory } = {}) {
+  report({ roonState = {}, tasteProfile, discoveryHistory, trackMemory } = {}) {
     this.load();
     const plays = this.data.plays || [];
     const contributoryPlays = plays.filter((play) => !isNonContributoryPlay(play));
@@ -249,6 +544,7 @@ class ListeningHistory {
     const rejectedLabels = topWeighted(profile.labels, -1, 5);
     const discoveryCount = discoveryHistory?.entries?.size || 0;
     const nowPlaying = (roonState.zones || []).map(trackFromZone).find(Boolean) || null;
+    const tasteDna = buildTasteDna({ profile, contributoryPlays, trackMemory });
 
     return {
       updatedAt: new Date().toISOString(),
@@ -272,6 +568,7 @@ class ListeningHistory {
       rejectedArtists,
       likedLabels,
       rejectedLabels,
+      tasteDna,
       recentPlays: recentPlays.map((play) => ({ ...play, imageUrl: play.imageUrl || imageUrl(play.imageKey) })),
       tasteNarrative: tasteNarrative({
         topArtists,
@@ -280,7 +577,8 @@ class ListeningHistory {
         likedLabels,
         plays: contributoryPlays.length,
         discoveryCount,
-        nowPlaying
+        nowPlaying,
+        tasteDna
       })
     };
   }

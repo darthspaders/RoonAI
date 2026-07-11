@@ -950,6 +950,7 @@ class TidalProfileMixes {
         }
       }
     });
+    this.playlistCache = null;
     return normalizeCreatedPlaylist(payload, safeTitle);
   }
 

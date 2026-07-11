@@ -167,6 +167,39 @@ test("small Taste Guided requests cap repeated collaborator artists", () => {
   assert.equal(fortyCatsCount, 1);
 });
 
+test("Explore count requests keep broad artist spread instead of repeating familiar anchors", () => {
+  const options = {
+    request: "Find 20 psychedelic cosmic hypnotic progressive house discoveries",
+    genres: "progressive house",
+    mood: "psychedelic cosmic hypnotic",
+    count: "20",
+    scoringMode: "explore"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const familiarRun = Array.from({ length: 8 }, (_, index) => candidate(index, {
+    artist: "Repeated Anchor",
+    title: `Known Pull ${index}`,
+    album: `Known Pull ${index}`,
+    score: 100 - index,
+    scoreBreakdown: {
+      artistDiversityAdjustment: -12,
+      artistDiversityReasons: ["Repeated Anchor surfaced 12 prior tracks"]
+    }
+  }));
+  const freshRun = Array.from({ length: 25 }, (_, index) => candidate(100 + index, {
+    artist: `Fresh Artist ${index}`,
+    title: `Fresh Signal ${index}`,
+    album: `Fresh Signal ${index}`,
+    score: 88 - index
+  }));
+
+  const selected = selectDiscoveryLaneCandidates([...familiarRun, ...freshRun], 20, options, profile);
+
+  assert.equal(selected.tracks.length, 20);
+  assert.equal(selected.tracks.filter((track) => track.artist === "Repeated Anchor").length, 1);
+  assert.equal(new Set(selected.tracks.map((track) => track.artist)).size, 20);
+});
+
 test("lane quotas backfill from core when exploratory buckets are unavailable", () => {
   const options = {
     request: "Find 5 electronic discoveries",

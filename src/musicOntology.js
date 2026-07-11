@@ -51,6 +51,7 @@ function entry(name, family, aliases = []) {
 const GENRE_ENTRIES = [
   ...[
     "House",
+    "Acid House",
     "Deep House",
     "Progressive House",
     "Organic House",
@@ -278,12 +279,12 @@ const GENRE_ENTRIES = [
 ];
 
 const VIBE_ENTRIES = [
-  ["Hypnotic", ["trippy", "mesmerizing", "mesmeric"]],
+  ["Hypnotic", ["trippy", "mesmerizing", "mesmeric", "entrancing", "mantra-like", "mantra"]],
   ["Driving", ["drive", "road trip", "cruising", "forward motion"]],
   ["Rolling", ["roll", "rolling groove"]],
   ["Groovy", ["groove", "grooves"]],
   ["Funky", ["funky groove"]],
-  ["Psychedelic", ["psychedelic vibe", "trippy"]],
+  ["Psychedelic", ["psychedelic vibe", "trippy", "acidic", "mind-bending", "hallucinogenic"]],
   ["Atmospheric", ["wide", "airy"]],
   ["Emotional", ["emotive"]],
   ["Euphoric", ["euphoria"]],
@@ -295,8 +296,8 @@ const VIBE_ENTRIES = [
   ["Organic", ["earthy"]],
   ["Cinematic", ["film score", "soundtrack"]],
   ["Tribal", ["percussive", "ritual"]],
-  ["Spacey", ["spacy", "space music"]],
-  ["Cosmic", ["cosmos"]],
+  ["Spacey", ["spacy", "space music", "astral", "celestial", "interstellar"]],
+  ["Cosmic", ["cosmos", "astral", "celestial", "interstellar", "spacey"]],
   ["Minimal", ["stripped back", "minimalist"]],
   ["Aggressive", ["hard hitting", "intense"]],
   ["Peak-Time", ["peak time", "peaktime"]],
@@ -343,6 +344,7 @@ const CHILD_PARENT_REMOVALS = [
   ["tech house", ["house", "deep house", "melodic house", "organic house"]],
   ["deep tech house", ["house", "deep house", "tech house"]],
   ["progressive tech house", ["house", "tech house", "progressive house", "progressive"]],
+  ["acid house", ["house", "deep house", "tech house", "minimal house", "club house"]],
   ["progressive house", ["house", "progressive"]],
   ["organic progressive house", ["house", "organic house", "progressive house", "progressive"]],
   ["melodic house", ["house"]],

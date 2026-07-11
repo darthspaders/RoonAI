@@ -4,7 +4,9 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   buildDiscoveryProfile,
-  effectiveDiscoveryCount
+  effectiveDiscoveryCount,
+  requestRequiresFreshArtists,
+  requestRequiresStrictFreshArtists
 } = require("../src/discoveryEngine");
 
 function profileFor(request, extra = {}) {
@@ -61,6 +63,18 @@ test("tech house does not collapse into generic house", () => {
   assert.equal(profile.isProgressiveTarget, false);
 });
 
+test("acid house does not collapse into generic house", () => {
+  const profile = profileFor("Find music that sounds like acid house", {
+    genres: "Acid house"
+  });
+
+  assert.equal(hasTerm(profile, "acid house"), true);
+  assert.equal(lacksTerm(profile, "house"), true);
+  assert.equal(profile.requestedArtists.includes("acid house"), false);
+  assert.equal(profile.isProgressiveTarget, false);
+  assert.equal(profile.intent.requestedGenre, "acid house");
+});
+
 test("melodic techno does not collapse into generic techno", () => {
   const profile = profileFor("Find melodic techno");
 
@@ -98,6 +112,23 @@ test("pure search treats lby as by when extracting requested artist", () => {
   assert.equal(profile.tasteApplication, "not at all");
 });
 
+test("style phrases after sounds like are not extracted as artists", () => {
+  const profile = profileFor("Find music that sounds like Deep progressive house with organic textures", {
+    genres: "progressive house",
+    mood: "cosmic hypnotic"
+  });
+
+  assert.equal(profile.requestedArtists.includes("Deep progressive house"), false);
+  assert.equal(profile.seedArtists.includes("Deep progressive house"), false);
+  assert.equal(profile.targetGenres.includes("progressive house"), true);
+  assert.equal(profile.vibeTerms.includes("hypnotic"), true);
+
+  const artistProfile = profileFor("Find tracks like Deep Dish", {
+    genres: "progressive house"
+  });
+  assert.equal(artistProfile.requestedArtists.includes("Deep Dish"), true);
+});
+
 test("explicit small track counts stay exact in Taste Guided", () => {
   assert.equal(effectiveDiscoveryCount({
     request: "find 5 progressive house tracks this year",
@@ -113,4 +144,25 @@ test("explicit small track counts stay exact in Taste Guided", () => {
     years: "2026",
     scoringMode: "taste-guided"
   }), 5);
+});
+
+test("fresh artist wording is treated as artist-level novelty", () => {
+  assert.equal(requestRequiresFreshArtists({
+    request: "Find artist you have not recommended before"
+  }), true);
+  assert.equal(requestRequiresFreshArtists({
+    request: "Find five tracks from artists it has not recommended yet"
+  }), true);
+  assert.equal(requestRequiresFreshArtists({
+    request: "Find five new artists in progressive house"
+  }), true);
+  assert.equal(requestRequiresFreshArtists({
+    request: "Find five tracks and include previously suggested artists"
+  }), false);
+  assert.equal(requestRequiresStrictFreshArtists({
+    request: "Find five tracks from strictly only artists you have not recommended before"
+  }), true);
+  assert.equal(requestRequiresStrictFreshArtists({
+    request: "Find five tracks from artists you have not recommended before"
+  }), false);
 });

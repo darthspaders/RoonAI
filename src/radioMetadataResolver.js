@@ -43,6 +43,14 @@ function isStationText(value) {
   return /\b(?:di\.?fm|radio|house|trance|progressive|channel|station|live|insomniac|mpact|impact|bangers|psy)\b|\|/i.test(cleanText(value));
 }
 
+function looksLikeRadioProgramTitle(value) {
+  const text = cleanText(value);
+  if (!text) return false;
+  const monthAndYear = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4}\b/i;
+  return monthAndYear.test(text) ||
+    /\b(?:episode|showcase|takeover|podcast|radio\s+show|guest\s+mix|dj\s+set|live\s+set|monthly\s+mix|weekly\s+mix|mixed\s+by|with\s+[a-z0-9][\w .'-]{2,})\b/i.test(text);
+}
+
 function firstText(...values) {
   for (const value of values) {
     const text = cleanText(value);
@@ -257,6 +265,41 @@ function titleKeysMatch(leftKeys, rightKeys) {
   return leftKeys.some((left) => rightKeys.some((right) => left === right || left.includes(right) || right.includes(left)));
 }
 
+function boundedEditDistance(left, right, maxDistance) {
+  if (left === right) return 0;
+  if (Math.abs(left.length - right.length) > maxDistance) return maxDistance + 1;
+
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    const current = [i];
+    let rowMin = current[0];
+    for (let j = 1; j <= right.length; j += 1) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + cost
+      );
+      rowMin = Math.min(rowMin, current[j]);
+    }
+    if (rowMin > maxDistance) return maxDistance + 1;
+    previous = current;
+  }
+  return previous[right.length];
+}
+
+function artistNameLooksClose(left, right) {
+  if (left === right) return true;
+  if (left.length >= 4 && right.length >= 4 && (left.includes(right) || right.includes(left))) return true;
+  const maxLength = Math.max(left.length, right.length);
+  const minLength = Math.min(left.length, right.length);
+  if (minLength < 6) return false;
+  const maxDistance = maxLength >= 10 ? 2 : 1;
+  if (Math.abs(left.length - right.length) > maxDistance) return false;
+  if (left.slice(0, 3) !== right.slice(0, 3)) return false;
+  return boundedEditDistance(left, right, maxDistance) <= maxDistance;
+}
+
 function hasArtistForLookup(track = {}) {
   return getArtistLookupAliases(track.artist).some((artist) => normalizeDiscogsMatchText(artist));
 }
@@ -266,10 +309,7 @@ function artistAliasesMatch(expectedArtist, resultArtistText) {
   const actual = getArtistLookupAliases(resultArtistText).map(normalizeDiscogsMatchText).filter(Boolean);
   if (!expected.length) return true;
   if (!actual.length) return false;
-  return expected.some((left) => actual.some((right) => (
-    left === right ||
-    (left.length >= 4 && right.length >= 4 && (left.includes(right) || right.includes(left)))
-  )));
+  return expected.some((left) => actual.some((right) => artistNameLooksClose(left, right)));
 }
 
 function isDiscogsTrackMatch(result, track = {}) {
@@ -705,6 +745,11 @@ class RadioMetadataResolver extends EventEmitter {
     presence.metadata.radioArtworkResolved = false;
     this.applyParsedTrack(presence, track);
 
+    if (looksLikeRadioProgramTitle(track.title)) {
+      presence.metadata.radioProgram = true;
+      return false;
+    }
+
     const cached = this.cache.get(key);
     if (cached?.status === "found") {
       this.applyResolvedMetadata(presence, cached.value);
@@ -1109,6 +1154,7 @@ class RadioMetadataResolver extends EventEmitter {
     const detailJson = await this.fetchTidalSearchJson(detailUrl.toString());
     const result = chooseTidalTrack(detailJson, track);
     if (result) return result;
+    if (hasArtistForLookup(track)) return null;
 
     const trackResource = findTidalIncluded(detailJson, { id: trackId, type: "tracks" }, "tracks") || detailJson?.data || candidate;
     return this.lookupTidalAlbumCoverArt(trackResource, detailJson, track, getTidalTrackUrl(candidate));

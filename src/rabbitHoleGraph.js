@@ -151,10 +151,9 @@ function feedbackWeight(feedback, weights = {}) {
   return weights.default || 0;
 }
 
-function collectLocalTracks({ discoveryHistory, trackMemory, savedPlaylist, tasteProfile } = {}) {
+function collectLocalTracks({ discoveryHistory, trackMemory, tasteProfile } = {}) {
   const tracks = [];
   for (const entry of trackMemory?.entries?.values?.() || []) tracks.push(cleanTrack({ ...entry, source: "track memory" }));
-  for (const entry of savedPlaylist?.list?.() || []) tracks.push(cleanTrack({ ...entry, source: "playlist candidates" }));
   for (const entry of discoveryHistory?.entries?.values?.() || []) tracks.push(cleanTrack({ ...entry, source: "discovery history" }));
 
   const profile = tasteProfile?.read?.() || {};
@@ -442,7 +441,6 @@ class RabbitHoleGraph {
       tidal,
       discoveryHistory,
       trackMemory,
-      savedPlaylist,
       tasteProfile,
       contextTracks = []
     } = deps;
@@ -450,7 +448,7 @@ class RabbitHoleGraph {
     const primaryArtists = splitArtists(seed.artist);
     const primaryArtist = primaryArtists[0] || seed.artist || "Unknown artist";
     const seedLabels = [labelFor(seed)].filter(Boolean);
-    const localTracks = collectLocalTracks({ discoveryHistory, trackMemory, savedPlaylist, tasteProfile });
+    const localTracks = collectLocalTracks({ discoveryHistory, trackMemory, tasteProfile });
     const queueTracks = collectContextTracks(contextTracks);
     const artistCatalog = (await Promise.all(primaryArtists.slice(0, 2).map((artist) => this.tidalArtistCatalog(artist, tidal)))).flat();
     const allTracks = uniqueBy([seed, ...artistCatalog, ...queueTracks, ...localTracks], (item) => item.key || trackKey(item));

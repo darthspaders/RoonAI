@@ -352,6 +352,7 @@ h2 {
 #connection,
 #phoneAccess,
 #nowSubtitle,
+#nowSourceFormat,
 .muted {
   color: var(--muted);
 }
@@ -497,6 +498,29 @@ select:focus option,
   align-items: center;
 }
 
+.nowSourceFormat {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 24px;
+  margin: 8px 0 0;
+  padding: 4px 10px;
+  overflow: hidden;
+  border: 1px solid rgba(143, 240, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(12, 5, 24, 0.52);
+  box-shadow: var(--inner-light), 0 0 18px rgba(143, 240, 255, 0.08);
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nowSourceFormat[hidden] {
+  display: none;
+}
+
 .artStack {
   display: grid;
   gap: 10px;
@@ -558,25 +582,15 @@ select:focus option,
 .nowDiscoveryActions {
   grid-area: actions;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
   gap: 10px;
   width: 100%;
 }
 
-.nowDiscoveryActions button,
-.nowCandidateAddGroup > button {
+.nowDiscoveryActions button {
   width: 100%;
   min-width: 0;
-}
-
-.nowCandidateAddGroup {
-  display: inline-grid;
-  align-items: center;
-  gap: 8px;
-  position: relative;
-  width: 100%;
-  max-width: 100%;
 }
 
 .nowTidalPlaylistGroup {
@@ -594,42 +608,28 @@ select:focus option,
   min-height: 38px;
 }
 
+.nowTidalPlaylistCreate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  width: min(100%, 620px);
+}
+
+.nowTidalPlaylistCreate input {
+  min-width: 0;
+  min-height: 38px;
+}
+
+.nowTidalPlaylistCreate button {
+  min-height: 38px;
+  white-space: nowrap;
+}
+
 .nowTidalPlaylistStatus {
   min-height: 18px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.25;
-}
-
-.candidateListMenu {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  z-index: 70;
-  display: grid;
-  gap: 8px;
-  width: max-content;
-  min-width: min(260px, 86vw);
-  max-width: min(340px, 88vw);
-  padding: 10px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background:
-    linear-gradient(145deg, rgba(7, 3, 16, 0.98), rgba(3, 1, 8, 0.97)) padding-box,
-    linear-gradient(135deg, rgba(217, 179, 255, 0.42), rgba(255, 115, 216, 0.22), rgba(143, 240, 255, 0.16)) border-box;
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.58), inset 0 1px 0 rgba(244, 232, 255, 0.08);
-}
-
-.candidateListMenu[hidden] {
-  display: none;
-}
-
-.candidateListMenu button {
-  width: 100%;
-  min-height: 38px;
-  justify-content: flex-start;
-  text-align: left;
-  white-space: normal;
 }
 
 .nowDiscoveryBadge {
@@ -1001,9 +1001,107 @@ textarea {
   padding: 0 10px;
 }
 
+.standbyPanel {
+  display: grid;
+  gap: 12px;
+}
+
+.standbyHead {
+  align-items: flex-start;
+}
+
+.standbyActions {
+  gap: 8px;
+}
+
+.standbyActions button {
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.standbyTracks {
+  min-height: 36px;
+}
+
+.standbyTracks ol {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.standbyTrack {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(217, 179, 255, 0.13);
+  border-radius: 6px;
+  background: rgba(6, 2, 13, 0.5);
+}
+
+.standbyIndex {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: rgba(238, 228, 252, 0.76);
+  background: rgba(217, 179, 255, 0.08);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.standbyMain {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.standbyMain strong,
+.standbyMain small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.standbyMain strong {
+  color: #fffaff;
+  font-size: 14px;
+}
+
+.standbyMain small {
+  color: rgba(238, 228, 252, 0.68);
+  font-size: 12px;
+}
+
+.standbyScore .scoreBadge {
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 @media (max-width: 699px) {
   .playlistSeedSources {
     grid-template-columns: 1fr;
+  }
+
+  .standbyTracks ol {
+    grid-template-columns: 1fr;
+  }
+
+  .standbyTrack {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .standbyScore {
+    grid-column: 2;
   }
 }
 
@@ -1201,28 +1299,6 @@ input {
   margin-top: 20px;
 }
 
-.saved {
-  margin-top: 20px;
-}
-
-.savedListTools {
-  display: grid;
-  grid-template-columns: minmax(180px, 1.1fr) minmax(180px, 1fr) auto auto auto;
-  align-items: end;
-  gap: 12px;
-  margin: 14px 0 10px;
-}
-
-.savedListTools select {
-  width: 100%;
-  min-width: 0;
-}
-
-.savedListTools button {
-  min-height: 38px;
-  white-space: nowrap;
-}
-
 .reportHero {
   display: flex;
   align-items: flex-start;
@@ -1288,12 +1364,17 @@ input {
   min-height: 260px;
 }
 
-.tidalMixHero {
+.tidalMixHero,
+.radioHero {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 20px;
   flex-wrap: wrap;
+}
+
+.radioHero .tasteNarrative {
+  max-width: 720px;
 }
 
 .tidalImportForm {
@@ -1348,6 +1429,183 @@ input {
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 14px;
   margin-top: 14px;
+}
+
+.radioGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.radioStation {
+  position: relative;
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  grid-template-areas:
+    "art text"
+    "art actions";
+  align-items: center;
+  gap: 10px 14px;
+  min-height: 108px;
+  padding: 14px;
+  border: 1px solid rgba(217, 179, 255, 0.16);
+  border-radius: 8px;
+  background: linear-gradient(145deg, rgba(20, 9, 38, 0.74), rgba(9, 4, 18, 0.88));
+  box-shadow: var(--inner-light), 0 14px 32px rgba(2, 0, 8, 0.28);
+  user-select: none;
+}
+
+.radioStation:hover,
+.radioStation:focus-within {
+  border-color: rgba(217, 179, 255, 0.34);
+  background: linear-gradient(145deg, rgba(27, 12, 50, 0.82), rgba(11, 5, 22, 0.92));
+}
+
+.radioStation.isDragging {
+  opacity: 0.34;
+}
+
+.radioStation.isMoveSelected {
+  border-color: rgba(143, 240, 255, 0.68);
+  background:
+    linear-gradient(145deg, rgba(20, 14, 54, 0.92), rgba(13, 6, 28, 0.94)) padding-box,
+    linear-gradient(135deg, rgba(143, 240, 255, 0.62), rgba(255, 115, 216, 0.32), rgba(217, 179, 255, 0.52)) border-box;
+  box-shadow: var(--inner-light), 0 0 0 1px rgba(143, 240, 255, 0.18), 0 18px 42px rgba(2, 0, 8, 0.42);
+}
+
+.radioStation.isDropBefore::before,
+.radioStation.isDropAfter::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(143, 240, 255, 0.95), rgba(255, 115, 216, 0.9), rgba(217, 179, 255, 0.95));
+  box-shadow: 0 0 18px rgba(217, 179, 255, 0.48);
+}
+
+.radioStation.isDropBefore::before {
+  top: -3px;
+}
+
+.radioStation.isDropAfter::after {
+  bottom: -3px;
+}
+
+.radioStationDragGhost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 5000;
+  pointer-events: none;
+  opacity: 0.9;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.56), 0 0 0 1px rgba(217, 179, 255, 0.34);
+}
+
+.radioDragActive {
+  cursor: grabbing;
+}
+
+.radioStationArt {
+  grid-area: art;
+  display: grid;
+  place-items: center;
+  width: 76px;
+  aspect-ratio: 1;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background-position: center;
+  background-size: cover;
+}
+
+.radioStationArtEmpty {
+  color: rgba(250, 246, 255, 0.72);
+  font-weight: 850;
+  background:
+    linear-gradient(135deg, rgba(143, 240, 255, 0.18), rgba(255, 115, 216, 0.12)),
+    url("/assets/rabbit-hole-fallback.jpg") center / cover;
+}
+
+.radioStationText {
+  grid-area: text;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.radioStationText h3 {
+  margin: 0;
+  color: #fff;
+  font-size: 17px;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.radioStationText p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.radioStationActions {
+  grid-area: actions;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.radioStationActions button {
+  min-width: 82px;
+  min-height: 34px;
+  padding: 0 14px;
+}
+
+.radioStationActions .radioStationDragButton {
+  min-width: 68px;
+  cursor: grab;
+  color: rgba(238, 228, 252, 0.82);
+  touch-action: none;
+}
+
+.radioStation.isMoveSelected .radioStationDragButton {
+  border-color: rgba(143, 240, 255, 0.38);
+  color: #fff;
+}
+
+.radioStationActions .radioStationDragButton:active {
+  cursor: grabbing;
+}
+
+@media (max-width: 620px) {
+  .radioGrid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .radioStation {
+    grid-template-columns: 64px minmax(0, 1fr);
+    min-height: 92px;
+    padding: 12px;
+  }
+
+  .radioStationArt {
+    width: 64px;
+  }
+
+  .radioStationText h3 {
+    font-size: 16px;
+  }
 }
 
 .tidalMixCard {
@@ -1540,6 +1798,19 @@ input {
   gap: 10px;
   color: rgba(238, 228, 252, 0.72);
   font-size: 13px;
+}
+
+.signalItem {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.signalGroup small {
+  color: rgba(238, 228, 252, 0.52);
+  font-size: 11px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .signalGroup em {
@@ -1983,26 +2254,6 @@ input {
   flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
-}
-
-.candidateSaveGroup,
-.savedMoveGroup {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 100%;
-}
-
-.candidateSaveGroup select,
-.savedMoveGroup select {
-  width: min(190px, 42vw);
-  min-width: 130px;
-  min-height: 40px;
-}
-
-.candidateSaveGroup button,
-.savedMoveGroup button {
-  min-width: 74px;
 }
 
 .volumeButtons {
@@ -2971,11 +3222,11 @@ button:disabled:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .nowCandidateAddGroup {
-    width: 100%;
+  .nowTidalPlaylistGroup {
+    grid-template-columns: 1fr;
   }
 
-  .nowTidalPlaylistGroup {
+  .nowTidalPlaylistCreate {
     grid-template-columns: 1fr;
   }
 
@@ -3024,17 +3275,6 @@ button:disabled:hover {
     gap: 8px;
   }
 
-  .candidateSaveGroup,
-  .savedMoveGroup {
-    width: 100%;
-  }
-
-  .candidateSaveGroup select,
-  .savedMoveGroup select {
-    flex: 1 1 160px;
-    width: auto;
-  }
-
   .trackActions button,
   .trackActions .buttonLink {
     min-height: 38px;
@@ -3043,8 +3283,7 @@ button:disabled:hover {
 }
 
 /* Readability pass: keep the violet identity, but make dense result data solid and legible. */
-.results.panel,
-.saved.panel {
+.results.panel {
   background:
     linear-gradient(145deg, rgba(12, 6, 23, 0.96), rgba(18, 8, 31, 0.94)) padding-box,
     linear-gradient(135deg, rgba(196, 153, 255, 0.38), rgba(255, 115, 216, 0.2), rgba(143, 240, 255, 0.16)) border-box;
@@ -3167,13 +3406,8 @@ button:disabled:hover {
     border-radius: 10px;
   }
 
-  .results.panel,
-  .saved.panel {
+  .results.panel {
     padding: 12px 10px;
-  }
-
-  .savedListTools {
-    grid-template-columns: 1fr;
   }
 
   .tracks {
@@ -3250,18 +3484,6 @@ button:disabled:hover {
     width: 100%;
   }
 
-  .candidateSaveGroup,
-  .savedMoveGroup {
-    width: 100%;
-  }
-
-  .candidateSaveGroup select,
-  .savedMoveGroup select {
-    flex: 1 1 160px;
-    width: auto;
-    font-size: 16px;
-  }
-
   .trackActions button,
   .trackActions .buttonLink {
     min-height: 44px;
@@ -3322,8 +3544,7 @@ body::after {
 .topbar,
 .topControls,
 .viewTabs,
-.results.panel,
-.saved.panel {
+.results.panel {
   background:
     linear-gradient(145deg, rgba(7, 3, 16, 0.98), rgba(3, 1, 8, 0.96)) padding-box,
     var(--holo-border) border-box;
@@ -3396,6 +3617,7 @@ label,
 #connection,
 #phoneAccess,
 #nowSubtitle,
+#nowSourceFormat,
 .muted,
 .track span,
 .trackMeta,
@@ -3712,7 +3934,7 @@ a,
   .player > .nowDiscoveryTools .nowDiscoveryActions {
     grid-area: actions;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     justify-content: stretch;
     width: 100%;
   }
@@ -3722,7 +3944,6 @@ a,
     width: 100%;
   }
 
-  .player > .nowDiscoveryTools .nowCandidateAddGroup,
   .player > .nowDiscoveryTools .nowTidalPlaylistGroup {
     min-width: 0;
   }
@@ -3958,6 +4179,12 @@ body.playerMaximized {
   line-height: 1.12;
 }
 
+.player.isMaximized .nowSourceFormat {
+  min-height: clamp(26px, 3.3vw, 34px);
+  padding: 5px 12px;
+  font-size: clamp(13px, 1.8vw, 18px);
+}
+
 .player.isMaximized > .nowDiscoveryTools {
   grid-area: tools;
   display: grid;
@@ -4077,10 +4304,6 @@ body.playerMaximized {
     grid-area: playlist;
   }
 
-  .player.isMaximized .nowCandidateAddGroup {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 620px) {
@@ -4110,15 +4333,7 @@ body.playerMaximized {
     width: 100%;
   }
 
-  .player.isMaximized .nowCandidateAddGroup {
-    grid-column: 1 / -1;
-    display: grid;
-    grid-template-columns: 1fr;
-    width: 100%;
-  }
-
-  .player.isMaximized .feedbackButton.never,
-  .player.isMaximized .nowDiscoveryActions #openRabbitHole {
+  .player.isMaximized .feedbackButton.never {
     grid-column: 1 / -1;
   }
 }
@@ -4369,14 +4584,12 @@ body.playerMaximized {
   .nowDiscoveryActions {
     grid-area: actions;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
     width: 100%;
   }
 
   .nowDiscoveryActions button,
-  .nowCandidateAddGroup,
-  .nowCandidateAddGroup > button,
   .nowTidalPlaylistGroup,
   .feedbackButtons button,
   .controls button {
@@ -4420,7 +4633,12 @@ body.playerMaximized {
   padding-right: 0;
 }
 
-.player.isMaximized .nowDiscoveryActions,
+.player.isMaximized .nowDiscoveryActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+}
+
 .player.isMaximized .controls {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4428,16 +4646,10 @@ body.playerMaximized {
 }
 
 .player.isMaximized .nowDiscoveryActions button,
-.player.isMaximized .nowCandidateAddGroup,
-.player.isMaximized .nowCandidateAddGroup > button,
 .player.isMaximized .controls button,
 .player.isMaximized .feedbackButtons button {
   width: 100%;
   min-width: 0;
-}
-
-.player.isMaximized .nowCandidateAddGroup {
-  display: grid;
 }
 
 .player.isFullWindow,
@@ -4512,6 +4724,14 @@ body.playerFullWindow {
     font-size: clamp(16px, 3vh, 26px);
   }
 
+  .player.isMaximized .nowSourceFormat,
+  .player.isFullWindow .nowSourceFormat,
+  .player:fullscreen .nowSourceFormat,
+  .player:-webkit-full-screen .nowSourceFormat {
+    min-height: clamp(22px, 4vh, 30px);
+    font-size: clamp(12px, 2.1vh, 16px);
+  }
+
   .player.isMaximized .feedbackButtons,
   .player.isFullWindow .feedbackButtons,
   .player:fullscreen .feedbackButtons,
@@ -4575,6 +4795,10 @@ body.playerFullWindow {
     padding-right: 0;
     padding-top: 26px;
   }
+
+  .player.isMaximized > .now {
+    padding-top: 10px;
+  }
 }
 
 /* Full-window player hierarchy: score first, ratings second, actions evenly spaced. */
@@ -4636,16 +4860,6 @@ body.playerFullWindow {
     width: 100%;
   }
 
-  .player.isMaximized .nowCandidateAddGroup,
-  .player.isFullWindow .nowCandidateAddGroup,
-  .player:fullscreen .nowCandidateAddGroup,
-  .player:-webkit-full-screen .nowCandidateAddGroup {
-    grid-column: auto;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    width: 100%;
-  }
-
   .player.isMaximized .nowTidalPlaylistGroup,
   .player.isFullWindow .nowTidalPlaylistGroup,
   .player:fullscreen .nowTidalPlaylistGroup,
@@ -4658,11 +4872,7 @@ body.playerFullWindow {
   .player.isMaximized .nowDiscoveryActions button,
   .player.isFullWindow .nowDiscoveryActions button,
   .player:fullscreen .nowDiscoveryActions button,
-  .player:-webkit-full-screen .nowDiscoveryActions button,
-  .player.isMaximized .nowCandidateAddGroup > button,
-  .player.isFullWindow .nowCandidateAddGroup > button,
-  .player:fullscreen .nowCandidateAddGroup > button,
-  .player:-webkit-full-screen .nowCandidateAddGroup > button {
+  .player:-webkit-full-screen .nowDiscoveryActions button {
     width: 100%;
     min-width: 0;
   }
@@ -4775,6 +4985,15 @@ body.playerFullWindow {
     line-height: 1.08;
   }
 
+  .player.isFullWindow .nowSourceFormat,
+  .player:fullscreen .nowSourceFormat,
+  .player:-webkit-full-screen .nowSourceFormat {
+    min-height: 24px;
+    margin-top: 8px;
+    padding: 4px 9px;
+    font-size: 12px;
+  }
+
   .player.isFullWindow > .nowDiscoveryTools,
   .player:fullscreen > .nowDiscoveryTools,
   .player:-webkit-full-screen > .nowDiscoveryTools {
@@ -4843,9 +5062,6 @@ body.playerFullWindow {
     grid-template-columns: 1fr;
   }
 
-  .player.isFullWindow .nowCandidateAddGroup,
-  .player:fullscreen .nowCandidateAddGroup,
-  .player:-webkit-full-screen .nowCandidateAddGroup,
   .player.isFullWindow .nowDiscoveryActions #openRabbitHole,
   .player:fullscreen .nowDiscoveryActions #openRabbitHole,
   .player:-webkit-full-screen .nowDiscoveryActions #openRabbitHole {
@@ -4854,10 +5070,7 @@ body.playerFullWindow {
 
   .player.isFullWindow .nowDiscoveryActions button,
   .player:fullscreen .nowDiscoveryActions button,
-  .player:-webkit-full-screen .nowDiscoveryActions button,
-  .player.isFullWindow .nowCandidateAddGroup > button,
-  .player:fullscreen .nowCandidateAddGroup > button,
-  .player:-webkit-full-screen .nowCandidateAddGroup > button {
+  .player:-webkit-full-screen .nowDiscoveryActions button {
     width: 100%;
     min-height: 42px;
     min-width: 0;

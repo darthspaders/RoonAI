@@ -7,10 +7,16 @@ const path = require("node:path");
 const test = require("node:test");
 const { buildDiscoveryProfile, scoreBreakdownFor } = require("../src/discoveryEngine");
 const { TasteProfile, feedbackCalibrationEntry, rebuildCalibration } = require("../src/tasteProfile");
+const { TrackMemory } = require("../src/trackMemory");
 
 function tempTasteFile() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-calibration-"));
   return path.join(dir, "taste-profile.json");
+}
+
+function tempMemoryFile() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rabbit-memory-"));
+  return path.join(dir, "track-memory.json");
 }
 
 test("feedback calibration marks wrong-genre model approvals as model misses without taste penalty", () => {
@@ -195,4 +201,135 @@ test("discovery scoring applies calibration as a separate soft adjustment", () =
   assert.ok(scored.calibrationAdjustment < 0);
   assert.ok(scored.total < base.total);
   assert.equal(scored.tasteAdjustment, base.tasteAdjustment);
+});
+
+test("liked long-shot feedback creates a future serendipity boost", () => {
+  const taste = new TasteProfile(tempTasteFile());
+  const result = taste.record({
+    artist: "Ezequiel Arias",
+    title: "You (Extended Mix)",
+    label: "Anjunadeep",
+    score: 52,
+    discoverySource: "Similar artist branch",
+    discoveryLane: "branch",
+    tidalUrl: "https://tidal.com/browse/track/liked-long-shot"
+  }, "love");
+  const profile = taste.read();
+  const adjustment = taste.serendipityAdjustmentFor({
+    artist: "Folgar",
+    title: "Promising Detour",
+    label: "Anjunadeep",
+    discoverySource: "Similar artist branch",
+    discoveryLane: "branch"
+  });
+
+  assert.equal(result.feedback.calibration.issue, "liked_longshot");
+  assert.equal(profile.calibration.likedLongShots, 1);
+  assert.equal(profile.calibration.recent[0].issue, "liked_longshot");
+  assert.ok(adjustment.value > 0);
+  assert.match(adjustment.reasons.join(" "), /liked long shots/i);
+});
+
+test("discovery scoring lifts verified sparse-metadata long shots", () => {
+  const options = {
+    request: "Find underground progressive house long shots",
+    genres: "progressive house",
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const candidate = {
+    artist: "Ezequiel Arias / Folgar",
+    title: "You (Extended Mix)",
+    album: "You",
+    durationMs: 378000,
+    query: "underground progressive house Ezequiel Arias Folgar",
+    discoverySource: "Similar artist branch",
+    discoveryLane: "branch",
+    tidalUrl: "https://tidal.com/browse/track/serendipity-candidate",
+    verificationSource: "tidal"
+  };
+  const scored = scoreBreakdownFor(candidate, options, null, profile);
+  const categoryTotal = scored.freshness + scored.labelMatch + scored.artistMatch + scored.lengthPreference + scored.genreMatch;
+
+  assert.ok(scored.serendipityAdjustment > 0);
+  assert.match(scored.serendipityReasons.join(" "), /long shot/i);
+  assert.equal(scored.total, categoryTotal + scored.tasteAdjustment + scored.calibrationAdjustment + scored.serendipityAdjustment);
+});
+
+test("pure search does not apply serendipity scoring", () => {
+  const options = {
+    request: "Find tracks by Ezequiel Arias",
+    genres: "progressive house",
+    scoringMode: "pure"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const scored = scoreBreakdownFor({
+    artist: "Ezequiel Arias",
+    title: "You (Extended Mix)",
+    album: "You",
+    durationMs: 378000,
+    query: "Ezequiel Arias You Extended Mix",
+    discoverySource: "Similar artist branch",
+    discoveryLane: "branch",
+    tidalUrl: "https://tidal.com/browse/track/pure-search"
+  }, options, null, profile);
+
+  assert.equal(scored.serendipityAdjustment, 0);
+});
+
+test("live radio feedback is remembered as taste signal without discovery score", () => {
+  const taste = new TasteProfile(tempTasteFile());
+  const result = taste.record({
+    artist: "Ancient Analog",
+    title: "Medicine Drum",
+    album: "Songs From A Vortex Named WEHO",
+    sourceType: "radio",
+    isRadio: true,
+    isLiveRadio: true,
+    discoverySource: "Live radio",
+    discoveryLane: "radio"
+  }, "love");
+  const profile = taste.read();
+  const feedback = Object.values(profile.feedback)[0];
+
+  assert.equal(result.feedback.rating, "love");
+  assert.equal(feedback.score, null);
+  assert.equal(feedback.tasteScore, 3);
+  assert.equal(feedback.sourceType, "radio");
+  assert.equal(feedback.isLiveRadio, true);
+  assert.equal(feedback.discoverySource, "Live radio");
+  assert.equal(feedback.discoveryLane, "radio");
+  assert.equal(profile.artists["ancient analog"].score, 3);
+  assert.equal(profile.calibration.sources[0].source, "Live radio");
+  assert.equal(profile.calibration.lanes[0].lane, "radio");
+});
+
+test("track memory preserves live radio feedback metadata and taste score", () => {
+  const memory = new TrackMemory({ file: tempMemoryFile() });
+  memory.updateFeedback({
+    artist: "Ancient Analog",
+    title: "Medicine Drum",
+    album: "Songs From A Vortex Named WEHO",
+    sourceType: "radio",
+    isRadio: true,
+    isLiveRadio: true,
+    discoverySource: "Live radio",
+    discoveryLane: "radio",
+    playbackSource: {
+      display: "MP3 44.1kHz 2ch 320kbps"
+    }
+  }, "skip");
+  const entry = memory.find({
+    artist: "Ancient Analog",
+    title: "Medicine Drum"
+  });
+
+  assert.equal(entry.feedback, "skip");
+  assert.equal(entry.tasteScore, -1);
+  assert.equal(entry.sourceType, "radio");
+  assert.equal(entry.isRadio, true);
+  assert.equal(entry.isLiveRadio, true);
+  assert.equal(entry.discoverySource, "Live radio");
+  assert.equal(entry.discoveryLane, "radio");
+  assert.equal(entry.playbackSource.display, "MP3 44.1kHz 2ch 320kbps");
 });

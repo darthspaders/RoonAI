@@ -4,6 +4,173 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const { RoonClient } = require("../src/roonClient");
 
+test("Roon internet radio stations are listed from the radio hierarchy", async () => {
+  const roon = new RoonClient();
+  roon.transport = {};
+  roon.zones.set("zone-1", { zone_id: "zone-1", outputs: [{ output_id: "output-1" }] });
+  const browseCalls = [];
+  const loadCalls = [];
+  roon.browse = {
+    browse(payload, callback) {
+      browseCalls.push(payload);
+      callback(null, {});
+    },
+    load(payload, callback) {
+      loadCalls.push(payload);
+      callback(null, {
+        list: { title: "My Live Radio" },
+        items: [
+          { title: "My Live Radio", subtitle: "Saved stations", item_key: "my-live-radio", image_key: "folder-img", hint: "list" },
+          { title: "Progressive -DI.FM", subtitle: "Internet radio", item_key: "station-1", image_key: "img-1", hint: "action" },
+          { title: "Add Station", subtitle: "", item_key: "add", hint: "list" },
+          { title: "Play", subtitle: "", item_key: "action", hint: "action" }
+        ]
+      });
+    }
+  };
+
+  const result = await roon.listRadioStations("zone-1", { refresh: true });
+
+  assert.equal(result.title, "My Live Radio");
+  assert.equal(result.hierarchy, "internet_radio");
+  assert.equal(result.count, 2);
+  assert.equal(result.stationCount, 1);
+  assert.deepEqual(result.items[0], {
+    id: "my-live-radio",
+    title: "My Live Radio",
+    subtitle: "Saved stations",
+    imageKey: "folder-img",
+    hint: "list",
+    kind: "folder",
+    playable: false,
+    browseable: true
+  });
+  assert.deepEqual(result.stations[0], {
+    id: "station-1",
+    title: "Progressive -DI.FM",
+    subtitle: "Internet radio",
+    imageKey: "img-1",
+    hint: "action",
+    kind: "station",
+    playable: true,
+    browseable: false
+  });
+  assert.equal(result.items[1].kind, "station");
+  assert.equal(browseCalls[0].hierarchy, "internet_radio");
+  assert.equal(browseCalls[0].zone_or_output_id, "output-1");
+  assert.equal(browseCalls[0].refresh_list, undefined);
+  assert.equal(loadCalls[0].hierarchy, "internet_radio");
+});
+
+test("Roon radio listing falls back through general browse when direct radio is empty", async () => {
+  const roon = new RoonClient();
+  roon.transport = {};
+  roon.zones.set("zone-1", { zone_id: "zone-1", outputs: [{ output_id: "output-1" }] });
+  const browseCalls = [];
+  let openedRadioRoot = false;
+  roon.browse = {
+    browse(payload, callback) {
+      browseCalls.push(payload);
+      if (payload.hierarchy === "browse" && payload.item_key === "live-radio") openedRadioRoot = true;
+      callback(null, {});
+    },
+    load(payload, callback) {
+      if (payload.hierarchy === "internet_radio") {
+        callback(null, {
+          list: { title: "My Live Radio" },
+          items: []
+        });
+        return;
+      }
+      if (payload.hierarchy === "browse" && !openedRadioRoot) {
+        callback(null, {
+          list: { title: "Browse" },
+          items: [
+            { title: "Albums", subtitle: "", item_key: "albums", hint: "list" },
+            { title: "Live Radio", subtitle: "Internet radio", item_key: "live-radio", hint: "list" }
+          ]
+        });
+        return;
+      }
+      callback(null, {
+        list: { title: "Live Radio" },
+        items: [
+          { title: "Progressive -DI.FM", subtitle: "Internet radio", item_key: "station-1", image_key: "img-1", hint: "action_list" }
+        ]
+      });
+    }
+  };
+
+  const result = await roon.listRadioStations("zone-1");
+
+  assert.equal(result.hierarchy, "browse");
+  assert.equal(result.title, "Live Radio");
+  assert.equal(result.itemKey, "live-radio");
+  assert.equal(result.count, 1);
+  assert.equal(result.stationCount, 1);
+  assert.equal(result.items[0].playable, true);
+  assert.equal(browseCalls[0].hierarchy, "internet_radio");
+  assert.equal(browseCalls[1].hierarchy, "browse");
+  assert.equal(browseCalls[2].item_key, "live-radio");
+});
+
+test("Roon internet radio station play selects the exposed play action", async () => {
+  const roon = new RoonClient();
+  roon.transport = {};
+  roon.radioSession = "radio-session";
+  roon.zones.set("zone-1", { zone_id: "zone-1", outputs: [{ output_id: "output-1" }] });
+  const browseCalls = [];
+  roon.browse = {
+    browse(payload, callback) {
+      browseCalls.push(payload);
+      callback(null, browseCalls.length === 1 ? { action: "list" } : {});
+    },
+    load(_payload, callback) {
+      callback(null, {
+        items: [
+          { title: "Play", subtitle: "", item_key: "play-station", hint: "action" }
+        ]
+      });
+    }
+  };
+
+  const result = await roon.playRadioStation("station-1", "zone-1", { title: "Progressive -DI.FM" });
+
+  assert.equal(result.played, true);
+  assert.equal(result.action, "Play");
+  assert.equal(browseCalls[0].item_key, "station-1");
+  assert.equal(browseCalls[0].hierarchy, "internet_radio");
+  assert.equal(browseCalls[1].item_key, "play-station");
+  assert.equal(browseCalls[1].zone_or_output_id, "output-1");
+});
+
+test("Roon internet radio station action rows can play directly", async () => {
+  const roon = new RoonClient();
+  roon.transport = {};
+  roon.radioSession = "radio-session";
+  roon.zones.set("zone-1", { zone_id: "zone-1", outputs: [{ output_id: "output-1" }] });
+  let loadCalled = false;
+  const browseCalls = [];
+  roon.browse = {
+    browse(payload, callback) {
+      browseCalls.push(payload);
+      callback(null, { action: "none" });
+    },
+    load(_payload, callback) {
+      loadCalled = true;
+      callback(null, { items: [] });
+    }
+  };
+
+  const result = await roon.playRadioStation("station-1", "zone-1", { title: "Progressive -DI.FM" });
+
+  assert.equal(result.played, true);
+  assert.equal(result.action, "Play station");
+  assert.equal(loadCalled, false);
+  assert.equal(browseCalls[0].item_key, "station-1");
+  assert.equal(browseCalls[0].zone_or_output_id, "output-1");
+});
+
 test("Roon artist-anchor queries do not match title-only collisions", async () => {
   const roon = new RoonClient();
   roon.transport = {};
@@ -528,4 +695,619 @@ test("Roon queue resolver tries title-first query after artist-first collision",
     "Kamilo Sanclemente No Regrets",
     "No Regrets Kamilo Sanclemente"
   ]);
+});
+
+test("Roon queue resolver drills into matching release when track search has title collision", async () => {
+  const roon = new RoonClient();
+  roon.transport = {};
+  roon.zones.set("zone-1", { zone_id: "zone-1" });
+  const sessions = new Map();
+
+  function stateFor(payload) {
+    const session = payload.multi_session_key;
+    const state = sessions.get(session) || {};
+    sessions.set(session, state);
+    return state;
+  }
+
+  roon.browse = {
+    browse(payload, callback) {
+      const state = stateFor(payload);
+      if (payload.input) {
+        state.query = payload.input;
+        state.page = "root";
+      } else if (payload.item_key === "tracks") {
+        state.page = "tracks";
+      } else if (payload.item_key === "albums") {
+        state.page = "albums";
+      } else if (payload.item_key === "album-hypercube") {
+        state.page = "album-hypercube";
+      } else if (payload.item_key === "track-hypercube") {
+        state.page = "actions";
+      } else if (payload.item_key === "queue-action") {
+        state.page = "queued";
+      }
+      callback(null, {});
+    },
+    load(payload, callback) {
+      const state = stateFor(payload);
+      if (state.page === "root") {
+        callback(null, {
+          items: [
+            { title: "Tracks", subtitle: "2 results", item_key: "tracks", hint: "list" },
+            { title: "Albums", subtitle: "2 results", item_key: "albums", hint: "list" }
+          ]
+        });
+        return;
+      }
+      if (state.page === "tracks") {
+        callback(null, {
+          items: [
+            {
+              title: "Hypercube",
+              subtitle: "Nathan Fake",
+              item_key: "wrong-hypercube",
+              hint: "audio"
+            }
+          ]
+        });
+        return;
+      }
+      if (state.page === "albums") {
+        callback(null, {
+          items: [
+            {
+              title: "Hypercube",
+              subtitle: "Nathan Fake",
+              item_key: "wrong-album",
+              hint: "album"
+            },
+            {
+              title: "Hypercube",
+              subtitle: "Max Graham / Second Sine / Ruben Karapetyan",
+              item_key: "album-hypercube",
+              hint: "album"
+            }
+          ]
+        });
+        return;
+      }
+      if (state.page === "album-hypercube") {
+        callback(null, {
+          items: [
+            {
+              title: "Hypercube",
+              subtitle: "7:30",
+              item_key: "track-hypercube",
+              hint: "audio"
+            },
+            {
+              title: "Hypercube (Ruben Karapetyan Remix)",
+              subtitle: "7:56",
+              item_key: "track-hypercube-remix",
+              hint: "audio"
+            }
+          ]
+        });
+        return;
+      }
+      if (state.page === "actions") {
+        callback(null, {
+          items: [
+            { title: "Add To Queue", subtitle: "", item_key: "queue-action", hint: "action" }
+          ]
+        });
+        return;
+      }
+      callback(null, { items: [] });
+    }
+  };
+
+  const result = await roon.resolveSearchAction({
+    artist: "Max Graham, Second Sine",
+    title: "Hypercube"
+  }, "zone-1", "queue");
+
+  assert.equal(result.success, true);
+  assert.equal(result.match.item_key, "track-hypercube");
+  assert.equal(result.nestedMatch.container.key, "album-hypercube");
+  assert.equal(result.action, "Add To Queue");
+});
+
+test("Roon queue resolver accepts remix title when remix artist is in requested credits", async () => {
+  const roon = new RoonClient();
+  roon.transport = {};
+  roon.zones.set("zone-1", { zone_id: "zone-1" });
+  const sessions = new Map();
+
+  function stateFor(payload) {
+    const session = payload.multi_session_key;
+    const state = sessions.get(session) || {};
+    sessions.set(session, state);
+    return state;
+  }
+
+  roon.browse = {
+    browse(payload, callback) {
+      const state = stateFor(payload);
+      if (payload.input) {
+        state.page = "root";
+      } else if (payload.item_key === "tracks") {
+        state.page = "tracks";
+      } else if (payload.item_key === "track-ouverture-khen") {
+        state.page = "actions";
+      } else if (payload.item_key === "queue-action") {
+        state.page = "queued";
+      }
+      callback(null, {});
+    },
+    load(payload, callback) {
+      const state = stateFor(payload);
+      if (state.page === "root") {
+        callback(null, {
+          items: [
+            { title: "Tracks", subtitle: "2 results", item_key: "tracks", hint: "list" }
+          ]
+        });
+        return;
+      }
+      if (state.page === "tracks") {
+        callback(null, {
+          items: [
+            {
+              title: "Ouverture",
+              subtitle: "Thomas Bangalter, Guy-Manuel de Homem-Christo, Daft Punk",
+              item_key: "wrong-ouverture",
+              hint: "audio"
+            },
+            {
+              title: "Ouverture (Khen Remix)",
+              subtitle: "Amand / Capoon / khen",
+              item_key: "track-ouverture-khen",
+              hint: "audio"
+            }
+          ]
+        });
+        return;
+      }
+      if (state.page === "actions") {
+        callback(null, {
+          items: [
+            { title: "Add To Queue", subtitle: "", item_key: "queue-action", hint: "action" }
+          ]
+        });
+        return;
+      }
+      callback(null, { items: [] });
+    }
+  };
+
+  const result = await roon.resolveSearchAction({
+    artist: "Amand, Capoon, khen",
+    title: "Ouverture"
+  }, "zone-1", "queue");
+
+  assert.equal(result.success, true);
+  assert.equal(result.match.item_key, "track-ouverture-khen");
+  assert.equal(result.action, "Add To Queue");
+});
+
+test("Roon queue resolver accepts exact remix title from Various Artists compilation", async () => {
+  const roon = new RoonClient();
+  roon.transport = {};
+  roon.zones.set("zone-1", { zone_id: "zone-1" });
+  const sessions = new Map();
+
+  function stateFor(payload) {
+    const session = payload.multi_session_key;
+    const state = sessions.get(session) || {};
+    sessions.set(session, state);
+    return state;
+  }
+
+  roon.browse = {
+    browse(payload, callback) {
+      const state = stateFor(payload);
+      if (payload.input) {
+        state.page = "root";
+      } else if (payload.item_key === "tracks") {
+        state.page = "tracks";
+      } else if (payload.item_key === "track-irrev") {
+        state.page = "actions";
+      } else if (payload.item_key === "queue-action") {
+        state.page = "queued";
+      }
+      callback(null, {});
+    },
+    load(payload, callback) {
+      const state = stateFor(payload);
+      if (state.page === "root") {
+        callback(null, {
+          items: [
+            { title: "Tracks", subtitle: "1 result", item_key: "tracks", hint: "list" }
+          ]
+        });
+        return;
+      }
+      if (state.page === "tracks") {
+        callback(null, {
+          items: [
+            {
+              title: "Irreversible (Hobin Rude Remix)",
+              subtitle: "Various Artists",
+              item_key: "track-irrev",
+              hint: "audio"
+            }
+          ]
+        });
+        return;
+      }
+      if (state.page === "actions") {
+        callback(null, {
+          items: [
+            { title: "Add To Queue", subtitle: "", item_key: "queue-action", hint: "action" }
+          ]
+        });
+        return;
+      }
+      callback(null, { items: [] });
+    }
+  };
+
+  const result = await roon.resolveSearchAction({
+    artist: "AKIVA",
+    title: "Irreversible (Hobin Rude Remix)"
+  }, "zone-1", "queue");
+
+  assert.equal(result.success, true);
+  assert.equal(result.match.item_key, "track-irrev");
+  assert.equal(result.action, "Add To Queue");
+});
+
+test("Roon queue resolver drills exact title row when queue action is nested one level deeper", async () => {
+  const roon = new RoonClient();
+  roon.transport = {};
+  roon.zones.set("zone-1", { zone_id: "zone-1" });
+  const sessions = new Map();
+
+  function stateFor(payload) {
+    const session = payload.multi_session_key;
+    const state = sessions.get(session) || {};
+    sessions.set(session, state);
+    return state;
+  }
+
+  roon.browse = {
+    browse(payload, callback) {
+      const state = stateFor(payload);
+      if (payload.input) {
+        state.page = "root";
+      } else if (payload.item_key === "tracks") {
+        state.page = "tracks";
+      } else if (payload.item_key === "track-jailbreak") {
+        state.page = "track-page";
+      } else if (payload.item_key === "nested-jailbreak") {
+        state.page = "actions";
+      } else if (payload.item_key === "queue-action") {
+        state.page = "queued";
+      }
+      callback(null, {});
+    },
+    load(payload, callback) {
+      const state = stateFor(payload);
+      if (state.page === "root") {
+        callback(null, {
+          items: [
+            { title: "Tracks", subtitle: "1 result", item_key: "tracks", hint: "list" }
+          ]
+        });
+        return;
+      }
+      if (state.page === "tracks") {
+        callback(null, {
+          items: [
+            {
+              title: "Jailbreak (Radio Mix)",
+              subtitle: "Beckers, D-Nox",
+              item_key: "track-jailbreak",
+              hint: "audio"
+            }
+          ]
+        });
+        return;
+      }
+      if (state.page === "track-page") {
+        callback(null, {
+          items: [
+            {
+              title: "Jailbreak (Radio Mix)",
+              subtitle: "",
+              item_key: "nested-jailbreak",
+              hint: "audio"
+            }
+          ]
+        });
+        return;
+      }
+      if (state.page === "actions") {
+        callback(null, {
+          items: [
+            { title: "Add To Queue", subtitle: "", item_key: "queue-action", hint: "action" }
+          ]
+        });
+        return;
+      }
+      callback(null, { items: [] });
+    }
+  };
+
+  const result = await roon.resolveSearchAction({
+    artist: "Beckers, D-Nox",
+    title: "Jailbreak (Radio Mix)"
+  }, "zone-1", "queue");
+
+  assert.equal(result.success, true);
+  assert.equal(result.match.item_key, "track-jailbreak");
+  assert.equal(result.action, "Add To Queue");
+});
+
+test("Roon queue resolver can use same-artist version fallback when base title has no exact hit", async () => {
+  const roon = new RoonClient();
+  roon.transport = {};
+  roon.zones.set("zone-1", { zone_id: "zone-1" });
+  const sessions = new Map();
+
+  function stateFor(payload) {
+    const session = payload.multi_session_key;
+    const state = sessions.get(session) || {};
+    sessions.set(session, state);
+    return state;
+  }
+
+  roon.browse = {
+    browse(payload, callback) {
+      const state = stateFor(payload);
+      if (payload.input) {
+        state.page = "root";
+      } else if (payload.item_key === "tracks") {
+        state.page = "tracks";
+      } else if (payload.item_key === "track-neuro-remix") {
+        state.page = "actions";
+      } else if (payload.item_key === "queue-action") {
+        state.page = "queued";
+      }
+      callback(null, {});
+    },
+    load(payload, callback) {
+      const state = stateFor(payload);
+      if (state.page === "root") {
+        callback(null, {
+          items: [
+            { title: "Tracks", subtitle: "1 result", item_key: "tracks", hint: "list" }
+          ]
+        });
+        return;
+      }
+      if (state.page === "tracks") {
+        callback(null, {
+          items: [
+            {
+              title: "Neurotransmitter (Gai Barone Remix)",
+              subtitle: "Ruben Karapetyan",
+              item_key: "track-neuro-remix",
+              hint: "audio"
+            }
+          ]
+        });
+        return;
+      }
+      if (state.page === "actions") {
+        callback(null, {
+          items: [
+            { title: "Add To Queue", subtitle: "", item_key: "queue-action", hint: "action" }
+          ]
+        });
+        return;
+      }
+      callback(null, { items: [] });
+    }
+  };
+
+  const result = await roon.resolveSearchAction({
+    artist: "Ruben Karapetyan",
+    title: "Neurotransmitter"
+  }, "zone-1", "queue");
+
+  assert.equal(result.success, true);
+  assert.equal(result.match.item_key, "track-neuro-remix");
+  assert.equal(result.action, "Add To Queue");
+});
+
+test("Roon queue resolver uses matching remixes release when track artist differs", async () => {
+  const roon = new RoonClient();
+  roon.transport = {};
+  roon.zones.set("zone-1", { zone_id: "zone-1" });
+  const sessions = new Map();
+
+  function stateFor(payload) {
+    const session = payload.multi_session_key;
+    const state = sessions.get(session) || {};
+    sessions.set(session, state);
+    return state;
+  }
+
+  roon.browse = {
+    browse(payload, callback) {
+      const state = stateFor(payload);
+      if (payload.input) {
+        state.page = "root";
+      } else if (payload.item_key === "tracks") {
+        state.page = "tracks";
+      } else if (payload.item_key === "albums") {
+        state.page = "albums";
+      } else if (payload.item_key === "album-dreaming-home") {
+        state.page = "album-dreaming-home";
+      } else if (payload.item_key === "track-dreaming-home") {
+        state.page = "actions";
+      } else if (payload.item_key === "queue-action") {
+        state.page = "queued";
+      }
+      callback(null, {});
+    },
+    load(payload, callback) {
+      const state = stateFor(payload);
+      if (state.page === "root") {
+        callback(null, {
+          items: [
+            { title: "Tracks", subtitle: "5 results", item_key: "tracks", hint: "list" },
+            { title: "Albums", subtitle: "1 result", item_key: "albums", hint: "list" }
+          ]
+        });
+        return;
+      }
+      if (state.page === "tracks") {
+        callback(null, {
+          items: [
+            {
+              title: "Dreaming Home (Sebastian Sellares Remix)",
+              subtitle: "Ric Niels / Hobin Rude / Manu Pavez",
+              item_key: "wrong-artist-track",
+              hint: "audio"
+            }
+          ]
+        });
+        return;
+      }
+      if (state.page === "albums") {
+        callback(null, {
+          items: [
+            {
+              title: "Dreaming Home (Remixes)",
+              subtitle: "Eric Lune, Sebastian Sellares, Forty Cats",
+              item_key: "album-dreaming-home",
+              hint: "album"
+            }
+          ]
+        });
+        return;
+      }
+      if (state.page === "album-dreaming-home") {
+        callback(null, {
+          items: [
+            {
+              title: "Dreaming Home (Sebastian Sellares Remix)",
+              subtitle: "7:36",
+              item_key: "track-dreaming-home",
+              hint: "audio"
+            }
+          ]
+        });
+        return;
+      }
+      if (state.page === "actions") {
+        callback(null, {
+          items: [
+            { title: "Add To Queue", subtitle: "", item_key: "queue-action", hint: "action" }
+          ]
+        });
+        return;
+      }
+      callback(null, { items: [] });
+    }
+  };
+
+  const result = await roon.resolveSearchAction({
+    artist: "Eric Lune",
+    title: "Dreaming Home (Sebastian Sellares Remix)"
+  }, "zone-1", "queue");
+
+  assert.equal(result.success, true);
+  assert.equal(result.match.item_key, "track-dreaming-home");
+  assert.equal(result.nestedMatch.container.key, "album-dreaming-home");
+  assert.equal(result.action, "Add To Queue");
+});
+
+test("Roon queue resolver prefers extended mix when requested", async () => {
+  const roon = new RoonClient();
+  roon.transport = {};
+  roon.zones.set("zone-1", { zone_id: "zone-1" });
+  const sessions = new Map();
+  const inputs = [];
+
+  function stateFor(payload) {
+    const session = payload.multi_session_key;
+    const state = sessions.get(session) || {};
+    sessions.set(session, state);
+    return state;
+  }
+
+  roon.browse = {
+    browse(payload, callback) {
+      const state = stateFor(payload);
+      if (payload.input) {
+        inputs.push(payload.input);
+        state.page = "root";
+      } else if (payload.item_key === "tracks") {
+        state.page = "tracks";
+      } else if (payload.item_key === "track-peace" || payload.item_key === "track-peace-extended") {
+        state.page = "actions";
+        state.selected = payload.item_key;
+      } else if (payload.item_key === "queue-action") {
+        state.page = "queued";
+      }
+      callback(null, {});
+    },
+    load(payload, callback) {
+      const state = stateFor(payload);
+      if (state.page === "root") {
+        callback(null, {
+          items: [
+            { title: "Tracks", subtitle: "2 results", item_key: "tracks", hint: "list" }
+          ]
+        });
+        return;
+      }
+      if (state.page === "tracks") {
+        callback(null, {
+          items: [
+            {
+              title: "Peace",
+              subtitle: "D-Nox, Elan Myles - Peace",
+              item_key: "track-peace",
+              hint: "audio"
+            },
+            {
+              title: "Peace (Extended Mix)",
+              subtitle: "D-Nox, Elan Myles - Peace",
+              item_key: "track-peace-extended",
+              hint: "audio"
+            }
+          ]
+        });
+        return;
+      }
+      if (state.page === "actions") {
+        callback(null, {
+          items: [
+            { title: "Add To Queue", subtitle: "", item_key: "queue-action", hint: "action" }
+          ]
+        });
+        return;
+      }
+      callback(null, { items: [] });
+    }
+  };
+
+  const result = await roon.resolveSearchAction({
+    artist: "D-Nox, Elan Myles",
+    title: "Peace",
+    album: "Peace",
+    year: 2025
+  }, "zone-1", "queue", { preferExtendedMixes: true });
+
+  assert.equal(result.success, true);
+  assert.equal(result.match.item_key, "track-peace-extended");
+  assert.equal(result.match.title, "Peace (Extended Mix)");
+  assert.equal(result.action, "Add To Queue");
+  assert.equal(inputs[0], "D-Nox, Elan Myles Peace extended mix");
 });

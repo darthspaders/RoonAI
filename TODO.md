@@ -17,12 +17,12 @@ C:\Users\spade\Documents\Codex\2026-06-07\the-rabbit-hole
 2. Improve discovery branching without turning Rabbit Hole into plain search.
    - Taste Guided should discover adjacent artists, not only repeat top liked artists.
    - Enforce artist diversity per run unless the user explicitly asks for one artist.
-   - Use similar artists, labels, radios, remixers, and candidate-list context as branch seeds.
+   - Use similar artists, labels, radios, remixers, standby discoveries, and playlist context as branch seeds.
    - Keep a small taste lane, but do not let taste lane monopolize the output.
 
 3. Strengthen genre inference.
    - Treat official TIDAL/Roon genre tags as weak hints, especially generic `Electronic`.
-   - Combine artist relationships, labels, radios, Last.fm/history, saved candidates, and Darth ratings.
+   - Combine artist relationships, labels, radios, Last.fm/history, standby/rated tracks, and Darth ratings.
    - Surface confidence/risk when evidence is weak.
    - Continue improving cases where strong tracks are ranked low because genre evidence is vague.
 
@@ -82,7 +82,7 @@ C:\Users\spade\Documents\Codex\2026-06-07\the-rabbit-hole
     - Keep pinned items separate from official TIDAL profile items so the UI stays honest.
 
 13. Improve TIDAL queue playlist bridge.
-    - Confirm temporary playlist creation/update on generated results and candidate lists.
+    - Confirm temporary playlist creation/update on generated results and standby lists.
     - Avoid duplicate playlist tracks when sending the same list repeatedly.
     - Make the resulting TIDAL link easy to open on phone/tablet.
 
@@ -103,10 +103,11 @@ C:\Users\spade\Documents\Codex\2026-06-07\the-rabbit-hole
     - Keep discovery score badge prominent in player views.
     - Keep Pool Diagnostics readable on phone.
 
-17. Candidate-list UX.
-    - Add candidate should always require or expose list selection when multiple lists exist.
-    - Move between lists should remain easy.
-    - Avoid silently adding everything to the first list.
+17. Radio and standby UX.
+    - Radio station reordering should remain touch-friendly on tablets.
+    - Reset order should stay scoped to the current radio folder.
+    - Standby discovery should not refresh over a full 25-track cache before the user can play it.
+    - Queue/send controls should stay visibly busy for slower Roon/TIDAL operations.
 
 ## Metadata Sources
 

@@ -177,17 +177,25 @@ function stripSafeTitleSuffixes(value) {
 
 function normalizeRemixDescriptors(value) {
   return stripSafeTitleSuffixes(value)
-    .replace(/\s*[\[(]([^)\]]+?)\s+(?:extended\s+remix|dub\s+mix|remix|rework|rerub)[\])]/gi, " ($1 remix)")
+    .replace(/\s*[\[(]([^)\]]+?)\s+(?:extended\s+remix|dub\s+mix|remix|remixes|rework|rerub)[\])]/gi, " ($1 remix)")
     .trim();
 }
 
 function hasVersionDescriptor(value) {
-  return /\b(?:remix|mix|rework|rerub|dub|edit|version)\b/i.test(String(value || ""));
+  return /\b(?:remix|remixes|mix|rework|rerub|dub|edit|version)\b/i.test(String(value || ""));
+}
+
+function titleHasExtendedMix(value) {
+  return /\b(?:extended\s+(?:mix|version|remix|cut)|club\s+mix|full\s+length|long\s+(?:mix|version|cut)|12\s*(?:inch|")\s+(?:mix|version))\b/i.test(String(value || ""));
+}
+
+function shouldPreferExtendedMixes(options = {}) {
+  return /^(1|true|yes)$/i.test(String(options.preferExtendedMixes || options.prefer_extended_mixes || ""));
 }
 
 function stripVersionDescriptors(value) {
   return stripSafeTitleSuffixes(value)
-    .replace(/\s*[\[(][^)\]]*\b(?:remix|mix|rework|rerub|dub|edit|version)\b[^)\]]*[\])]/gi, "")
+    .replace(/\s*[\[(][^)\]]*\b(?:remix|remixes|mix|rework|rerub|dub|edit|version)\b[^)\]]*[\])]/gi, "")
     .trim();
 }
 
@@ -211,7 +219,7 @@ function lookupTrack(track = {}) {
   };
 }
 
-function createRoonSearchQueries(track = {}) {
+function createRoonSearchQueries(track = {}, options = {}) {
   const lookup = lookupTrack(track);
   const title = cleanLookupText(lookup.title);
   const safeTitle = cleanLookupText(stripSafeTitleSuffixes(title));
@@ -231,11 +239,31 @@ function createRoonSearchQueries(track = {}) {
     guestlessVersionlessTitle
   ].map(cleanLookupText).filter(Boolean)));
   const searches = [];
+  const extendedSearches = [];
   const primaryArtist = artists[0] || "";
+  const preferExtendedMixes = shouldPreferExtendedMixes(options) && !titleHasExtendedMix(title);
+  const extendedBaseTitle = versionlessTitle || safeTitle || title;
+
+  if (preferExtendedMixes && primaryArtist && extendedBaseTitle) {
+    extendedSearches.push(`${primaryArtist} ${extendedBaseTitle} extended mix`);
+    extendedSearches.push(`${extendedBaseTitle} extended mix ${primaryArtist}`);
+    extendedSearches.push(`${primaryArtist} ${extendedBaseTitle} club mix`);
+    extendedSearches.push(`${extendedBaseTitle} club mix ${primaryArtist}`);
+    if (album) {
+      extendedSearches.push(`${primaryArtist} ${extendedBaseTitle} ${album} extended mix`);
+      extendedSearches.push(`${extendedBaseTitle} ${album} extended mix ${primaryArtist}`);
+    }
+    if (year) {
+      extendedSearches.push(`${primaryArtist} ${extendedBaseTitle} extended mix ${year}`);
+      extendedSearches.push(`${extendedBaseTitle} extended mix ${primaryArtist} ${year}`);
+    }
+  }
 
   if (primaryArtist && title) {
     searches.push(`${primaryArtist} ${title}`);
     searches.push(`${title} ${primaryArtist}`);
+    searches.push(`${primaryArtist} - ${title}`);
+    searches.push(`${title} - ${primaryArtist}`);
   }
   if (primaryArtist && safeTitle && safeTitle !== title) {
     searches.push(`${primaryArtist} ${safeTitle}`);
@@ -277,7 +305,10 @@ function createRoonSearchQueries(track = {}) {
   if (title) searches.push(title);
   if (versionlessTitle && versionlessTitle !== title) searches.push(versionlessTitle);
 
-  return Array.from(new Set(searches.map(cleanLookupText).filter(Boolean))).slice(0, 28);
+  return Array.from(new Set([
+    ...extendedSearches,
+    ...searches
+  ].map(cleanLookupText).filter(Boolean))).slice(0, preferExtendedMixes ? 34 : 28);
 }
 
 function splitDiscoveryTerms(value) {
@@ -793,6 +824,38 @@ function titleMatchesExactly(track, item) {
   );
 }
 
+function titleBaseMatches(track, item) {
+  const lookup = lookupTrack(track);
+  const targetBase = normalizeLookupText(stripVersionDescriptors(lookup.title));
+  const actualBase = normalizeLookupText(stripVersionDescriptors(item?.title));
+  return Boolean(targetBase && actualBase && targetBase === actualBase);
+}
+
+function titleMatchesRequestedArtistVersion(track, item) {
+  const lookup = lookupTrack(track);
+  if (hasVersionDescriptor(lookup.title) || !hasVersionDescriptor(item?.title)) return false;
+  if (!titleBaseMatches(track, item)) return false;
+
+  const actualTitle = normalizeLookupText(item?.title);
+  const actualBase = normalizeLookupText(stripVersionDescriptors(item?.title));
+  const versionText = actualTitle.replace(actualBase, " ");
+  const artists = splitLookupArtists(lookup.artist);
+
+  return artists.some((artist) => (
+    artist &&
+    (
+      versionText === artist ||
+      versionText.includes(` ${artist} `) ||
+      versionText.startsWith(`${artist} `) ||
+      versionText.endsWith(` ${artist}`)
+    )
+  ));
+}
+
+function titleMatchesTrackCandidate(track, item) {
+  return titleMatchesExactly(track, item) || titleMatchesRequestedArtistVersion(track, item);
+}
+
 function artistMatchInfo(track, item) {
   const lookup = lookupTrack(track);
   const artists = splitLookupArtists(lookup.artist);
@@ -825,25 +888,116 @@ function albumMatches(track, item) {
   return Boolean(subtitle && subtitle.includes(album));
 }
 
-function matchScore(track, item) {
+function matchScore(track, item, options = {}) {
   const lookup = lookupTrack(track);
   const title = normalizeLookupText(lookup.title);
   const itemTitle = normalizeLookupText(item?.title);
   const titleExact = titleMatchesExactly(track, item);
+  const artistVersionTitle = titleMatchesRequestedArtistVersion(track, item);
   const artistInfo = artistMatchInfo(track, item);
+  const preferExtendedMixes = shouldPreferExtendedMixes(options) && !titleHasExtendedMix(lookup.title);
+  const sameBase = titleBaseMatches(track, item);
+  const itemExtended = titleHasExtendedMix(item?.title);
 
   let score = 0;
   if (titleExact) score += 12;
+  else if (artistVersionTitle) score += 10;
+  else if (sameBase) score += 5;
   else if (title && itemTitle.includes(title)) score += 2;
 
   if (artistInfo.matched) score += Math.round(8 * artistInfo.ratio);
   if (albumMatches(track, item)) score += 2;
+  if (preferExtendedMixes && sameBase && artistInfo.matched) {
+    if (itemExtended) score += 18;
+    else if (titleExact) score -= 5;
+  }
 
   return score;
 }
 
+function rankedMatchItems(track, items = [], options = {}) {
+  return (items || [])
+    .map((item) => ({
+      item,
+      score: matchScore(track, item, options),
+      verified: isVerifiedMatch(track, item),
+      artistMatched: artistMatchInfo(track, item).matched > 0
+    }))
+    .sort((left, right) => (
+      Number(right.verified) - Number(left.verified) ||
+      Number(right.artistMatched) - Number(left.artistMatched) ||
+      right.score - left.score
+    ));
+}
+
 function isVerifiedMatch(track, item) {
-  return titleMatchesExactly(track, item) && artistMatches(track, item);
+  return (
+    titleMatchesTrackCandidate(track, item) &&
+    (artistMatches(track, item) || compilationTitleFallbackMatches(track, item))
+  ) || sameArtistVersionFallbackMatches(track, item);
+}
+
+function compilationTitleFallbackMatches(track, item) {
+  if (!titleMatchesTrackCandidate(track, item)) return false;
+  const lookup = lookupTrack(track);
+  const subtitle = normalizeLookupText(item?.subtitle);
+  const title = normalizeLookupText(lookup.title);
+  const longSpecificTitle = title.split(/\s+/).filter(Boolean).length >= 3;
+  return /\bvarious artists?\b/.test(subtitle) && (hasVersionDescriptor(lookup.title) || longSpecificTitle);
+}
+
+function sameArtistVersionFallbackMatches(track, item) {
+  const lookup = lookupTrack(track);
+  if (hasVersionDescriptor(lookup.title)) return false;
+  if (!hasVersionDescriptor(item?.title)) return false;
+  return titleBaseMatches(track, item) && artistMatches(track, item);
+}
+
+function isOpenableBrowseItem(item = {}) {
+  return Boolean(
+    item?.item_key &&
+    item.hint !== "header" &&
+    item.hint !== "action"
+  );
+}
+
+function itemLooksLikeSearchCategory(item = {}) {
+  if (!isOpenableBrowseItem(item)) return false;
+  const text = normalizeLookupText(`${item.title || ""} ${item.subtitle || ""}`);
+  return /\b(?:albums?|eps?|singles?|tracks?|songs?|compositions?)\b/.test(text);
+}
+
+function itemLooksLikeTrackResult(item = {}) {
+  if (!isOpenableBrowseItem(item)) return false;
+  const title = normalizeLookupText(item.title);
+  const hint = normalizeLookupText(item.hint);
+  if (/^(?:tracks?|songs?|albums?|artists?|compositions?|playlists?|genres?)$/.test(title)) return false;
+  if (hint && /\b(?:album|artist|list|genre|playlist)\b/.test(hint)) return false;
+  return true;
+}
+
+function itemCanContainTrackMatch(track, item = {}) {
+  if (!isOpenableBrowseItem(item)) return false;
+  if (!artistMatches(track, item)) return false;
+  return titleMatchesTrackCandidate(track, item) || titleBaseMatches(track, item) || albumMatches(track, item);
+}
+
+function itemMatchesTrackFromContainer(track, item = {}, container = {}) {
+  if (!itemLooksLikeTrackResult(item)) return false;
+  if (!titleMatchesTrackCandidate(track, item)) return false;
+  return artistMatches(track, item) || itemCanContainTrackMatch(track, container);
+}
+
+function itemCanBeDrilledForPlayback(track, item = {}) {
+  if (!isOpenableBrowseItem(item)) return false;
+  if (item.hint === "action_list") return true;
+  if (isVerifiedMatch(track, item)) return true;
+  return titleMatchesTrackCandidate(track, item);
+}
+
+function isPlaybackNavigationItem(item = {}) {
+  const title = normalizeLookupText(item.title);
+  return /^(?:artists?|albums?|credits?|similar artists?|related artists?|artist radio|track radio|radio|view all)$/.test(title);
 }
 
 function itemSummary(item) {
@@ -855,6 +1009,49 @@ function itemSummary(item) {
     key: item?.item_key || "",
     hasKey: Boolean(item?.item_key)
   };
+}
+
+function radioStationSummary(item = {}) {
+  const title = String(item.title || "").trim();
+  const subtitle = String(item.subtitle || "").trim();
+  const hint = String(item.hint || "").trim();
+  const normalizedTitle = normalizeLookupText(title);
+  const folderLike = hint === "list" ||
+    /\b(?:folder|browse|genre|category|group)\b/i.test(hint) ||
+    /^(?:my live radio|live radio|internet radio|browse|recommended|local stations|by genre|by location|genres?|locations?|countries?|favorites?|favourites?)$/.test(normalizedTitle);
+  return {
+    id: item.item_key || "",
+    title: title || "Untitled station",
+    subtitle,
+    imageKey: item.image_key || "",
+    hint,
+    kind: folderLike ? "folder" : "station",
+    playable: Boolean(item.item_key && !folderLike && item.hint !== "header"),
+    browseable: Boolean(item.item_key && item.hint !== "header" && item.hint !== "action")
+  };
+}
+
+function isRadioListItem(item = {}) {
+  if (!item?.item_key || item.hint === "header") return false;
+  const title = normalizeLookupText(item.title);
+  if (/^(?:add station|new station|settings)$/.test(title)) return false;
+  if (item.hint === "action" && /^(?:play|play now|shuffle|add to queue|add next|delete|edit)$/.test(title)) return false;
+  return true;
+}
+
+function normalizeRadioHierarchy(value = "") {
+  return normalizeLookupText(value) === "browse" ? "browse" : "internet_radio";
+}
+
+function radioRootRank(item = {}) {
+  if (!isBrowseItem(item)) return 0;
+  const title = normalizeLookupText(item.title);
+  if (title === "live radio") return 100;
+  if (title === "internet radio") return 95;
+  if (title === "radio") return 90;
+  if (/\blive radio\b|\binternet radio\b/.test(title)) return 80;
+  if (/\bradio\b/.test(title)) return 55;
+  return 0;
 }
 
 function queueItemSummary(item = {}) {
@@ -972,6 +1169,7 @@ class RoonClient extends EventEmitter {
     this.status = null;
     this.zones = new Map();
     this.playlistsSession = null;
+    this.radioSession = null;
     this.queues = new Map();
     this.queueSubscriptions = new Set();
     this.queueSignatures = new Map();
@@ -1385,7 +1583,291 @@ class RoonClient extends EventEmitter {
     };
   }
 
-  async searchQuery(track, zoneId, query) {
+  async listRadioStations(zoneId = "", options = {}) {
+    this.requireBrowse();
+    const session = options.session || this.radioSession || `radio-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const key = String(options.itemKey || "").trim();
+    const requestedHierarchy = normalizeRadioHierarchy(options.hierarchy || "");
+    const hadRadioSession = Boolean(options.session || this.radioSession);
+    this.radioSession = session;
+    const zoneOrOutputId = zoneId ? this.zoneOrOutputId(zoneId) : "";
+    const count = Math.max(20, Math.min(500, Number(options.count || 300)));
+    const loadLevel = async (hierarchy, itemKey = "", browseOptions = {}) => {
+      const browsePayload = {
+        hierarchy,
+        multi_session_key: session
+      };
+      if (itemKey) browsePayload.item_key = itemKey;
+      else browsePayload.pop_all = true;
+      if (browseOptions.refresh && itemKey) browsePayload.refresh_list = true;
+      if (zoneOrOutputId) browsePayload.zone_or_output_id = zoneOrOutputId;
+
+      await callRoon((cb) => this.browse.browse(browsePayload, cb));
+
+      const loaded = await callRoon((cb) => this.browse.load({
+        hierarchy,
+        multi_session_key: session,
+        offset: 0,
+        count
+      }, cb));
+
+      return { hierarchy, itemKey, loaded };
+    };
+
+    let current = null;
+
+    if (key && !hadRadioSession) {
+      await loadLevel(requestedHierarchy, "", { refresh: false }).catch(() => null);
+    }
+
+    if (key) {
+      current = await loadLevel(requestedHierarchy, key, { refresh: options.refresh });
+    } else if (requestedHierarchy === "browse") {
+      const root = await loadLevel("browse", "", { refresh: options.refresh });
+      const radioRoot = (root.loaded.items || [])
+        .map((item) => ({ item, rank: radioRootRank(item) }))
+        .filter((candidate) => candidate.rank > 0)
+        .sort((left, right) => right.rank - left.rank)[0]?.item || null;
+      current = radioRoot?.item_key
+        ? await loadLevel("browse", radioRoot.item_key, { refresh: false })
+        : root;
+    } else {
+      current = await loadLevel("internet_radio", "", { refresh: options.refresh });
+      if (!(current.loaded.items || []).filter(isRadioListItem).length) {
+        try {
+          const root = await loadLevel("browse", "", { refresh: false });
+          const radioRoot = (root.loaded.items || [])
+            .map((item) => ({ item, rank: radioRootRank(item) }))
+            .filter((candidate) => candidate.rank > 0)
+            .sort((left, right) => right.rank - left.rank)[0]?.item || null;
+          if (radioRoot?.item_key) {
+            const fallback = await loadLevel("browse", radioRoot.item_key, { refresh: false });
+            if ((fallback.loaded.items || []).filter(isRadioListItem).length) current = fallback;
+          }
+        } catch {
+          // Keep the direct internet_radio result when the general browse root is unavailable.
+        }
+      }
+    }
+
+    const loaded = current?.loaded || {};
+
+    const items = (loaded.items || [])
+      .filter(isRadioListItem)
+      .map(radioStationSummary)
+      .filter((station) => station.id);
+    const stations = items.filter((item) => item.kind === "station");
+
+    return {
+      title: loaded.list?.title || "Radio Stations",
+      subtitle: loaded.list?.subtitle || "",
+      session,
+      hierarchy: current?.hierarchy || requestedHierarchy,
+      itemKey: current?.itemKey || key,
+      count: items.length,
+      stationCount: stations.length,
+      items,
+      stations
+    };
+  }
+
+  async playRadioStation(itemKey, zoneId, options = {}) {
+    this.requireBrowse();
+    const key = String(itemKey || "").trim();
+    if (!key) throw new Error("Missing radio station key.");
+    if (!zoneId) throw new Error("Missing Roon zone.");
+
+    const hierarchy = normalizeRadioHierarchy(options.hierarchy || "");
+    const hadRadioSession = Boolean(options.session || this.radioSession);
+    const session = options.session || this.radioSession || `radio-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    this.radioSession = session;
+    const zoneOrOutputId = this.zoneOrOutputId(zoneId);
+
+    if (!hadRadioSession) {
+      await this.listRadioStations(zoneId, { session, hierarchy });
+    }
+
+    const selected = await callRoon((cb) => this.browse.browse({
+      hierarchy,
+      multi_session_key: session,
+      item_key: key,
+      zone_or_output_id: zoneOrOutputId
+    }, cb));
+
+    if (isErrorMessage(selected)) throw new Error(selected.message || "Roon could not open this radio station.");
+    if (selected.action === "message") {
+      return {
+        success: true,
+        played: true,
+        action: selected.message || "Play station",
+        station: {
+          id: key,
+          title: options.title || "",
+          subtitle: options.subtitle || ""
+        },
+        response: selected,
+        actions: []
+      };
+    }
+    if (selected.action !== "list") {
+      return {
+        success: true,
+        played: true,
+        action: "Play station",
+        station: {
+          id: key,
+          title: options.title || "",
+          subtitle: options.subtitle || ""
+        },
+        response: selected,
+        actions: []
+      };
+    }
+
+    const actions = await callRoon((cb) => this.browse.load({
+      hierarchy,
+      multi_session_key: session,
+      offset: 0,
+      count: 30
+    }, cb));
+    const items = actions.items || [];
+    const playable = items.find((item) => (
+      item.item_key &&
+      item.hint === "action" &&
+      /\b(?:play|listen|tune)\b/i.test(item.title || "") &&
+      !/\b(?:queue|add|library|favorite|favourite)\b/i.test(item.title || "")
+    ));
+
+    if (!playable?.item_key) {
+      return {
+        success: false,
+        reason: "Roon did not expose a play action for this radio station.",
+        response: selected,
+        actions: items.map(itemSummary)
+      };
+    }
+
+    const played = await callRoon((cb) => this.browse.browse({
+      hierarchy,
+      multi_session_key: session,
+      item_key: playable.item_key,
+      zone_or_output_id: zoneOrOutputId
+    }, cb));
+
+    if (isErrorMessage(played)) throw new Error(played.message || "Roon rejected the selected radio station.");
+
+    return {
+      success: true,
+      played: true,
+      action: playable.title || "Play",
+      station: {
+        id: key,
+        title: options.title || "",
+        subtitle: options.subtitle || ""
+      },
+      response: played,
+      actions: items.map(itemSummary)
+    };
+  }
+
+  async loadSearchPageItems(session, count = 100) {
+    const loaded = await callRoon((cb) => this.browse.load({
+      hierarchy: "search",
+      multi_session_key: session,
+      offset: 0,
+      count
+    }, cb));
+    return loaded.items || [];
+  }
+
+  async browseSearchItem(session, zoneOrOutputId, itemKey) {
+    return callRoon((cb) => this.browse.browse({
+      hierarchy: "search",
+      multi_session_key: session,
+      item_key: itemKey,
+      zone_or_output_id: zoneOrOutputId
+    }, cb));
+  }
+
+  async findMatchInSearchContainer(track, zoneOrOutputId, session, container, depth = 0, options = {}) {
+    if (!container?.item_key) return null;
+    let opened = null;
+    try {
+      opened = await this.browseSearchItem(session, zoneOrOutputId, container.item_key);
+    } catch {
+      return null;
+    }
+    if (isErrorMessage(opened) || opened.action === "message") return null;
+
+    const items = await this.loadSearchPageItems(session, 100);
+    const ranked = rankedMatchItems(track, items, options);
+    const direct = ranked.find((candidate) => candidate.verified && itemLooksLikeTrackResult(candidate.item));
+    if (direct) {
+      return {
+        match: direct.item,
+        matchScore: direct.score + 6,
+        container,
+        pageItems: items
+      };
+    }
+
+    const containedTrack = ranked.find((candidate) => (
+      itemMatchesTrackFromContainer(track, candidate.item, container)
+    ));
+    if (containedTrack) {
+      return {
+        match: containedTrack.item,
+        matchScore: Math.max(containedTrack.score, matchScore(track, container, options)) + 6,
+        container,
+        pageItems: items
+      };
+    }
+
+    if (depth >= 1) return null;
+
+    const nestedContainers = ranked
+      .filter((candidate) => itemCanContainTrackMatch(track, candidate.item))
+      .slice(0, 6);
+
+    for (const candidate of nestedContainers) {
+      const nested = await this.findMatchInSearchContainer(track, zoneOrOutputId, session, candidate.item, depth + 1, options);
+      if (nested?.match) return nested;
+    }
+
+    return null;
+  }
+
+  async findNestedSearchMatch(track, zoneOrOutputId, session, firstLevelItems = [], visibleItems = [], searchedCategory = null, options = {}) {
+    const searchedKey = searchedCategory?.item_key || "";
+    const categoryCandidates = (firstLevelItems || [])
+      .filter((item) => item.item_key !== searchedKey && itemLooksLikeSearchCategory(item))
+      .slice(0, 5);
+
+    for (const category of categoryCandidates) {
+      const nested = await this.findMatchInSearchContainer(track, zoneOrOutputId, session, category, 0, options);
+      if (nested?.match) return nested;
+    }
+
+    const seen = new Set(categoryCandidates.map((item) => item.item_key));
+    const directContainers = rankedMatchItems(track, [...(visibleItems || []), ...(firstLevelItems || [])], options)
+      .filter((candidate) => {
+        const key = candidate.item?.item_key || "";
+        if (!key || key === searchedKey || seen.has(key)) return false;
+        if (!itemCanContainTrackMatch(track, candidate.item)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 6);
+
+    for (const candidate of directContainers) {
+      const nested = await this.findMatchInSearchContainer(track, zoneOrOutputId, session, candidate.item, 0, options);
+      if (nested?.match) return nested;
+    }
+
+    return null;
+  }
+
+  async searchQuery(track, zoneId, query, options = {}) {
     if (!this.browse) throw new Error("Roon browse service is not connected.");
     const session = `search-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const zoneOrOutputId = this.zoneOrOutputId(zoneId);
@@ -1413,37 +1895,40 @@ class RoonClient extends EventEmitter {
     ));
 
     if (trackCategory) {
-      await callRoon((cb) => this.browse.browse({
-        hierarchy: "search",
-        multi_session_key: session,
-        item_key: trackCategory.item_key,
-        zone_or_output_id: zoneOrOutputId
-      }, cb));
+      try {
+        await callRoon((cb) => this.browse.browse({
+          hierarchy: "search",
+          multi_session_key: session,
+          item_key: trackCategory.item_key,
+          zone_or_output_id: zoneOrOutputId
+        }, cb));
 
-      loaded = await callRoon((cb) => this.browse.load({
-        hierarchy: "search",
-        multi_session_key: session,
-        offset: 0,
-        count: 100
-      }, cb));
+        loaded = await callRoon((cb) => this.browse.load({
+          hierarchy: "search",
+          multi_session_key: session,
+          offset: 0,
+          count: 100
+        }, cb));
+      } catch {
+        loaded = { items: firstLevelItems };
+      }
     }
 
     const items = loaded.items || firstLevelItems;
-    const ranked = items
-      .map((item) => ({
-        item,
-        score: matchScore(track, item),
-        verified: isVerifiedMatch(track, item),
-        artistMatched: artistMatchInfo(track, item).matched > 0
-      }))
-      .sort((left, right) => (
-        Number(right.verified) - Number(left.verified) ||
-        Number(right.artistMatched) - Number(left.artistMatched) ||
-        right.score - left.score
-      ));
-    const best = ranked[0]?.item || items[0] || null;
-    const bestScore = ranked[0]?.score || 0;
-    const verified = ranked[0]?.verified || false;
+    const ranked = rankedMatchItems(track, items, options);
+    let best = ranked[0]?.item || items[0] || null;
+    let bestScore = ranked[0]?.score || 0;
+    let verified = ranked[0]?.verified || false;
+    let nestedMatch = null;
+
+    if (!verified) {
+      nestedMatch = await this.findNestedSearchMatch(track, zoneOrOutputId, session, firstLevelItems, items, trackCategory, options);
+      if (nestedMatch?.match) {
+        best = nestedMatch.match;
+        bestScore = nestedMatch.matchScore || bestScore;
+        verified = true;
+      }
+    }
 
     return {
       query,
@@ -1452,17 +1937,23 @@ class RoonClient extends EventEmitter {
       verified,
       session,
       searchedCategory: trackCategory ? itemSummary(trackCategory) : null,
+      nestedMatch: nestedMatch?.match ? {
+        container: itemSummary(nestedMatch.container),
+        match: itemSummary(nestedMatch.match)
+      } : null,
       candidates: items.slice(0, 15).map(itemSummary)
     };
   }
 
-  async searchWithQueries(track, zoneId, queries) {
+  async searchWithQueries(track, zoneId, queries, options = {}) {
     const lookup = lookupTrack(track);
     const attempts = [];
     let bestResult = null;
+    const preferExtendedMixes = shouldPreferExtendedMixes(options) && !titleHasExtendedMix(lookup.title);
+    const extendedSearchBudget = preferExtendedMixes ? Math.min(10, queries.length || 0) : 0;
 
     for (const query of queries) {
-      const result = await this.searchQuery(lookup, zoneId, query);
+      const result = await this.searchQuery(lookup, zoneId, query, options);
       attempts.push({
         query,
         verified: result.verified,
@@ -1471,11 +1962,15 @@ class RoonClient extends EventEmitter {
         searchedCategory: result.searchedCategory
       });
 
-      if (!bestResult || Number(result.verified) > Number(bestResult.verified) || result.matchScore > bestResult.matchScore) {
+      if (
+        !bestResult ||
+        Number(result.verified) > Number(bestResult.verified) ||
+        (Number(result.verified) === Number(bestResult.verified) && result.matchScore > bestResult.matchScore)
+      ) {
         bestResult = result;
       }
 
-      if (result.verified) {
+      if (result.verified && (!preferExtendedMixes || titleHasExtendedMix(result.match?.title) || attempts.length >= extendedSearchBudget)) {
         return {
           ...result,
           queries,
@@ -1499,9 +1994,9 @@ class RoonClient extends EventEmitter {
     };
   }
 
-  async search(track, zoneId) {
+  async search(track, zoneId, options = {}) {
     const lookup = lookupTrack(track);
-    return this.searchWithQueries(lookup, zoneId, createRoonSearchQueries(lookup));
+    return this.searchWithQueries(lookup, zoneId, createRoonSearchQueries(lookup, options), options);
   }
 
   async searchTrackCandidates(query, zoneId, options = {}) {
@@ -2132,8 +2627,8 @@ class RoonClient extends EventEmitter {
       item.item_key &&
       item.hint !== "header" &&
       item.hint !== "action" &&
-      !/(artist|album|credit|similar|radio|view all)/i.test(item.title || "") &&
-      (!track || item.hint === "action_list" || isVerifiedMatch(track, item))
+      !isPlaybackNavigationItem(item) &&
+      (!track || itemCanBeDrilledForPlayback(track, item))
     ));
 
     if (!drillable) return { playable: null, items };
@@ -2151,8 +2646,8 @@ class RoonClient extends EventEmitter {
 
   async resolveSearchAction(track, zoneId, mode = "play", options = {}) {
     const result = Array.isArray(options.queries) && options.queries.length
-      ? await this.searchWithQueries(track, zoneId, options.queries)
-      : await this.search(track, zoneId);
+      ? await this.searchWithQueries(track, zoneId, options.queries, options)
+      : await this.search(track, zoneId, options);
     if (!result.match?.item_key) {
       return { ...result, success: false, reason: "No Roon search match." };
     }
@@ -2190,8 +2685,8 @@ class RoonClient extends EventEmitter {
     return { ...result, success: true, action: playable.title, playable, mode, response: selected, actions: items.map(itemSummary) };
   }
 
-  async performSearchAction(track, zoneId, mode = "play") {
-    const result = await this.resolveSearchAction(track, zoneId, mode);
+  async performSearchAction(track, zoneId, mode = "play", options = {}) {
+    const result = await this.resolveSearchAction(track, zoneId, mode, options);
     if (!result.success || !result.playable?.item_key) return result;
     const zoneOrOutputId = this.zoneOrOutputId(zoneId);
 
@@ -2211,19 +2706,14 @@ class RoonClient extends EventEmitter {
     return { ...result, success: true, action: result.playable.title, mode, response: played, startReset };
   }
 
-  async canQueueTrack(track, zoneId) {
-    return this.resolveSearchAction(track, zoneId, "queue");
+  async canQueueTrack(track, zoneId, options = {}) {
+    return this.resolveSearchAction(track, zoneId, "queue", options);
   }
 
-  async canQueueKnownRoonTrack(track, zoneId) {
+  async canQueueKnownRoonTrack(track, zoneId, options = {}) {
     const lookup = lookupTrack(track);
-    const title = cleanLookupText(lookup.title);
-    const artist = cleanLookupText(lookup.artist);
-    const queries = Array.from(new Set([
-      `${artist} ${title}`,
-      `${title} ${artist}`
-    ].map(cleanLookupText).filter(Boolean))).slice(0, 2);
-    return this.resolveSearchAction(track, zoneId, "queue", { queries });
+    const queries = createRoonSearchQueries(lookup, options).slice(0, 8);
+    return this.resolveSearchAction(track, zoneId, "queue", { ...options, queries });
   }
 
   async playSearchMatch(track, zoneId) {
@@ -2257,6 +2747,9 @@ class RoonClient extends EventEmitter {
     let addNextUsed = false;
     let nextFallbackUsed = false;
     let shuffleDisabled = false;
+    const searchOptions = {
+      preferExtendedMixes: shouldPreferExtendedMixes(options)
+    };
 
     const zone = this.getZone(zoneId);
     if (zone.settings?.shuffle) {
@@ -2269,16 +2762,20 @@ class RoonClient extends EventEmitter {
       const { track, isAlternate } = request;
       const mode = options.mode === "next" ? "next" : (appendOnly ? "queue" : (sentAny ? "queue" : "play"));
       try {
-        const result = await this.performSearchAction(track, zoneId, mode);
+        const result = await this.performSearchAction(track, zoneId, mode, searchOptions);
         if (result.success) {
           if (mode === "queue" && /add\s+next/i.test(result.action || "")) addNextUsed = true;
           if (mode === "next" && !/(add|play)\s+(to\s+)?next|add\s+after/i.test(result.action || "")) nextFallbackUsed = true;
           const actionWasPlayback = /\bplay\b/i.test(result.action || "");
+          const match = result.match ? itemSummary(result.match) : null;
+          const matchedTitle = cleanLookupText(match?.title);
+          const requestedTitle = cleanLookupText(track.title);
           queued.push({
             index,
             track: {
               artist: track.artist,
-              title: track.title,
+              title: matchedTitle || track.title,
+              requestedTitle: matchedTitle && requestedTitle && normalizeLookupText(matchedTitle) !== normalizeLookupText(requestedTitle) ? track.title : "",
               album: track.album || "",
               year: track.year || "",
               durationMs: track.durationMs || 0
@@ -2287,7 +2784,7 @@ class RoonClient extends EventEmitter {
             mode,
             isAlternate,
             startReset: result.startReset || null,
-            match: result.match ? itemSummary(result.match) : null
+            match
           });
           sentAny = true;
           started = started || actionWasPlayback;

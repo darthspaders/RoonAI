@@ -1,6 +1,6 @@
 # The Rabbit Hole - Project Status
 
-Last updated: 2026-06-20
+Last updated: 2026-07-11
 
 This repo is the local Roon/TIDAL/LLM discovery app called **The Rabbit Hole**. It runs as a Node.js web app at `http://localhost:3777` and talks to:
 
@@ -53,12 +53,16 @@ For phone/tablet access, use the LAN/Tailscale URL shown in the app. The server 
 - TIDAL profile OAuth with durable refresh token storage under ignored `data/tidal-profile-token.json`.
 - TIDAL profile Mixes & Radio page for official profile mixes exposed by the current OAuth API.
 - Pinned TIDAL items for hidden/mobile-only mix or radio URLs that the public OAuth API does not expose.
-- TIDAL queue bridge: generated/candidate lists can be sent to a temporary TIDAL playlist for easier queueing/import workflows.
+- TIDAL playlist writes: add the current track to an existing TIDAL playlist or create a new TIDAL playlist from the player.
+- TIDAL queue bridge: generated and standby lists can be sent to a temporary TIDAL playlist for easier queueing/import workflows.
 - Artist radio refresh logic that avoids re-adding the exact same queued/recent tracks where possible.
+- Roon Radio page lists live radio stations, plays available stations, and supports local drag/tap reordering per radio folder.
 - Last.fm public history/taste connection.
-- Candidate lists: multiple named lists, select target list before adding, move/remove entries, and jump-to-candidates controls.
+- Standby Discovery maintains a small background pool of ready-to-queue discoveries without clearing a full cache.
 - Feedback controls: Love, Good, OK, Wrong Genre, Skip, Never Again.
+- Live radio tracks can be rated and remembered as taste signals.
 - Rabbit Hole graph for current tracks, with cached artist/label/related-entity exploration.
+- WebMCP bridge exposes Rabbit Hole status/search/queue/TIDAL/feedback tools when a browser tool runtime is available.
 - Roon Presence companion improvements: current track appears in Discord presence, local file art fallback is improved, and HQPlayer filter/rate is read conservatively.
 
 ## Discovery Pipeline
@@ -98,6 +102,10 @@ Scoring modes:
 - Added better below-minimum handling: near-miss candidates can be shown when they are in the ballpark, but diagnostics explain why.
 - Added wrong-genre feedback path separate from ordinary dislikes.
 - Added TIDAL OAuth/profile mix tools and pinned TIDAL item import for hidden mobile-only mixes/radios.
+- Replaced the old candidate-list infrastructure with TIDAL playlist actions, standby discovery, and direct queue/send workflows.
+- Added radio station browser/play controls with local per-folder ordering.
+- Added genre-profile feedback learning for niche child genres so weakly known requests can be promoted or pruned over time.
+- Added a generated syntax-check runner so `npm run check` automatically covers new JS files under `src`, `public`, and `test`.
 
 ## Known Issues / Watch Points
 
@@ -115,7 +123,7 @@ Scoring modes:
 Before this handoff pass:
 
 - `npm run check` passed.
-- `npm test` passed with 124 tests.
+- `npm test` passed with 178 tests.
 - `npm audit --audit-level=moderate` found 0 vulnerabilities.
 
 Run these again after any next change:
