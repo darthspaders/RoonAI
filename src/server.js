@@ -71,6 +71,10 @@ const { ListeningHistory } = require("./listeningHistory");
 const { generateSearchPlan, scoreCandidateBatch } = require("./llmClient");
 const { LastFmClient } = require("./lastFmClient");
 const { MetadataEnrichmentService } = require("./metadataEnrichmentService");
+const { MusicBrainzLocalIndex } = require("./musicBrainzLocalIndex");
+const { BeatportClient } = require("./beatportClient");
+const { MusicMemoryStore } = require("./musicMemoryStore");
+const { runBeatportEnrichmentBackfill } = require("../scripts/beatport-enrichment-backfill");
 const { createRabbitHoleMcpHttpHandler, createRabbitHoleMcpTools } = require("./mcpHttpServer");
 const { createModelRouter } = require("./modelProviders");
 const {
@@ -189,13 +193,26 @@ const trackMemory = new TrackMemory();
 const queueAttemptStore = new QueueAttemptStore();
 const standbyStore = new StandbyCandidateStore({ targetCount: STANDBY_TARGET_COUNT });
 const standbyEvents = new FreshnessEvents();
+let musicMemory = null;
 function recordStandbyActivity(kind,tracks) {
   try {standbyEvents.record(kind,tracks);} catch(error) {console.error("[standby-activity] Persistence failed:",error.message);}
 }
-roon.on("trackQueued", track => recordStandbyActivity("queued", [track]));
+function rememberMusicObservations(tracks, source) {
+  const list = Array.isArray(tracks) ? tracks : [tracks].filter(Boolean);
+  for (const track of list) {
+    try { musicMemory?.rememberObservation?.(track, source); } catch (error) { console.debug("[music-memory] Observation failed:", error.message); }
+  }
+}
+roon.on("trackQueued", track => {
+  recordStandbyActivity("queued", [track]);
+  rememberMusicObservations(track, "queued");
+});
 const lastfm = new LastFmClient(config.lastfm);
 const tidalProfileMixes = new TidalProfileMixes(config.tidalProfileMixes);
-tidalProfileMixes.onTracksAdded = tracks => recordStandbyActivity("playlist", tracks);
+tidalProfileMixes.onTracksAdded = tracks => {
+  recordStandbyActivity("playlist", tracks);
+  rememberMusicObservations(tracks, "tidal_playlist");
+};
 const roonInternalTidalSync = new RoonInternalTidalSync(config.roonInternal, console);
 const exactRoonBridge = new ExactRoonBridge({
   profile: tidalProfileMixes,
@@ -232,6 +249,18 @@ const { withSimilarArtistSeeds } = createSimilarArtistExpansion({
   withTimeout
 });
 const artBridgeProvider = createArtBridgeProvider(config.artBridge);
+const musicBrainzLocalIndex = new MusicBrainzLocalIndex({
+  ...config.musicBrainzLocal,
+  logger: console
+});
+const beatport = new BeatportClient({
+  ...config.beatport,
+  logger: console
+});
+musicMemory = new MusicMemoryStore({
+  ...config.musicMemory,
+  logger: console
+});
 const radioMetadataResolver = new RadioMetadataResolver({
   enabled: config.radioMetadata.enabled,
   cacheMax: config.radioMetadata.cacheMax,
@@ -246,6 +275,8 @@ const radioMetadataResolver = new RadioMetadataResolver({
   tidalCircuitCooldownMs: config.radioMetadata.tidalCircuitCooldownMs,
   discogsEnabled: config.radioMetadata.discogsEnabled,
   discogsToken: config.radioMetadata.discogsToken,
+  musicBrainzIndex: musicBrainzLocalIndex,
+  musicBrainzPublicFallback: config.musicBrainzLocal.publicFallback,
   spotifyArtworkEnabled: config.radioMetadata.spotifyArtworkEnabled,
   spotifyMarket: config.radioMetadata.spotifyMarket,
   spotifyClientId: config.radioMetadata.spotifyClientId,
@@ -274,11 +305,14 @@ const {
 });
 const metadataEnrichment = new MetadataEnrichmentService({
   tidal,
+  beatport,
+  musicMemory,
   metadataResolver: radioMetadataResolver,
   artBridge: config.artBridge,
   cacheFile: config.metadataEnrichment.cacheFile,
   minConfidence: config.metadataEnrichment.minConfidence,
   timeoutMs: config.metadataEnrichment.timeoutMs,
+  beatportMissingRetryMs: config.beatport.missingRetryMs,
   logger: console
 });
 const {
@@ -291,6 +325,35 @@ const {
   scheduleBroadcast,
   summarizeZoneTrack
 });
+let beatportMemoryBackfillRunning = false;
+function scheduleBeatportMemoryBackfill(delayMs = config.beatportMemoryBackfill.startDelayMs) {
+  if (!config.beatportMemoryBackfill.enabled || !config.beatport.enabled || !beatport.isConfigured?.() || !musicMemory?.enabled) return;
+  const waitMs = Math.max(30_000, Number(delayMs) || 0);
+  const timer = setTimeout(async () => {
+    if (beatportMemoryBackfillRunning) {
+      scheduleBeatportMemoryBackfill(config.beatportMemoryBackfill.intervalMs);
+      return;
+    }
+    beatportMemoryBackfillRunning = true;
+    try {
+      const result = await runBeatportEnrichmentBackfill({
+        store: musicMemory,
+        beatport,
+        limit: config.beatportMemoryBackfill.batchSize,
+        delayMs: config.beatportMemoryBackfill.delayMs,
+        jitter: config.beatportMemoryBackfill.jitter,
+        logger: console
+      });
+      if (result.enriched > 0) scheduleBroadcast();
+    } catch (error) {
+      console.warn("[beatport-memory-backfill] Failed:", error.message);
+    } finally {
+      beatportMemoryBackfillRunning = false;
+      scheduleBeatportMemoryBackfill(config.beatportMemoryBackfill.intervalMs);
+    }
+  }, waitMs);
+  timer.unref?.();
+}
 const hqplayerStatus = new HQPlayerStatus({
   ...config.hqplayer,
   activePlaybackProvider: () => roon.hasActivePlayback(),
@@ -1172,6 +1235,17 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, trackMemory.summary());
   }
 
+  if (req.method === "GET" && pathname === "/api/music-memory/search") {
+    return sendJson(res, 200, musicMemory?.searchTracks?.({
+      q: url.searchParams.get("q") || "",
+      beatport: url.searchParams.get("beatport") || "",
+      feedback: url.searchParams.get("feedback") || "",
+      provider: url.searchParams.get("provider") || "",
+      limit: url.searchParams.get("limit") || 50,
+      offset: url.searchParams.get("offset") || 0
+    }) || { enabled: false, tracks: [], total: 0 });
+  }
+
   if (req.method === "GET" && pathname === "/api/query-yield") {
     return sendJson(res, 200, queryYieldTracker.summary());
   }
@@ -1644,6 +1718,7 @@ async function handleApi(req, res, url) {
     voiceExecution.check();
     discoveryHistory.record(result.tracks || []);
     trackMemory.record([...(result.tracks || []), ...(result.alternates || [])]);
+    rememberMusicObservations(result.tracks || [], "discovery_result");
     sessionStore.save(body, result);
     latestResultSource = "discovery";
     recordBridgeSyncAlert(result);
@@ -1675,6 +1750,7 @@ async function handleApi(req, res, url) {
       sessionStore,
       trackMemory
     });
+    rememberMusicObservations(feedbackTrack, `feedback:${rating || "unknown"}`);
     scheduleBroadcast();
     return sendJson(res, 200, result);
   }
@@ -1911,4 +1987,5 @@ server.listen(config.port, config.host, () => {
   }
   console.log("Enable the extension in Roon Settings > Extensions if prompted.");
   scheduleStandbyRefresh(45_000);
+  scheduleBeatportMemoryBackfill();
 });

@@ -179,6 +179,40 @@ TIDAL_PROFILE_ARTIST_RADIO_FALLBACK=false
 
 `TIDAL_PROFILE_ACCESS_TOKEN` must be a user-profile bearer token. The normal catalog/client-credentials token can search tracks, but it cannot read personal mixes such as My Mix, Daily Discovery, New Arrivals, Track Radio, or Artist Radio. TIDAL's full mobile-style Mixes & Radio shelf currently requires a legacy profile scope that normal third-party OAuth may not grant, so Rabbit Hole shows only the official profile mix relationships when that scope is unavailable. For the durable setup, leave `TIDAL_PROFILE_REDIRECT_URI` blank so Rabbit Hole can use the host you opened it from, then add the matching callback URL in the TIDAL developer portal, for example `http://192.168.50.119:3777/api/tidal/oauth/callback` or `http://100.x.x.x:3777/api/tidal/oauth/callback`. Open `/api/tidal/oauth/start` from Rabbit Hole on the same host. The callback saves the access token and refresh token under `data/tidal-profile-token.json`, which is ignored by Git. `TIDAL_PROFILE_REDIRECT_URI` can still pin one exact callback when needed. `TIDAL_PROFILE_MIXES_ENDPOINT` is optional and can override the default profile page endpoints if TIDAL changes the page route. `TIDAL_PROFILE_ARTIST_RADIO_FALLBACK=true` can synthesize artist radio cards from official mix artists, but leave it false when Rabbit Hole should mirror only what TIDAL returns.
 
+Rabbit Hole keeps its own local music memory in `data/rabbit-hole-memory.sqlite`. This is separate from provider reference data: TIDAL/Roon remain track identity authority, while Beatport, MusicBrainz, and Discogs are enrichment evidence. Rabbit Hole can also enrich broad TIDAL/Roon metadata with a local MusicBrainz JSON-dump index before using the public MusicBrainz API fallback. Build it with `npm run import:musicbrainz -- C:\path\to\extracted\musicbrainz-json-dumps`, then set `MUSICBRAINZ_LOCAL_INDEX=true`. See [docs/musicbrainz-local-index.md](docs/musicbrainz-local-index.md).
+
+Beatport metadata lookup is available as an experimental, read-only enrichment source for electronic releases. It stays disabled until a valid Beatport OAuth access token is configured:
+
+```env
+BEATPORT_ENABLED=false
+BEATPORT_EXPERIMENTAL_PUBLIC_CLIENT=true
+BEATPORT_CLIENT_ID=0GIvkCltVIuPkkwSJHp6NDb3s0potTjLBQr388Dd
+BEATPORT_ACCESS_TOKEN=
+BEATPORT_REFRESH_TOKEN=
+BEATPORT_BASE_URL=https://api.beatport.com/v4
+BEATPORT_REQUESTS_PER_SECOND=2
+BEATPORT_MISSING_RETRY_MS=604800000
+```
+
+To save browser-copied OAuth JSON locally:
+
+```powershell
+npm run beatport:token
+```
+
+Paste the full JSON response from Beatport's `/auth/o/token/` request. Rabbit Hole saves it to `data/beatport-token.json`, which is ignored by Git. When a refresh token is present, Rabbit Hole will attempt to refresh the access token before metadata lookup. Beatport requests are throttled through the client at 2 requests/sec by default, cache successful enrichment reads, back off on rate-limit responses, and remember misses until `BEATPORT_MISSING_RETRY_MS` expires so non-EDM tracks are not repeatedly queried.
+
+When Beatport is enabled, Rabbit Hole also runs a conservative background fill for older music-memory tracks that predate Beatport integration. It reads the local Rabbit Hole memory DB first, skips tracks that already have Beatport enrichment, and fills missing Beatport genre/BPM/key/release evidence in small batches without blocking playback:
+
+```env
+BEATPORT_MEMORY_BACKFILL=true
+BEATPORT_MEMORY_BACKFILL_BATCH_SIZE=25
+BEATPORT_MEMORY_BACKFILL_INTERVAL_MS=300000
+BEATPORT_MEMORY_BACKFILL_DELAY_MS=2000
+```
+
+Beatport remains enrichment only; TIDAL/Roon identity and queue behavior are unchanged.
+
 Optional discovery enrichment:
 
 ```env

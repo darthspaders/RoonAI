@@ -553,6 +553,11 @@ select:focus option,
   align-items: center;
 }
 
+.nowInfo {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .nowSourceFormat {
   display: inline-flex;
   flex-direction: column;
@@ -589,6 +594,27 @@ select:focus option,
   color: var(--iris-text);
   font-size: 0.92em;
   font-weight: 680;
+}
+
+.nowSourceFormat .sourceTagRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.nowSourceFormat .sourceTagBadge {
+  max-width: 160px;
+  padding: 2px 7px;
+  overflow: hidden;
+  border: 1px solid rgba(217, 179, 255, 0.2);
+  border-radius: 999px;
+  color: rgba(250, 246, 255, 0.9);
+  background: rgba(217, 179, 255, 0.1);
+  font-size: 0.82em;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .artStack {
@@ -1452,7 +1478,8 @@ input {
 
 .tidalMixHero,
 .playlistHero,
-.radioHero {
+.radioHero,
+.musicMemoryHero {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1462,6 +1489,135 @@ input {
 
 .radioHero .tasteNarrative {
   max-width: 720px;
+}
+
+.musicMemorySearch {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, auto) minmax(140px, auto) auto;
+  gap: 8px;
+  width: min(100%, 980px);
+}
+
+.musicMemorySearch input,
+.musicMemorySearch select {
+  min-width: 0;
+}
+
+.musicMemoryResults {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 430px), 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.musicMemoryCard {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgba(20, 9, 38, 0.82), rgba(9, 4, 18, 0.92)) padding-box,
+    linear-gradient(135deg, rgba(217, 179, 255, 0.28), rgba(143, 240, 255, 0.13), rgba(255, 115, 216, 0.18)) border-box;
+  box-shadow: var(--inner-light), 0 18px 42px rgba(2, 0, 8, 0.34);
+}
+
+.musicMemoryArt {
+  width: 92px;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 7px;
+  background:
+    linear-gradient(135deg, rgba(143, 240, 255, 0.12), rgba(255, 115, 216, 0.08)),
+    url("/assets/rabbit-hole-fallback.jpg") center / cover;
+}
+
+.musicMemoryArt img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.musicMemoryBody {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.musicMemoryTitleRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.musicMemoryTitleRow h3 {
+  margin: 0;
+  color: #fff;
+  font-size: 18px;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
+}
+
+.musicMemoryTitleRow p,
+.musicMemoryMeta,
+.musicMemoryIds,
+.musicMemoryFeedback,
+.musicMemoryProvider,
+.musicMemoryBody small {
+  margin: 0;
+  color: rgba(238, 228, 252, 0.68);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.musicMemoryMeta {
+  color: rgba(250, 246, 255, 0.86);
+  font-weight: 760;
+}
+
+.musicMemoryBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.musicMemoryBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid rgba(217, 179, 255, 0.18);
+  border-radius: 999px;
+  color: rgba(250, 246, 255, 0.84);
+  background: rgba(217, 179, 255, 0.08);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.musicMemoryBadge.isBeatport {
+  border-color: rgba(143, 240, 255, 0.34);
+  color: #bff3ff;
+}
+
+.musicMemoryBadge.isMissing {
+  border-color: rgba(255, 212, 121, 0.36);
+  color: #ffe5a0;
+}
+
+.musicMemoryBadge.isFeedback {
+  border-color: rgba(255, 115, 216, 0.34);
+  color: #ffd4f1;
+}
+
+.musicMemoryLoadMore {
+  grid-column: 1 / -1;
+  justify-self: center;
+  min-width: min(100%, 260px);
 }
 
 .tidalImportForm {
@@ -5328,6 +5484,30 @@ body.playerFullWindow {
     min-height: clamp(230px, 48vh, 430px);
   }
 
+  .player.isFullWindow .nowInfo,
+  .player:fullscreen .nowInfo,
+  .player:-webkit-full-screen .nowInfo {
+    width: min(100%, 760px);
+    max-width: calc(100vw - clamp(220px, 46vh, 420px) - clamp(18px, 2.4vw, 36px) - clamp(240px, 22vw, 310px) - 34px);
+  }
+
+  .player.isFullWindow .nowSourceFormat,
+  .player:fullscreen .nowSourceFormat,
+  .player:-webkit-full-screen .nowSourceFormat {
+    display: flex;
+    width: fit-content;
+    max-width: min(100%, 720px);
+    overflow: visible;
+    border-radius: 18px;
+  }
+
+  .player.isFullWindow .nowSourceFormat .sourceDetail,
+  .player:fullscreen .nowSourceFormat .sourceDetail,
+  .player:-webkit-full-screen .nowSourceFormat .sourceDetail {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
   .player.isFullWindow .cover,
   .player:fullscreen .cover,
   .player:-webkit-full-screen .cover {
@@ -5642,6 +5822,23 @@ body.playerFullWindow {
   }
 }
 @media (max-width: 699px) {
+  .musicMemorySearch {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .musicMemoryCard {
+    grid-template-columns: 72px minmax(0, 1fr);
+    padding: 12px;
+  }
+
+  .musicMemoryArt {
+    width: 72px;
+  }
+
+  .musicMemoryTitleRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .player:is(.isFullWindow, :fullscreen, :-webkit-full-screen) .pcTempOverlay {
     width: calc(100% - 32px);
   }

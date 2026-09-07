@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>The Rabbit Hole</title>
-    <link rel="stylesheet" href="/styles.css?v=20260906-tablet-status">
+    <link rel="stylesheet" href="/styles.css?v=20260907-music-memory">
   </head>
   <body>
     <main class="shell">
@@ -30,6 +30,7 @@
           <a href="/memory.html">Synapse Memory</a>
           <button type="button" class="active" data-view="player">Now Playing</button>
           <button type="button" data-view="history">History Report</button>
+          <button type="button" data-view="musicMemory">Music Memory</button>
           <button type="button" data-view="radio">Radio</button>
           <button type="button" data-view="playlists">Playlists</button>
           <button type="button" data-view="tidal">TIDAL Mixes</button>
@@ -93,7 +94,7 @@
               <div class="artStack">
                 <div class="cover" id="cover"></div>
               </div>
-              <div>
+              <div class="nowInfo">
                 <p class="eyebrow">Now Playing</p>
                 <h2 id="nowTitle">No active zone</h2>
                 <p id="nowSubtitle"></p>
@@ -357,6 +358,38 @@
         </section>
       </section>
 
+      <section id="musicMemoryView" class="view">
+        <section class="panel musicMemoryHero">
+          <div>
+            <p class="eyebrow">Rabbit Hole Database</p>
+            <h2>Music Memory</h2>
+            <p id="musicMemoryStatus" class="tasteNarrative">Search Rabbit Hole's local track memory.</p>
+          </div>
+          <form id="musicMemorySearchForm" class="musicMemorySearch">
+            <input id="musicMemoryQuery" type="search" placeholder="Artist, title, genre, label, TIDAL ID, Beatport ID, ISRC" autocomplete="off">
+            <select id="musicMemoryBeatportFilter" aria-label="Beatport filter">
+              <option value="">All Beatport states</option>
+              <option value="has">Has Beatport</option>
+              <option value="missing">Missing Beatport</option>
+              <option value="retry-blocked">Beatport retry waiting</option>
+            </select>
+            <select id="musicMemoryFeedbackFilter" aria-label="Feedback filter">
+              <option value="">All feedback</option>
+              <option value="any">Has feedback</option>
+              <option value="love">Love</option>
+              <option value="good">Good</option>
+              <option value="ok">OK</option>
+              <option value="wrong_genre">Wrong Genre</option>
+              <option value="skip">Skip</option>
+              <option value="never">Never Again</option>
+            </select>
+            <button type="submit">Search</button>
+          </form>
+        </section>
+
+        <section id="musicMemoryResults" class="musicMemoryResults"></section>
+      </section>
+
       <section id="radioView" class="view">
         <section class="panel radioHero">
           <div>
@@ -415,7 +448,7 @@
       </section>
     </main>
     <button type="button" id="jumpTop" class="jumpTop" hidden>Now Playing</button>
-    <script src="/app.js?v=20260907-playlist-arm"></script>
+    <script src="/app.js?v=20260907-music-memory"></script>
     <script src="/webmcpTools.js"></script>
   </body>
 </html>

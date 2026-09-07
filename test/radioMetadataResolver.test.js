@@ -159,3 +159,56 @@ test("radio metadata TIDAL circuit opens after fetch failures", async () => {
   );
   assert.equal(calls, 1);
 });
+
+test("MusicBrainz recording search uses local index before public fallback", async () => {
+  let publicCalls = 0;
+  const resolver = new RadioMetadataResolver({
+    musicBrainzIndex: {
+      searchRecordings: () => [{ id: "local", title: "U", "artist-credit": [{ artist: { name: "Avoure" } }] }],
+      status: () => ({ enabled: true, available: true })
+    },
+    fetchJson: async () => {
+      publicCalls += 1;
+      return { recordings: [{ id: "public" }] };
+    }
+  });
+
+  const rows = await resolver.searchRecordings({ artist: "Avoure", title: "U" });
+  assert.equal(rows[0].id, "local");
+  assert.equal(publicCalls, 0);
+  assert.equal(resolver.status().musicBrainzLocal.available, true);
+});
+
+test("MusicBrainz recording search falls back to public API after local miss", async () => {
+  let publicCalls = 0;
+  const resolver = new RadioMetadataResolver({
+    musicBrainzIndex: {
+      searchRecordings: () => [],
+      status: () => ({ enabled: true, available: true })
+    },
+    fetchJson: async () => {
+      publicCalls += 1;
+      return { recordings: [{ id: "public" }] };
+    }
+  });
+
+  const rows = await resolver.searchRecordings({ artist: "Avoure", title: "U" });
+  assert.equal(rows[0].id, "public");
+  assert.equal(publicCalls, 1);
+});
+
+test("MusicBrainz public fallback can be disabled", async () => {
+  let publicCalls = 0;
+  const resolver = new RadioMetadataResolver({
+    musicBrainzIndex: { searchRecordings: () => [] },
+    musicBrainzPublicFallback: false,
+    fetchJson: async () => {
+      publicCalls += 1;
+      return { recordings: [{ id: "public" }] };
+    }
+  });
+
+  const rows = await resolver.searchRecordings({ artist: "Avoure", title: "U" });
+  assert.deepEqual(rows, []);
+  assert.equal(publicCalls, 0);
+});

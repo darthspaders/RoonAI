@@ -7,6 +7,10 @@
     "start": "node scripts/start-all.js",
     "start:app": "node src/server.js",
     "restart": "powershell -ExecutionPolicy Bypass -File scripts/restart-all.ps1",
+    "import:musicbrainz": "node scripts/import-musicbrainz-json.js",
+    "beatport:token": "node scripts/save-beatport-token.js",
+    "backfill:music-memory": "node scripts/backfill-music-memory.js",
+    "backfill:beatport-enrichment": "node scripts/beatport-enrichment-backfill.js",
     "check": "node scripts/check-syntax.js",
     "test": "node --test"
   },

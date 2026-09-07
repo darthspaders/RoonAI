@@ -108,7 +108,9 @@ function createCurrentTrackMetadataEnrichment({
 
   function needsMetadataEnrichment(track = {}) {
     if (!track?.artist || !track?.title) return false;
-    return !track.durationMs || !track.releaseYear || !track.label || !track.genre;
+    const beatport = track.metadataEnrichment?.beatport || {};
+    const hasBeatportGenre = Boolean(beatport.genre || beatport.subGenre);
+    return !track.durationMs || !track.releaseYear || !track.label || !track.genre || !hasBeatportGenre;
   }
 
   function attachMetadataEnrichment(state = {}) {

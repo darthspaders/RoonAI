@@ -204,6 +204,40 @@ module.exports = {
     minConfidence: Number(process.env.METADATA_ENRICHMENT_MIN_CONFIDENCE || 80),
     timeoutMs: Number(process.env.METADATA_ENRICHMENT_TIMEOUT_MS || 8000)
   },
+  musicMemory: {
+    enabled: envFlag("RABBIT_HOLE_MUSIC_MEMORY", true),
+    dbFile: process.env.RABBIT_HOLE_MUSIC_MEMORY_DB || path.join(__dirname, "..", "data", "rabbit-hole-memory.sqlite")
+  },
+  musicBrainzLocal: {
+    enabled: envFlag("MUSICBRAINZ_LOCAL_INDEX", false),
+    indexDir: process.env.MUSICBRAINZ_INDEX_DIR || path.join(__dirname, "..", "data", "musicbrainz-index"),
+    publicFallback: envFlag("MUSICBRAINZ_PUBLIC_FALLBACK", true),
+    maxResults: envNumber("MUSICBRAINZ_LOCAL_MAX_RESULTS", 8)
+  },
+  beatport: {
+    enabled: envFlag("BEATPORT_ENABLED", false),
+    experimentalPublicClient: envFlag("BEATPORT_EXPERIMENTAL_PUBLIC_CLIENT", false),
+    clientId: process.env.BEATPORT_CLIENT_ID || "",
+    accessToken: process.env.BEATPORT_ACCESS_TOKEN || "",
+    refreshToken: process.env.BEATPORT_REFRESH_TOKEN || "",
+    tokenFile: process.env.BEATPORT_TOKEN_FILE || path.join(__dirname, "..", "data", "beatport-token.json"),
+    baseUrl: process.env.BEATPORT_BASE_URL || "https://api.beatport.com/v4",
+    timeoutMs: envNumber("BEATPORT_TIMEOUT_MS", 8000),
+    maxResults: envNumber("BEATPORT_MAX_RESULTS", 8),
+    requestsPerSecond: envNumber("BEATPORT_REQUESTS_PER_SECOND", 2),
+    cacheTtlMs: envNumber("BEATPORT_CACHE_TTL_MS", 86400000),
+    maxCacheEntries: envNumber("BEATPORT_MAX_CACHE_ENTRIES", 2000),
+    maxRetries: envNumber("BEATPORT_MAX_RETRIES", 2),
+    missingRetryMs: envNumber("BEATPORT_MISSING_RETRY_MS", 604800000)
+  },
+  beatportMemoryBackfill: {
+    enabled: envFlag("BEATPORT_MEMORY_BACKFILL", true),
+    batchSize: envNumber("BEATPORT_MEMORY_BACKFILL_BATCH_SIZE", 25),
+    intervalMs: envNumber("BEATPORT_MEMORY_BACKFILL_INTERVAL_MS", 300000),
+    delayMs: envNumber("BEATPORT_MEMORY_BACKFILL_DELAY_MS", 2000),
+    jitter: envNumber("BEATPORT_MEMORY_BACKFILL_JITTER", 0.2),
+    startDelayMs: envNumber("BEATPORT_MEMORY_BACKFILL_START_DELAY_MS", 30000)
+  },
   pcMonitor: {
     enabled: !/^(0|false|no)$/i.test(process.env.PC_MONITOR_ENABLED || "true"),
     baseUrl: process.env.PC_MONITOR_BASE_URL || "http://127.0.0.1:3088",

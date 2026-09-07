@@ -679,6 +679,8 @@ class RadioMetadataResolver extends EventEmitter {
     tidalCircuitCooldownMs = DEFAULT_TIDAL_CIRCUIT_COOLDOWN_MS,
     discogsEnabled = true,
     discogsToken = "",
+    musicBrainzIndex = null,
+    musicBrainzPublicFallback = true,
     albumArtProvider,
     fetchJson = defaultFetchJson,
     fetchImpl = globalThis.fetch,
@@ -703,6 +705,8 @@ class RadioMetadataResolver extends EventEmitter {
     this.tidalToken = null;
     this.discogsEnabled = !!discogsEnabled;
     this.discogsToken = cleanText(discogsToken);
+    this.musicBrainzIndex = musicBrainzIndex;
+    this.musicBrainzPublicFallback = musicBrainzPublicFallback !== false;
     this.albumArtProvider = albumArtProvider;
     this.fetchJson = fetchJson;
     this.fetchImpl = fetchImpl;
@@ -1388,6 +1392,10 @@ class RadioMetadataResolver extends EventEmitter {
   }
 
   async searchRecordings(track) {
+    const localRecordings = this.musicBrainzIndex?.searchRecordings?.(track) || [];
+    if (localRecordings.length) return localRecordings;
+    if (!this.musicBrainzPublicFallback) return [];
+
     const queries = [];
     if (track.artist) {
       queries.push(`recording:"${track.title}" AND artist:"${track.artist}"`);
@@ -1419,11 +1427,13 @@ class RadioMetadataResolver extends EventEmitter {
       enabled: this.enabled,
       tidalArtworkEnabled: this.tidalArtworkEnabled,
       tidalTimeoutMs: this.tidalTimeoutMs,
-      tidalCircuit: this.tidalCircuitBreaker.status()
+      tidalCircuit: this.tidalCircuitBreaker.status(),
+      musicBrainzLocal: this.musicBrainzIndex?.status?.() || null,
+      musicBrainzPublicFallback: this.musicBrainzPublicFallback
     };
   }
 
-  updateConfig({ enabled, cacheMax, minLookupIntervalMs, spotifyArtworkEnabled, spotifyMarket, spotifyClientId, spotifyClientSecret, tidalArtworkEnabled, tidalCountryCode, tidalSearchBaseUrl, tidalAccessToken, tidalClientId, tidalClientSecret, tidalTimeoutMs, tidalFailureThreshold, tidalCircuitCooldownMs, discogsEnabled, discogsToken, albumArtProvider } = {}) {
+  updateConfig({ enabled, cacheMax, minLookupIntervalMs, spotifyArtworkEnabled, spotifyMarket, spotifyClientId, spotifyClientSecret, tidalArtworkEnabled, tidalCountryCode, tidalSearchBaseUrl, tidalAccessToken, tidalClientId, tidalClientSecret, tidalTimeoutMs, tidalFailureThreshold, tidalCircuitCooldownMs, discogsEnabled, discogsToken, musicBrainzIndex, musicBrainzPublicFallback, albumArtProvider } = {}) {
     const nextEnabled = enabled !== undefined ? !!enabled : this.enabled;
     const nextCacheMax = Number(cacheMax) || this.cacheMax;
     const nextMinLookupIntervalMs = Number(minLookupIntervalMs) || this.minLookupIntervalMs;
@@ -1442,6 +1452,8 @@ class RadioMetadataResolver extends EventEmitter {
     const nextTidalCircuitCooldownMs = tidalCircuitCooldownMs !== undefined ? positiveNumber(tidalCircuitCooldownMs, DEFAULT_TIDAL_CIRCUIT_COOLDOWN_MS, { min: 1000, max: 10 * 60_000 }) : this.tidalCircuitBreaker.cooldownMs;
     const nextDiscogsEnabled = discogsEnabled !== undefined ? !!discogsEnabled : this.discogsEnabled;
     const nextDiscogsToken = discogsToken !== undefined ? cleanText(discogsToken) : this.discogsToken;
+    const nextMusicBrainzIndex = musicBrainzIndex !== undefined ? musicBrainzIndex : this.musicBrainzIndex;
+    const nextMusicBrainzPublicFallback = musicBrainzPublicFallback !== undefined ? musicBrainzPublicFallback !== false : this.musicBrainzPublicFallback;
     const nextAlbumArtProvider = albumArtProvider !== undefined ? albumArtProvider : this.albumArtProvider;
     const changed =
       nextEnabled !== this.enabled ||
@@ -1457,6 +1469,8 @@ class RadioMetadataResolver extends EventEmitter {
       nextTidalCircuitCooldownMs !== this.tidalCircuitBreaker.cooldownMs ||
       nextDiscogsEnabled !== this.discogsEnabled ||
       nextDiscogsToken !== this.discogsToken ||
+      nextMusicBrainzIndex !== this.musicBrainzIndex ||
+      nextMusicBrainzPublicFallback !== this.musicBrainzPublicFallback ||
       nextAlbumArtProvider !== this.albumArtProvider;
 
     if (!changed) return false;
@@ -1479,6 +1493,8 @@ class RadioMetadataResolver extends EventEmitter {
     this.tidalToken = null;
     this.discogsEnabled = nextDiscogsEnabled;
     this.discogsToken = nextDiscogsToken;
+    this.musicBrainzIndex = nextMusicBrainzIndex;
+    this.musicBrainzPublicFallback = nextMusicBrainzPublicFallback;
     this.albumArtProvider = nextAlbumArtProvider;
     this.cache.clear();
     return true;

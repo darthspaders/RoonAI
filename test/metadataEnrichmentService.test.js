@@ -94,6 +94,249 @@ test("metadata enrichment uses TIDAL once and persists a successful lookup", asy
   assert.ok(fs.existsSync(cacheFile));
 });
 
+test("metadata enrichment can use Beatport EDM metadata after a TIDAL miss", async () => {
+  const cacheFile = tempCacheFile("metadata-beatport");
+  const service = new MetadataEnrichmentService({
+    cacheFile,
+    tidal: {
+      isConfigured: () => true,
+      findExactTrack: async () => null
+    },
+    beatport: {
+      isConfigured: () => true,
+      findTrack: async () => ({
+        id: "77",
+        artist: "Ezequiel Arias",
+        title: "Solar",
+        album: "Solar",
+        label: "Sudbeat Music",
+        genre: "Melodic House & Techno",
+        subGenre: "Progressive House",
+        beatportTags: ["Melodic House & Techno", "Progressive House"],
+        bpm: 122,
+        keyName: "D Minor",
+        camelot: "7A",
+        durationMs: 414000,
+        beatportUrl: "https://www.beatport.com/track/solar/77"
+      })
+    },
+    metadataResolver: {
+      searchRecordings: async () => {
+        throw new Error("MusicBrainz should not run after Beatport match");
+      }
+    },
+    logger: null
+  });
+
+  const entry = await service.enrich({ artist: "Ezequiel Arias", title: "Solar" });
+
+  assert.equal(entry.source, "beatport");
+  assert.equal(entry.genre, "Melodic House & Techno, Progressive House");
+  assert.deepEqual(entry.beatportTags, ["Melodic House & Techno", "Progressive House"]);
+  assert.equal(entry.label, "Sudbeat Music");
+  assert.equal(entry.bpm, 122);
+  assert.equal(entry.keyName, "D Minor");
+  assert.equal(entry.camelot, "7A");
+  assert.equal(entry.beatport.url, "https://www.beatport.com/track/solar/77");
+});
+
+test("metadata enrichment augments TIDAL hits with Beatport genre detail", async () => {
+  const cacheFile = tempCacheFile("metadata-tidal-plus-beatport");
+  let savedConfidence = 0;
+  const service = new MetadataEnrichmentService({
+    cacheFile,
+    tidal: {
+      isConfigured: () => true,
+      findExactTrack: async () => ({
+        id: "544016594",
+        artist: "D-SHIFT, Drunken Kong",
+        title: "City Lights (HAFT Remix)",
+        album: "City Lights",
+        label: "Mango Alley",
+        releaseDate: "2026-01-01",
+        durationMs: 469000,
+        isrc: "US83Z2647768"
+      })
+    },
+    beatport: {
+      isConfigured: () => true,
+      findTrack: async () => ({
+        id: "23107095",
+        artist: "D-SHIFT, Drunken Kong",
+        title: "City Lights",
+        mixName: "HAFT Remix",
+        genre: "Melodic House & Techno",
+        subGenre: "Progressive House",
+        beatportTags: ["Melodic House & Techno", "Progressive House"],
+        bpm: 123,
+        keyName: "A Minor",
+        camelot: "8A",
+        label: "Mango Alley",
+        releaseDate: "2026-08-20",
+        releaseId: "7216259",
+        artistIds: ["225530", "1456004"],
+        remixerIds: ["645772"],
+        durationMs: 469000,
+        isrc: "US83Z2647768"
+      })
+    },
+    musicMemory: {
+      rememberObservation: () => {},
+      findBeatportEnrichment: () => null,
+      saveBeatportEnrichment: (input, result, options) => {
+        assert.equal(input.title, "City Lights (HAFT Remix)");
+        assert.equal(result.id, "23107095");
+        savedConfidence = options.confidence;
+      }
+    },
+    metadataResolver: null,
+    logger: null
+  });
+
+  const entry = await service.enrich({
+    tidalId: "544016594",
+    artist: "D-SHIFT, Drunken Kong",
+    title: "City Lights (HAFT Remix)",
+    isrc: "US83Z2647768"
+  });
+
+  assert.equal(entry.source, "tidal+beatport");
+  assert.equal(entry.genre, "Melodic House & Techno, Progressive House");
+  assert.deepEqual(entry.beatportTags, ["Melodic House & Techno", "Progressive House"]);
+  assert.equal(entry.label, "Mango Alley");
+  assert.equal(entry.bpm, 123);
+  assert.equal(entry.camelot, "8A");
+  assert.equal(entry.beatport.genre, "Melodic House & Techno");
+  assert.equal(entry.beatport.subGenre, "Progressive House");
+  assert.equal(entry.beatport.releaseDate, "2026-08-20");
+  assert.equal(entry.beatport.releaseId, "7216259");
+  assert.deepEqual(entry.beatport.artistIds, ["225530", "1456004"]);
+  assert.deepEqual(entry.beatport.remixerIds, ["645772"]);
+  assert.equal(savedConfidence, 100);
+});
+
+test("metadata enrichment retries cached TIDAL hits that lack Beatport genre", async () => {
+  const cacheFile = tempCacheFile("metadata-cached-tidal-needs-beatport");
+  const service = new MetadataEnrichmentService({
+    cacheFile,
+    tidal: { isConfigured: () => false },
+    beatport: { isConfigured: () => true },
+    metadataResolver: null,
+    logger: null
+  });
+  service.cache.set("d shift drunken kong|city lights haft remix", {
+    status: "found",
+    key: "d shift drunken kong|city lights haft remix",
+    source: "tidal",
+    artist: "D-SHIFT, Drunken Kong",
+    title: "City Lights (HAFT Remix)",
+    label: "Mango Alley",
+    genre: "",
+    confidence: 99,
+    updatedAt: "2026-01-01T00:00:00.000Z"
+  });
+
+  assert.equal(service.shouldLookup({
+    artist: "D-SHIFT, Drunken Kong",
+    title: "City Lights (HAFT Remix)"
+  }), true);
+});
+
+test("metadata enrichment reuses Rabbit Hole memory before calling Beatport", async () => {
+  const cacheFile = tempCacheFile("metadata-memory-beatport");
+  let beatportCalls = 0;
+  const track = { artist: "Ezequiel Arias", title: "Solar", isrc: "GBEWA2100645" };
+  const service = new MetadataEnrichmentService({
+    cacheFile,
+    tidal: {
+      isConfigured: () => true,
+      findExactTrack: async () => null
+    },
+    beatport: {
+      isConfigured: () => true,
+      findTrack: async () => {
+        beatportCalls += 1;
+        throw new Error("Beatport API should not run when memory has enrichment");
+      }
+    },
+    musicMemory: {
+      rememberObservation: () => {},
+      findBeatportEnrichment: () => ({
+        id: "23107095",
+        artist: "Ezequiel Arias",
+        title: "Solar",
+        mixName: "Extended Mix",
+        genre: "Melodic House & Techno",
+        subGenre: "Progressive House",
+        beatportTags: ["Melodic House & Techno", "Progressive House"],
+        bpm: 123,
+        keyName: "Gb Major",
+        camelot: "2B",
+        durationMs: 520000,
+        isrc: "GBEWA2100645"
+      }),
+      saveBeatportEnrichment: () => {
+        throw new Error("Cached Beatport memory should not be rewritten");
+      },
+      status: () => ({ enabled: true, trackCount: 1, beatportCount: 1 })
+    },
+    metadataResolver: {
+      searchRecordings: async () => {
+        throw new Error("MusicBrainz should not run after memory Beatport match");
+      }
+    },
+    logger: null
+  });
+
+  const entry = await service.enrich(track);
+
+  assert.equal(beatportCalls, 0);
+  assert.equal(entry.source, "beatport");
+  assert.equal(entry.genre, "Melodic House & Techno, Progressive House");
+});
+
+test("metadata enrichment skips Beatport API while durable miss is retry-blocked", async () => {
+  const cacheFile = tempCacheFile("metadata-beatport-miss-blocked");
+  let beatportCalls = 0;
+  let musicBrainzCalls = 0;
+  const track = { artist: "Miles Davis", title: "So What" };
+  const service = new MetadataEnrichmentService({
+    cacheFile,
+    tidal: {
+      isConfigured: () => true,
+      findExactTrack: async () => null
+    },
+    beatport: {
+      isConfigured: () => true,
+      findTrack: async () => {
+        beatportCalls += 1;
+        throw new Error("Beatport should not run while miss is blocked");
+      }
+    },
+    musicMemory: {
+      rememberObservation: () => {},
+      findBeatportEnrichment: () => null,
+      beatportLookupBlocked: () => true,
+      saveEnrichmentAttempt: () => {
+        throw new Error("Blocked Beatport lookup should not write a new attempt");
+      }
+    },
+    metadataResolver: {
+      searchRecordings: async () => {
+        musicBrainzCalls += 1;
+        return [];
+      }
+    },
+    logger: null
+  });
+
+  const entry = await service.enrich(track);
+
+  assert.equal(entry, null);
+  assert.equal(beatportCalls, 0);
+  assert.equal(musicBrainzCalls, 1);
+});
+
 test("metadata enrichment stores bridge-hosted artwork when bridge is available", async () => {
   const cacheFile = tempCacheFile("metadata-art-bridge");
   const bridgeCalls = [];

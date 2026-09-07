@@ -66,6 +66,15 @@ const state = {
   standbyTracks: [],
   historyReport: null,
   historyNeedsRefresh: true,
+  musicMemory: null,
+  musicMemoryTracks: [],
+  musicMemoryNeedsRefresh: true,
+  musicMemoryLoading: false,
+  musicMemoryOffset: 0,
+  musicMemoryLimit: 50,
+  musicMemoryQuery: "",
+  musicMemoryBeatportFilter: "",
+  musicMemoryFeedbackFilter: "",
   tidalMixes: null,
   tidalVisibleMixes: [],
   tidalMixesNeedsRefresh: true,
@@ -1193,8 +1202,18 @@ function releaseYearForTrack(track = {}) {
   return "";
 }
 
+function releaseDateForTrack(track = {}) {
+  return String(
+    track.metadataEnrichment?.beatport?.releaseDate ||
+    track.releaseDate ||
+    track.metadata?.releaseDate ||
+    track.metadataEnrichment?.releaseDate ||
+    ""
+  ).trim();
+}
+
 function metadataLabelForTrack(track = {}) {
-  return String(track.label || track.metadata?.label || track.metadataEnrichment?.label || "").trim();
+  return String(track.metadataEnrichment?.beatport?.label || track.label || track.metadata?.label || track.metadataEnrichment?.label || "").trim();
 }
 
 function isAudioQualityGenreTag(value) {
@@ -1214,12 +1233,49 @@ function isAudioQualityGenreTag(value) {
   return !/\b(?:ambient|bass|breaks|chillout|disco|drum|dubstep|house|jungle|techno|trance)\b/i.test(normalized);
 }
 
-function metadataGenreForTrack(track = {}) {
+function metadataGenreForTrack(track = {}, excludedKeys = new Set()) {
   for (const value of [track.genre, track.metadata?.genre, track.metadataEnrichment?.genre]) {
     const genre = String(value || "").trim();
-    if (genre && !isAudioQualityGenreTag(genre)) return genre;
+    const key = normalizeMatchText(genre);
+    if (genre && key && !excludedKeys.has(key) && !isAudioQualityGenreTag(genre)) return genre;
   }
   return "";
+}
+
+function beatportGenreFieldsForTrack(track = {}) {
+  const enrichment = track.metadataEnrichment || {};
+  const beatport = enrichment.beatport || {};
+  const genre = String(beatport.genre || (enrichment.source === "beatport" ? enrichment.beatportTags?.[0] : "") || "").trim();
+  const subGenre = String(beatport.subGenre || (enrichment.source === "beatport" ? enrichment.beatportTags?.[1] : "") || "").trim();
+  return {
+    genre: genre && !isAudioQualityGenreTag(genre) ? genre : "",
+    subGenre: subGenre && !isAudioQualityGenreTag(subGenre) ? subGenre : ""
+  };
+}
+
+function metadataTagBadgesForTrack(track = {}, excludedKeys = new Set()) {
+  const seen = new Set();
+  const out = [];
+  const add = (value) => {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    const key = normalizeMatchText(text);
+    if (!text || !key || seen.has(key) || excludedKeys.has(key) || isAudioQualityGenreTag(text)) return;
+    seen.add(key);
+    out.push(text);
+  };
+  const addMany = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach((item) => add(typeof item === "object" && item ? (item.name || item.title || item.value) : item));
+      return;
+    }
+    String(value || "").split(/\s*,\s*/).forEach(add);
+  };
+  addMany(track.metadataEnrichment?.beatportTags);
+  addMany(track.metadataEnrichment?.musicBrainzTags);
+  addMany(track.metadataEnrichment?.genres);
+  addMany(track.metadataEnrichment?.tags);
+  addMany(track.genre);
+  return out.slice(0, 5);
 }
 
 function nowSourceQualityHtml(info = null, track = null) {
@@ -1231,25 +1287,51 @@ function nowSourceQualityHtml(info = null, track = null) {
 
   const detailLines = [];
   const releaseYear = releaseYearForTrack(track || {});
+  const releaseDate = releaseDateForTrack(track || {});
   const label = metadataLabelForTrack(track || {});
-  const genre = metadataGenreForTrack(track || {});
-  if (releaseYear || label) {
+  const beatport = track?.metadataEnrichment?.beatport || {};
+  const beatportGenre = beatportGenreFieldsForTrack(track || {});
+  const explicitGenreKeys = new Set([
+    normalizeMatchText(beatportGenre.genre),
+    normalizeMatchText(beatportGenre.subGenre)
+  ].filter(Boolean));
+  const genre = beatportGenre.genre || metadataGenreForTrack(track || {}, explicitGenreKeys);
+  if (releaseDate || releaseYear || label) {
     detailLines.push([
-      releaseYear ? `Released: ${releaseYear}` : "",
+      releaseDate ? `Released: ${releaseDate}` : releaseYear ? `Released: ${releaseYear}` : "",
       label
     ].filter(Boolean).join(" • "));
   }
   if (genre) detailLines.push(`Genre: ${genre}`);
+  if (beatportGenre.subGenre) detailLines.push(`Subgenre: ${beatportGenre.subGenre}`);
+  const bpm = Number(beatport.bpm || track?.metadataEnrichment?.bpm || 0);
+  const keyName = String(beatport.keyName || track?.metadataEnrichment?.keyName || "").trim();
+  const camelot = String(beatport.camelot || track?.metadataEnrichment?.camelot || "").trim();
+  const beatportDetails = [
+    bpm > 0 ? `${Math.round(bpm)} BPM` : "",
+    keyName,
+    camelot && camelot !== keyName ? camelot : ""
+  ].filter(Boolean).join(" • ");
+  if (beatportDetails) detailLines.push(beatportDetails);
+  const beatportIds = [
+    beatport.id ? `Beatport #${beatport.id}` : "",
+    beatport.releaseId ? `Release #${beatport.releaseId}` : ""
+  ].filter(Boolean).join(" • ");
+  if (beatportIds) detailLines.push(beatportIds);
 
+  const tags = metadataTagBadgesForTrack(track || {}, explicitGenreKeys);
+  const tagHtml = tags.length
+    ? `<span class="sourceTagRow">${tags.map((tag) => `<span class="sourceTagBadge">${escapeHtml(tag)}</span>`).join("")}</span>`
+    : "";
   const lines = [
     primaryParts.join(" • "),
     ...detailLines
   ].filter(Boolean);
-  if (!lines.length) return "";
+  if (!lines.length && !tagHtml) return "";
 
   return lines.map((line, index) => (
     `<span class="${index === 0 ? "sourcePrimary" : "sourceDetail"}">${escapeHtml(line)}</span>`
-  )).join("");
+  )).join("") + tagHtml;
 }
 
 function renderNowSourceQuality(info = null, track = state.nowTrack) {
@@ -4686,6 +4768,140 @@ function renderPlaylistBrowser() {
   ].join("");
 }
 
+function memoryMetadataParts(track = {}) {
+  const beatport = track.beatport || {};
+  const provider = track.provider || {};
+  return [
+    beatport.genre || provider.genre || "",
+    beatport.subGenre || provider.subGenre || "",
+    beatport.bpm ? `${Math.round(Number(beatport.bpm))} BPM` : "",
+    beatport.keyName || provider.keyName || "",
+    beatport.camelot || provider.camelot || "",
+    beatport.label || provider.label || "",
+    beatport.releaseDate || provider.releaseDate || "",
+    track.durationMs ? formatDuration(track.durationMs) : ""
+  ].filter(Boolean);
+}
+
+function musicMemoryBadgeHtml(label = "", className = "") {
+  if (!label) return "";
+  return `<span class="musicMemoryBadge ${escapeHtml(className)}">${escapeHtml(label)}</span>`;
+}
+
+function musicMemoryTrackHtml(track = {}) {
+  const imageUrl = safeHttpUrl(track.imageUrl);
+  const title = track.title || "Untitled";
+  const artist = track.artist || "Unknown artist";
+  const beatport = track.beatport || null;
+  const provider = track.provider || null;
+  const feedbackRatings = Array.isArray(track.feedbackRatings) ? track.feedbackRatings : [];
+  const badges = [
+    beatport ? musicMemoryBadgeHtml("Beatport", "isBeatport") : "",
+    track.beatportMissing ? musicMemoryBadgeHtml(`Beatport ${track.latestBeatportStatus}`, "isMissing") : "",
+    track.tidalId ? musicMemoryBadgeHtml("TIDAL", "isTidal") : "",
+    track.feedbackCount ? musicMemoryBadgeHtml(`${track.feedbackCount} feedback`, "isFeedback") : "",
+    track.observationCount ? musicMemoryBadgeHtml(`${track.observationCount} seen`, "isSeen") : ""
+  ].filter(Boolean).join("");
+  const meta = memoryMetadataParts(track);
+  const identities = [
+    track.tidalId ? `TIDAL ${track.tidalId}` : "",
+    beatport?.id ? `Beatport ${beatport.id}` : "",
+    beatport?.releaseId ? `Release ${beatport.releaseId}` : "",
+    track.isrc ? `ISRC ${track.isrc}` : ""
+  ].filter(Boolean);
+  const updated = track.lastSeenAt ? `Last seen ${formatDateTime(Date.parse(track.lastSeenAt))}` : "";
+  const providerLine = provider?.name && provider.name !== "beatport"
+    ? `${provider.name}${provider.genre ? `: ${provider.genre}` : ""}${provider.subGenre ? ` / ${provider.subGenre}` : ""}`
+    : "";
+  return `
+    <article class="musicMemoryCard">
+      <div class="musicMemoryArt">
+        ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="">` : ""}
+      </div>
+      <div class="musicMemoryBody">
+        <div class="musicMemoryTitleRow">
+          <div>
+            <h3>${escapeHtml(title)}</h3>
+            <p>${escapeHtml(artist)}${track.album ? ` - ${escapeHtml(track.album)}` : ""}</p>
+          </div>
+          ${track.tidalUrl ? `<a class="buttonLink" href="${escapeHtml(track.tidalUrl)}" target="_blank" rel="noreferrer">TIDAL</a>` : ""}
+        </div>
+        ${badges ? `<div class="musicMemoryBadges">${badges}</div>` : ""}
+        ${meta.length ? `<p class="musicMemoryMeta">${escapeHtml(meta.join(" - "))}</p>` : ""}
+        ${identities.length ? `<p class="musicMemoryIds">${escapeHtml(identities.join(" - "))}</p>` : ""}
+        ${feedbackRatings.length ? `<p class="musicMemoryFeedback">${escapeHtml(feedbackRatings.join(", "))}</p>` : ""}
+        ${providerLine ? `<p class="musicMemoryProvider">${escapeHtml(providerLine)}</p>` : ""}
+        ${updated ? `<small>${escapeHtml(updated)}${track.latestObservationSource ? ` - ${escapeHtml(track.latestObservationSource)}` : ""}</small>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderMusicMemory() {
+  const status = $("#musicMemoryStatus");
+  const results = $("#musicMemoryResults");
+  if (!status || !results) return;
+  if (state.musicMemoryLoading && !state.musicMemoryTracks.length) {
+    status.textContent = "Searching music memory...";
+    results.innerHTML = "<div class=\"playlistBrowserEmpty\">Searching music memory...</div>";
+    return;
+  }
+  const payload = state.musicMemory || {};
+  if (payload.enabled === false) {
+    status.textContent = "Rabbit Hole music memory is disabled.";
+    results.innerHTML = "<div class=\"playlistBrowserEmpty\">Music memory is not available in this runtime.</div>";
+    return;
+  }
+  const total = Number(payload.total || 0);
+  const shown = state.musicMemoryTracks.length;
+  const query = state.musicMemoryQuery ? ` for "${state.musicMemoryQuery}"` : "";
+  status.textContent = total
+    ? `${shown}/${total} tracks${query}`
+    : `No tracks found${query}.`;
+  const cards = state.musicMemoryTracks.map(musicMemoryTrackHtml).join("");
+  const hasMore = shown < total;
+  results.innerHTML = `
+    ${cards || "<div class=\"playlistBrowserEmpty\">No matching tracks found.</div>"}
+    ${hasMore ? `<button type="button" id="musicMemoryLoadMore" class="musicMemoryLoadMore"${state.musicMemoryLoading ? " disabled" : ""}>${state.musicMemoryLoading ? "Loading..." : "Load more"}</button>` : ""}
+  `;
+}
+
+async function refreshMusicMemory({ append = false } = {}) {
+  const query = $("#musicMemoryQuery")?.value.trim() || "";
+  const beatport = $("#musicMemoryBeatportFilter")?.value || "";
+  const feedback = $("#musicMemoryFeedbackFilter")?.value || "";
+  const offset = append ? state.musicMemoryTracks.length : 0;
+  state.musicMemoryLoading = true;
+  if (!append) {
+    state.musicMemoryTracks = [];
+    state.musicMemoryOffset = 0;
+  }
+  state.musicMemoryQuery = query;
+  state.musicMemoryBeatportFilter = beatport;
+  state.musicMemoryFeedbackFilter = feedback;
+  renderMusicMemory();
+  try {
+    const params = new URLSearchParams({
+      q: query,
+      beatport,
+      feedback,
+      limit: String(state.musicMemoryLimit),
+      offset: String(offset)
+    });
+    const payload = await getJson(`/api/music-memory/search?${params.toString()}`);
+    state.musicMemory = payload;
+    state.musicMemoryTracks = append
+      ? [...state.musicMemoryTracks, ...(payload.tracks || [])]
+      : (payload.tracks || []);
+    state.musicMemoryOffset = state.musicMemoryTracks.length;
+    state.musicMemoryNeedsRefresh = false;
+    return payload;
+  } finally {
+    state.musicMemoryLoading = false;
+    renderMusicMemory();
+  }
+}
+
 function setPlaylistBrowserStatus(message = "") {
   state.playlistBrowserStatus = message;
   const status = $("#playlistBrowserStatus");
@@ -5860,12 +6076,13 @@ async function setPlayerFullWindow(value) {
 }
 
 function setActiveView(view) {
-  const target = ["history", "radio", "playlists", "tidal"].includes(view) ? view : "player";
+  const target = ["history", "musicMemory", "radio", "playlists", "tidal"].includes(view) ? view : "player";
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === target);
   });
   $("#playerView").classList.toggle("isActive", target === "player");
   $("#historyView").classList.toggle("isActive", target === "history");
+  $("#musicMemoryView")?.classList.toggle("isActive", target === "musicMemory");
   $("#radioView")?.classList.toggle("isActive", target === "radio");
   $("#playlistView")?.classList.toggle("isActive", target === "playlists");
   $("#tidalView")?.classList.toggle("isActive", target === "tidal");
@@ -5877,6 +6094,11 @@ function setActiveView(view) {
   if (target === "radio" && !state.radioStationsLoaded && !state.radioStationsLoading) {
     refreshRadioStations().catch((error) => {
       $("#radioStatus").textContent = error.message;
+    });
+  }
+  if (target === "musicMemory" && state.musicMemoryNeedsRefresh && !state.musicMemoryLoading) {
+    refreshMusicMemory().catch((error) => {
+      $("#musicMemoryStatus").textContent = error.message;
     });
   }
   if (target === "playlists" && (!state.roonPlaylistsLoaded || !state.tidalPlaylistsLoaded) && !state.roonPlaylistsLoading && !state.tidalPlaylistsLoading) {
@@ -6086,6 +6308,33 @@ setScoringMode($("#scoringMode")?.value || "");
 $("#refreshHistory").addEventListener("click", () => {
   refreshHistoryReport().catch((error) => {
     $("#tasteNarrative").textContent = error.message;
+  });
+});
+
+$("#musicMemorySearchForm")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  refreshMusicMemory().catch((error) => {
+    $("#musicMemoryStatus").textContent = error.message;
+  });
+});
+
+$("#musicMemoryBeatportFilter")?.addEventListener("change", () => {
+  refreshMusicMemory().catch((error) => {
+    $("#musicMemoryStatus").textContent = error.message;
+  });
+});
+
+$("#musicMemoryFeedbackFilter")?.addEventListener("change", () => {
+  refreshMusicMemory().catch((error) => {
+    $("#musicMemoryStatus").textContent = error.message;
+  });
+});
+
+$("#musicMemoryResults")?.addEventListener("click", (event) => {
+  const more = event.target.closest("#musicMemoryLoadMore");
+  if (!more) return;
+  refreshMusicMemory({ append: true }).catch((error) => {
+    $("#musicMemoryStatus").textContent = error.message;
   });
 });
 

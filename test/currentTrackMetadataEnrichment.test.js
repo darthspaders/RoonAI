@@ -102,6 +102,75 @@ test("scheduleMetadataEnrichment looks up incomplete tracks and broadcasts confi
   assert.equal(broadcasts, 1);
 });
 
+test("scheduleMetadataEnrichment looks up complete TIDAL metadata when Beatport genre is missing", async () => {
+  let enrichedLookup = null;
+  const service = createService({
+    summarizeZoneTrack: () => ({ artist: "D-SHIFT, Drunken Kong", title: "City Lights (HAFT Remix)" }),
+    metadataEnrichment: {
+      displayableCachedEntry: () => null,
+      shouldBridgeCachedArtwork: () => false,
+      bridgeCachedArtwork: async () => null,
+      shouldLookup: () => true,
+      enrich: async (lookup) => {
+        enrichedLookup = lookup;
+        return { status: "found", confidence: 0.9 };
+      },
+      minConfidence: 0.6
+    },
+    scheduleBroadcast: () => {}
+  });
+
+  service.scheduleMetadataEnrichment({
+    zones: [{
+      now_playing: {
+        length: 469,
+        metadata: {
+          release_date: "2026-01-01",
+          record_label: "Mango Alley",
+          genres: [{ name: "Electronic" }]
+        }
+      }
+    }]
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(enrichedLookup.artist, "D-SHIFT, Drunken Kong");
+  assert.equal(enrichedLookup.genre, "Electronic");
+});
+
+test("metadata enrichment preserves local MusicBrainz genre evidence", async () => {
+  const { MetadataEnrichmentService } = require("../src/metadataEnrichmentService");
+  const service = new MetadataEnrichmentService({
+    tidal: { isConfigured: () => false },
+    metadataResolver: {
+      searchRecordings: async () => [{
+        id: "mb-recording",
+        title: "U",
+        length: 420000,
+        "artist-credit": [{ artist: { name: "Avoure" } }],
+        genres: [{ name: "progressive house" }],
+        releases: [{
+          id: "mb-release",
+        title: "Night Versions",
+        date: "2026-01-01",
+        genres: [{ name: "melodic house" }],
+        tags: [{ name: "progressive breaks" }],
+        "release-group": { id: "rg" }
+      }]
+    }]
+    },
+    cacheFile: "",
+    minConfidence: 80,
+    artBridge: { enabled: false }
+  });
+
+  const result = await service.enrich({ artist: "Avoure", title: "U" });
+  assert.equal(result.source, "musicbrainz");
+  assert.match(result.genre, /progressive house/);
+  assert.match(result.genre, /melodic house/);
+  assert.deepEqual(result.musicBrainzTags, ["progressive house", "melodic house", "progressive breaks"]);
+});
+
 test("metadata enrichment disabled leaves state unchanged and skips scheduling", async () => {
   let lookups = 0;
   const service = createService({

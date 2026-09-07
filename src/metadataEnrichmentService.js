@@ -259,6 +259,9 @@ function providerResultToEntry(track, result, provider, confidenceInfo) {
   const releaseYear = firstYear(result.year, result.releaseYear, result.releaseDate, result.date);
   const durationMs = firstDurationMs(result.durationMs, result.length, result.duration);
   const sourceImageUrl = tidyUrl(result.imageUrl || result.albumArtUrl || result.coverImage);
+  const beatportTags = Array.isArray(result.beatportTags)
+    ? result.beatportTags.map(cleanGenre).filter(Boolean).slice(0, 8)
+    : [];
   return {
     status: "found",
     key: metadataCacheKey(track),
@@ -269,6 +272,13 @@ function providerResultToEntry(track, result, provider, confidenceInfo) {
     album: firstText(result.album, result.releaseTitle),
     label: firstText(result.label),
     genre: extractGenre(result),
+    musicBrainzTags: Array.isArray(result.musicBrainzTags)
+      ? result.musicBrainzTags.map(cleanGenre).filter(Boolean).slice(0, 8)
+      : [],
+    beatportTags,
+    bpm: Number(result.bpm || 0) > 0 ? Number(result.bpm) : null,
+    keyName: firstText(result.keyName, result.key?.name),
+    camelot: firstText(result.camelot, result.key?.camelot),
     id: cleanText(result.id || result.trackId),
     releaseYear,
     year: releaseYear,
@@ -276,7 +286,8 @@ function providerResultToEntry(track, result, provider, confidenceInfo) {
     durationMs,
     sourceImageUrl,
     imageUrl: sourceImageUrl,
-    tidalUrl: tidyUrl(result.tidalUrl || result.url),
+    tidalUrl: provider.startsWith("tidal") ? tidyUrl(result.tidalUrl || result.url) : "",
+    beatportUrl: tidyUrl(result.beatportUrl),
     isrc: cleanIsrc(result.isrc),
     confidence: Number(confidenceInfo.confidence || 0),
     confidenceReason: confidenceInfo.reason || "",
@@ -293,6 +304,51 @@ function sanitizeCachedEntry(entry = null) {
   };
 }
 
+function entryHasBeatportGenre(entry = null) {
+  if (!entry || typeof entry !== "object") return false;
+  const beatport = entry.beatport || {};
+  return Boolean(cleanGenre(beatport.genre) || cleanGenre(beatport.subGenre) || cleanGenre(entry.beatportTags));
+}
+
+function entryBeatportCanRetry(entry = null, clock = Date.now) {
+  if (!entry || entry.status !== "found" || entryHasBeatportGenre(entry)) return false;
+  const nextRetryMs = Date.parse(entry.beatportNextRetryAt || "");
+  if (Number.isFinite(nextRetryMs) && nextRetryMs > 0) return nextRetryMs <= Number(clock());
+  return !entry.beatportCheckedAt;
+}
+
+function markBeatportChecked(entry = null, clock = Date.now, retryDelayMs = DEFAULT_MISS_RETRY_MS) {
+  if (!entry || typeof entry !== "object") return entry;
+  const now = Number(clock());
+  return {
+    ...entry,
+    beatportCheckedAt: new Date(now).toISOString(),
+    beatportNextRetryAt: new Date(now + Math.max(30 * 1000, Number(retryDelayMs) || DEFAULT_MISS_RETRY_MS)).toISOString()
+  };
+}
+
+function mergeBeatportEntry(primary = null, beatport = null) {
+  if (!primary) return beatport;
+  if (!beatport) return primary;
+  const beatportGenre = cleanGenre(beatport.beatport?.genre || beatport.beatportTags?.[0]);
+  const beatportSubGenre = cleanGenre(beatport.beatport?.subGenre || beatport.beatportTags?.[1]);
+  return {
+    ...primary,
+    genre: [beatportGenre, beatportSubGenre].filter(Boolean).join(", ") || primary.genre,
+    beatportTags: Array.isArray(beatport.beatportTags) && beatport.beatportTags.length ? beatport.beatportTags : primary.beatportTags,
+    bpm: beatport.bpm || primary.bpm,
+    keyName: beatport.keyName || primary.keyName,
+    camelot: beatport.camelot || primary.camelot,
+    beatportUrl: beatport.beatportUrl || primary.beatportUrl,
+    beatport: beatport.beatport || primary.beatport,
+    source: primary.source === "beatport" ? "beatport" : `${primary.source}+beatport`,
+    confidence: Math.max(Number(primary.confidence || 0), Number(beatport.confidence || 0)),
+    confidenceReason: [primary.confidenceReason, beatport.confidenceReason].filter(Boolean).join("; "),
+    beatportCheckedAt: beatport.updatedAt || new Date().toISOString(),
+    beatportNextRetryAt: ""
+  };
+}
+
 function musicBrainzArtistText(recording = {}) {
   const credits = Array.isArray(recording["artist-credit"]) ? recording["artist-credit"] : [];
   return credits.map((credit) => credit?.artist?.name || credit?.name).filter(Boolean).join(", ");
@@ -302,27 +358,54 @@ function releaseDateFromMusicBrainz(release = {}) {
   return cleanText(release.date || release["first-release-date"]);
 }
 
+function musicBrainzGenreText(...sources) {
+  return musicBrainzGenreList(...sources).join(", ");
+}
+
+function musicBrainzGenreList(...sources) {
+  const seen = new Set();
+  const out = [];
+  for (const source of sources) {
+    for (const list of [source?.genres, source?.tags]) {
+      for (const item of Array.isArray(list) ? list : []) {
+        const name = cleanText(item?.name || item?.title || item?.value || item);
+        const key = normalizeText(name);
+        if (!key || seen.has(key) || isAudioQualityTag(name)) continue;
+        seen.add(key);
+        out.push(name);
+      }
+    }
+  }
+  return out.slice(0, 8);
+}
+
 class MetadataEnrichmentService {
   constructor({
     tidal,
+    beatport,
+    musicMemory,
     metadataResolver,
     cacheFile = path.join(__dirname, "..", "data", "metadata-enrichment-cache.json"),
     minConfidence = DEFAULT_MIN_CONFIDENCE,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     missRetryMs = DEFAULT_MISS_RETRY_MS,
     maxMissRetryMs = DEFAULT_MAX_MISS_RETRY_MS,
+    beatportMissingRetryMs = 7 * 24 * 60 * 60 * 1000,
     artBridge = {},
     fetchImpl = globalThis.fetch,
     clock = Date.now,
     logger = console
   } = {}) {
     this.tidal = tidal;
+    this.beatport = beatport;
+    this.musicMemory = musicMemory;
     this.metadataResolver = metadataResolver;
     this.cacheFile = cacheFile;
     this.minConfidence = Number(minConfidence) || DEFAULT_MIN_CONFIDENCE;
     this.timeoutMs = Number(timeoutMs) || DEFAULT_TIMEOUT_MS;
     this.missRetryMs = Math.max(30 * 1000, Number(missRetryMs) || DEFAULT_MISS_RETRY_MS);
     this.maxMissRetryMs = Math.max(this.missRetryMs, Number(maxMissRetryMs) || DEFAULT_MAX_MISS_RETRY_MS);
+    this.beatportMissingRetryMs = Math.max(60 * 1000, Number(beatportMissingRetryMs) || (7 * 24 * 60 * 60 * 1000));
     this.artBridge = {
       enabled: artBridge.enabled !== false,
       cacheUrl: tidyUrl(artBridge.cacheUrl),
@@ -422,6 +505,7 @@ class MetadataEnrichmentService {
 
   foundEntryCanRetry(entry = null) {
     if (!entry || entry.status !== "found") return false;
+    if (this.beatport?.isConfigured?.() && entryBeatportCanRetry(entry, this.clock)) return true;
     if (isBridgeArtworkUrl(entry.imageUrl) && !tidyUrl(entry.sourceImageUrl)) {
       if (!entry.artworkCheckedAt) return true;
       const checkedMs = Date.parse(entry.artworkCheckedAt || "");
@@ -506,6 +590,11 @@ class MetadataEnrichmentService {
   async enrich(track = {}) {
     const key = this.keyFor(track);
     if (!key) return null;
+    try {
+      this.musicMemory?.rememberObservation?.(track, "metadata_enrichment");
+    } catch (error) {
+      this.logger?.debug?.("Rabbit Hole music memory observation failed", { error: error.message });
+    }
     const cached = sanitizeCachedEntry(this.cache.get(key));
     if (cached && !this.cachedEntryCanRetry(cached)) {
       return cached.status === "found" && Number(cached.confidence || 0) >= this.minConfidence ? cached : null;
@@ -532,7 +621,13 @@ class MetadataEnrichmentService {
 
   async lookup(track = {}) {
     const tidal = await this.lookupTidal(track);
-    if (tidal) return tidal;
+    if (tidal) {
+      const beatport = await this.lookupBeatport(track);
+      return beatport ? mergeBeatportEntry(tidal, beatport) : markBeatportChecked(tidal, this.clock, this.missRetryMs);
+    }
+
+    const beatport = await this.lookupBeatport(track);
+    if (beatport) return beatport;
 
     const musicBrainz = await this.lookupMusicBrainz(track);
     if (musicBrainz) return musicBrainz;
@@ -577,6 +672,98 @@ class MetadataEnrichmentService {
     return candidates.sort((left, right) => Number(right.confidence || 0) - Number(left.confidence || 0))[0] || null;
   }
 
+  async lookupBeatport(track = {}) {
+    if (!this.beatport?.isConfigured?.()) return null;
+    try {
+      const cached = this.musicMemory?.findBeatportEnrichment?.(track);
+      if (cached) return this.beatportResultToEntry(track, cached);
+      if (this.musicMemory?.beatportLookupBlocked?.(track)) return null;
+      const result = await this.beatport.findTrack(track);
+      if (!result) {
+        this.rememberBeatportAttempt(track, "missing");
+        return null;
+      }
+      const title = result.mixName ? `${result.title} (${result.mixName})` : result.title;
+      const confidence = confidenceForMatch(track, {
+        ...result,
+        title
+      });
+      if (confidence.confidence < this.minConfidence) {
+        this.rememberBeatportAttempt(track, "missing", { confidence: confidence.confidence, reason: confidence.reason });
+        return null;
+      }
+      try {
+        this.musicMemory?.saveBeatportEnrichment?.(track, result, { confidence: confidence.confidence });
+        this.musicMemory?.saveProviderEnrichment?.(track, "beatport", {
+          ...result,
+          providerTrackId: result.id,
+          confidence: confidence.confidence,
+          fetchedAt: new Date(Number(this.clock())).toISOString()
+        });
+        this.musicMemory?.saveEnrichmentAttempt?.(track, "beatport", {
+          status: "found",
+          confidence: confidence.confidence,
+          fetchedAt: new Date(Number(this.clock())).toISOString()
+        });
+      } catch (error) {
+        this.logger?.debug?.("Rabbit Hole music memory Beatport save failed", { error: error.message });
+      }
+      const entry = this.beatportResultToEntry(track, result, confidence);
+      entry.imageUrl = await this.bridgeImageUrl(entry.sourceImageUrl || entry.imageUrl, track);
+      return entry;
+    } catch (error) {
+      const status = Number(error.status || error.statusCode || 0) === 429 ? "rate_limited" : "failed";
+      this.rememberBeatportAttempt(track, status, { error: error.message });
+      this.logger?.debug?.("Beatport metadata enrichment failed", { error: error.message });
+      return null;
+    }
+  }
+
+  beatportResultToEntry(track = {}, result = {}, confidence = null) {
+    const title = result.mixName ? `${result.title} (${result.mixName})` : result.title;
+    const confidenceInfo = confidence || confidenceForMatch(track, {
+      ...result,
+      title
+    });
+    const entry = providerResultToEntry(track, {
+        ...result,
+        title,
+        genre: [result.genre, result.subGenre].filter(Boolean).join(", "),
+        beatportTags: result.beatportTags
+      }, "beatport", confidenceInfo);
+    entry.beatport = {
+      id: entry.id,
+      url: entry.beatportUrl,
+      genre: result.genre || "",
+      subGenre: result.subGenre || "",
+      label: result.label || "",
+      releaseDate: result.releaseDate || "",
+      releaseId: result.releaseId || "",
+      artistIds: Array.isArray(result.artistIds) ? result.artistIds : [],
+      remixerIds: Array.isArray(result.remixerIds) ? result.remixerIds : [],
+      durationMs: result.durationMs || null,
+      bpm: entry.bpm,
+      keyName: entry.keyName,
+      camelot: entry.camelot,
+      isrc: entry.isrc
+    };
+    return entry;
+  }
+
+  rememberBeatportAttempt(track = {}, status = "missing", extra = {}) {
+    try {
+      this.musicMemory?.saveEnrichmentAttempt?.(track, "beatport", {
+        status,
+        confidence: extra.confidence || 0,
+        error: extra.error || extra.reason || "",
+        fetchedAt: new Date(Number(this.clock())).toISOString(),
+        nextRetryAt: new Date(Number(this.clock()) + this.beatportMissingRetryMs).toISOString()
+      });
+    } catch (error) {
+      this.logger?.debug?.("Rabbit Hole music memory Beatport attempt save failed", { error: error.message });
+    }
+  }
+
   async lookupMusicBrainz(track = {}) {
     if (!this.metadataResolver?.searchRecordings) return null;
     let recordings = [];
@@ -599,6 +786,8 @@ class MetadataEnrichmentService {
       const entry = providerResultToEntry(track, {
         ...candidate,
         album: cleanText(release.title || recording.title),
+        genre: musicBrainzGenreText(recording, release, release["release-group"]),
+        musicBrainzTags: musicBrainzGenreList(recording, release, release["release-group"]),
         releaseDate,
         year: firstYear(releaseDate),
         durationMs: firstDurationMs(recording.length)
@@ -661,7 +850,9 @@ class MetadataEnrichmentService {
       cacheSize: this.cache.size,
       pending: this.pending.size,
       minConfidence: this.minConfidence,
-      missRetryMs: this.missRetryMs
+      missRetryMs: this.missRetryMs,
+      musicMemory: this.musicMemory?.status?.() || null,
+      beatport: this.beatport?.status?.() || null
     };
   }
 }
