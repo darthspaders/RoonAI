@@ -97,6 +97,88 @@ test("Beatport retry-after parser accepts seconds and HTTP dates", () => {
   assert.equal(parseRetryAfterMs("", 1000), 0);
 });
 
+test("Beatport chart lookup follows pages and normalizes queueable tracks", async () => {
+  const calls = [];
+  const tokenFile = tempTokenFile();
+  new BeatportTokenStore(tokenFile).save({ access_token: "chart-token", expires_in: 3600 });
+  const client = new BeatportClient({
+    enabled: true,
+    tokenFile,
+    requestsPerSecond: 100,
+    fetchImpl: async (url) => {
+      calls.push(new URL(url));
+      if (url.includes("/catalog/charts/901032/tracks/") && url.includes("page=2")) {
+        return jsonResponse(200, {
+          next: null,
+          previous: "page-1",
+          count: 2,
+          page: "2/2",
+          per_page: 1,
+          results: [{
+            id: 2,
+            name: "Second Track",
+            mix_name: "Extended Mix",
+            artists: [{ id: 20, name: "Second Artist" }],
+            release: { id: 200, name: "Second Release", label: { name: "Second Label" } },
+            genre: { name: "Progressive House" },
+            sub_genre: { name: "Organic House" },
+            bpm: 122,
+            key: { name: "G Major", camelot_number: 9, camelot_letter: "B" },
+            publish_date: "2026-08-02",
+            length_ms: 420000,
+            isrc: "US222"
+          }]
+        });
+      }
+      if (url.includes("/catalog/charts/901032/tracks/")) {
+        return jsonResponse(200, {
+          next: "https://api.beatport.com/v4/catalog/charts/901032/tracks/?page=2&per_page=1",
+          previous: null,
+          count: 2,
+          page: "1/2",
+          per_page: 1,
+          results: [{
+            id: 1,
+            name: "First Track",
+            mix_name: "Original Mix",
+            artists: [{ id: 10, name: "First Artist" }],
+            release: { id: 100, name: "First Release", label: { name: "First Label" } },
+            genre: { name: "Progressive House" },
+            bpm: 121,
+            key: { name: "F Minor", camelot: "4A" },
+            publish_date: "2026-08-01",
+            length_ms: 360000,
+            image: { uri: "https://geo-media.beatport.com/first.jpg" },
+            isrc: "US111"
+          }]
+        });
+      }
+      return jsonResponse(200, {
+        id: 901032,
+        name: "The Progressive Shortlist: August 2026",
+        person: { id: 36047, owner_name: "Beatport" },
+        publish_date: "2026-08-29T16:41:44-06:00",
+        track_count: 2,
+        genres: [{ name: "Progressive House" }]
+      });
+    },
+    logger: null
+  });
+
+  const result = await client.getChart("901032", { perPage: 1 });
+
+  assert.equal(result.chart.title, "The Progressive Shortlist: August 2026");
+  assert.equal(result.chart.curator, "Beatport");
+  assert.equal(result.pagination.complete, true);
+  assert.equal(result.tracks.length, 2);
+  assert.equal(result.tracks[0].position, 1);
+  assert.equal(result.tracks[0].id, "1");
+  assert.equal(result.tracks[0].titleWithMix, "First Track (Original Mix)");
+  assert.equal(result.tracks[0].metadataEnrichment.beatport.id, "1");
+  assert.equal(result.tracks[1].beatport.subGenre, "Organic House");
+  assert.equal(calls.filter((url) => url.pathname.endsWith("/tracks/")).length, 2);
+});
+
 test("Beatport token command accepts a raw bearer JWT", async () => {
   const { execFile } = require("node:child_process");
   const { promisify } = require("node:util");

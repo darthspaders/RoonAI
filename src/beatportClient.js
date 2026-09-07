@@ -203,6 +203,90 @@ function extractBeatportTracks(payload) {
   return [];
 }
 
+function normalizeBeatportChart(raw = {}) {
+  return {
+    source: "beatport",
+    id: firstText(raw.id),
+    title: firstText(raw.name, raw.title),
+    slug: firstText(raw.slug),
+    description: firstText(raw.description),
+    curator: firstText(raw.person?.owner_name, raw.artist?.name),
+    curatorId: firstText(raw.person?.id, raw.artist?.id),
+    addDate: firstText(raw.add_date),
+    publishDate: firstText(raw.publish_date),
+    changeDate: firstText(raw.change_date),
+    trackCount: cleanNumber(raw.track_count) || 0,
+    genres: Array.isArray(raw.genres) ? raw.genres.map(objectName).filter(Boolean) : [],
+    imageUrl: firstImageUrl(raw.image),
+    price: raw.price || null,
+    rawJson: raw
+  };
+}
+
+function normalizedChartTrack(raw = {}, index = 0) {
+  const track = normalizeBeatportTrack(raw);
+  const titleWithMix = track.mixName && !new RegExp(`\\b${track.mixName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(track.title)
+    ? `${track.title} (${track.mixName})`
+    : track.title;
+  return {
+    ...track,
+    position: index + 1,
+    titleWithMix,
+    source: "beatport_chart",
+    metadataEnrichment: {
+      source: "beatport",
+      id: track.id,
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      label: track.label,
+      genre: [track.genre, track.subGenre].filter(Boolean).join(", "),
+      beatportTags: track.beatportTags,
+      bpm: track.bpm,
+      keyName: track.keyName,
+      camelot: track.camelot,
+      releaseDate: track.releaseDate,
+      durationMs: track.durationMs,
+      isrc: track.isrc,
+      imageUrl: track.imageUrl,
+      beatportUrl: track.beatportUrl,
+      beatport: {
+        id: track.id,
+        url: track.beatportUrl,
+        genre: track.genre,
+        subGenre: track.subGenre,
+        label: track.label,
+        releaseDate: track.releaseDate,
+        releaseId: track.releaseId,
+        artistIds: track.artistIds,
+        remixerIds: track.remixerIds,
+        durationMs: track.durationMs,
+        bpm: track.bpm,
+        keyName: track.keyName,
+        camelot: track.camelot,
+        isrc: track.isrc
+      }
+    },
+    beatport: {
+      id: track.id,
+      url: track.beatportUrl,
+      genre: track.genre,
+      subGenre: track.subGenre,
+      label: track.label,
+      releaseDate: track.releaseDate,
+      releaseId: track.releaseId,
+      bpm: track.bpm,
+      keyName: track.keyName,
+      camelot: track.camelot,
+      isrc: track.isrc
+    },
+    tidal: {},
+    tidalId: "",
+    tidalUrl: "",
+    url: track.beatportUrl
+  };
+}
+
 function normalizeBeatportToken(token = {}, current = {}, now = Date.now()) {
   const expiresIn = Number(token.expires_in || token.expiresIn || 0);
   const expiresAtMs = Number(token.expiresAtMs || token.expires_at_ms || 0);
@@ -570,6 +654,52 @@ class BeatportClient {
     }
     return null;
   }
+
+  async getChart(chartId, { page = 1, perPage = 100 } = {}) {
+    const id = cleanText(chartId).replace(/[^0-9]/g, "");
+    if (!id) throw new Error("Beatport chart ID is required.");
+    const chart = await this.requestJson(`/catalog/charts/${encodeURIComponent(id)}/`);
+    if (!chart) return null;
+
+    const normalizedPerPage = Math.max(1, Math.min(100, Number(perPage) || 100));
+    let currentPage = Math.max(1, Number(page) || 1);
+    const tracks = [];
+    const pages = [];
+    let next = "";
+    do {
+      const payload = await this.requestJson(`/catalog/charts/${encodeURIComponent(id)}/tracks/`, {
+        page: currentPage,
+        per_page: normalizedPerPage
+      });
+      if (!payload) break;
+      const pageTracks = extractBeatportTracks(payload);
+      const start = tracks.length;
+      tracks.push(...pageTracks.map((track, index) => normalizedChartTrack(track, start + index)));
+      pages.push({
+        page: cleanText(payload.page),
+        perPage: Number(payload.per_page || normalizedPerPage) || normalizedPerPage,
+        count: Number(payload.count || 0) || 0,
+        next: cleanText(payload.next),
+        previous: cleanText(payload.previous),
+        retrieved: pageTracks.length
+      });
+      next = cleanText(payload.next);
+      currentPage += 1;
+    } while (next && currentPage < 100);
+
+    return {
+      chart: normalizeBeatportChart(chart),
+      pagination: {
+        count: pages[0]?.count || tracks.length,
+        pageCount: pages.length,
+        complete: !next,
+        next,
+        pages
+      },
+      tracks,
+      diagnostics: this.diagnostics()
+    };
+  }
 }
 
 module.exports = {
@@ -577,6 +707,7 @@ module.exports = {
   BeatportTokenStore,
   beatportTrackIdFromUrl,
   extractBeatportTracks,
+  normalizeBeatportChart,
   normalizeBeatportToken,
   normalizeBeatportTrack,
   parseRetryAfterMs,
