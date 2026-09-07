@@ -3128,7 +3128,12 @@ class RoonClient extends EventEmitter {
       const entry = this.exactQueueActions?.get(track.verifiedQueueToken);
       if (!this.hasVerifiedQueueAction(track.verifiedQueueToken)) throw new Error("Stored Roon action expired; resolve the saved TIDAL identity again.");
       if (entry.zoneId !== zoneId || mode !== (entry.mode || "queue")) throw new Error("Selected zone differs from the resolved zone, or mode is not append.");
-      if (!(entry.policy ? entry.policy === (options.matchPolicy || track.directMatchPolicy) && directIdentity(track, entry.track, "strict").accepted : strictRoonIdentity(track, { ...entry.track, tidalTrackId: entry.track.id || entry.track.tidalTrackId }).accepted)) throw new Error("Stored Roon action identity differs from the requested track.");
+      const samePolicy = !entry.policy || entry.policy === (options.matchPolicy || track.directMatchPolicy);
+      const trustedBridgeToken = entry.result?.hierarchy === "playlists" && entry.result?.identityEvidence?.accepted;
+      const identityMatches = entry.policy
+        ? samePolicy && (directIdentity(track, entry.track, "strict").accepted || trustedBridgeToken)
+        : trustedBridgeToken || strictRoonIdentity(track, { ...entry.track, tidalTrackId: entry.track.id || entry.track.tidalTrackId }).accepted;
+      if (!identityMatches) throw new Error("Stored Roon action identity differs from the requested track.");
       result = options.matchPolicy ? { ...entry.result, resolutionMethod: entry.result.resolutionMethod || 'cached_roon_action' } : entry.result;
       // Consume before dispatch. Never replay an uncertain external queue action automatically.
       this.exactQueueActions.delete(track.verifiedQueueToken);

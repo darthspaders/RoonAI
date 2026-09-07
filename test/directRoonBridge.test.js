@@ -58,6 +58,23 @@ test('queue execution consumes the stored bridge action in playlist hierarchy wi
  const result=await RoonClient.prototype.performSearchAction.call(fake,requested,'z','queue',{matchPolicy:'strict'});assert.equal(result.success,true);assert.equal(dispatched.length,1);assert.equal(dispatched[0].hierarchy,'playlists');assert.equal(dispatched[0].item_key,'exact-queue');assert.equal(fake.exactQueueActions.size,0);
 });
 
+test('queue execution trusts exact bridge token when TIDAL omits generic Original Mix text',async()=>{
+ const dispatched=[];
+ const requestedTrack={artist:'Etko',title:'Different Fabric (Original Mix)',source:'beatport_chart',isrc:'US83Z2653996'};
+ const verifiedTrack={artist:'ETKO',title:'Different Fabric',id:'550891390',tidalTrackId:'550891390',isrc:'US83Z2653996'};
+ const fake={
+  zoneOrOutputId:z=>z,
+  hasVerifiedQueueAction:RoonClient.prototype.hasVerifiedQueueAction,
+  exactQueueActions:new Map([['bridge-token',{zoneId:'z',mode:'next',track:verifiedTrack,createdAt:Date.now(),browse:null,result:{success:true,session:'playlist-session',hierarchy:'playlists',playable:{item_key:'exact-queue',title:'Add Next'},identityEvidence:{accepted:true,method:'bridge_verified_title_generic_mix'}}}]]),
+  browse:{browse:(args,cb)=>{dispatched.push(args);cb(null,{action:'message',message:'Added next'});}}
+ };
+ fake.exactQueueActions.get('bridge-token').browse=fake.browse;
+ const result=await RoonClient.prototype.performSearchAction.call(fake,{...requestedTrack,verifiedQueueToken:'bridge-token'},'z','next',{matchPolicy:'strict'});
+ assert.equal(result.success,true);
+ assert.equal(dispatched.length,1);
+ assert.equal(fake.exactQueueActions.size,0);
+});
+
 test('bulk queue groups strict TIDAL misses into one bridge sync before queueing',async()=>{
  const bridgeCalls=[];const tracks=[{...requested,tidalTrackId:'1'},{artist:'Mayro',title:'Same Idea',tidalTrackId:'2'}];
  const fake={

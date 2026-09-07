@@ -228,7 +228,14 @@ const externalTrackQueue = new ExternalTrackQueue({ roon, verify: runExactVerifi
 });
 {
   const directBridge = require("./directRoonBridge");
-  const directBridgeDeps = { knownTracks: () => directRoonQueue.knownTracks(), tidal: { getTrack: (id) => tidal.getTrack(id) }, bridge: exactRoonBridge };
+  const directBridgeDeps = {
+    knownTracks: () => directRoonQueue.knownTracks(),
+    tidal: {
+      getTrack: (id) => tidal.getTrack(id),
+      findExactTrack: (track, options) => tidal.findExactTrack(track, options)
+    },
+    bridge: exactRoonBridge
+  };
   roon.resolveDirectBridge = directBridge.createDirectBridge(directBridgeDeps);
   roon.resolveDirectBridgeBatch = directBridge.createDirectBridgeBatch(directBridgeDeps);
 }
