@@ -2,12 +2,32 @@
 const {identity}=require('./directRoonQueue');
 
 async function resolveKnown(requested,{knownTracks,tidal}) {
- requested={...requested,tidalTrackId:String(requested.tidalTrackId||requested.tidal?.id||requested.id||'')};
+ const beatportOnly=Boolean(requested.beatportTrackId||requested.beatport?.id||requested.source==='beatport_chart');
+ requested={...requested,tidalTrackId:String(requested.tidalTrackId||requested.tidal?.id||requested.tidalId||(!beatportOnly?requested.id:'')||'')};
  let known=knownTracks().find(t=>identity(requested,{...t,tidalTrackId:String(t.tidalTrackId||t.id||'')},'strict').accepted);
  if(!known&&requested.tidalTrackId){
   const detail=await tidal.getTrack(requested.tidalTrackId);
   if(detail?.artist&&detail?.title&&identity(requested,{...detail,tidalTrackId:String(detail.id)},'strict').accepted)known=detail;
   else return {error:{success:false,failureType:'version_mismatch',reason:'The supplied TIDAL ID does not confirm the requested artist/title/version; bridge not modified.'}};
+ }
+ if(!known&&!requested.tidalTrackId&&(requested.isrc||beatportOnly)&&requested.artist&&requested.title&&typeof tidal.findExactTrack==='function'){
+  try{
+   const detail=await tidal.findExactTrack(requested,{strict:true,limit:10,maxQueries:6});
+   const requestedIsrc=String(requested.isrc||'').replace(/[^a-z0-9]/gi,'').toUpperCase();
+   const detailIsrc=String(detail?.isrc||'').replace(/[^a-z0-9]/gi,'').toUpperCase();
+   const isrcConflict=requestedIsrc&&detailIsrc&&requestedIsrc!==detailIsrc;
+   const strictEvidence=detail?.id&&detail?.artist&&detail?.title&&!isrcConflict
+    ? identity(requested,{...detail,tidalTrackId:String(detail.id)},'strict')
+    : {accepted:false};
+   const isrcEvidence=requestedIsrc&&detailIsrc&&requestedIsrc===detailIsrc
+    ? identity(requested,{...detail,tidalTrackId:String(detail.id)},'flexible')
+    : {accepted:false};
+   if(detail?.id&&detail?.artist&&detail?.title&&(strictEvidence.accepted||isrcEvidence.accepted)){
+    known={...detail,tidalTrackId:String(detail.id)};
+   }
+  }catch(error){
+   return {error:{success:false,failureType:'tidal_lookup_failed',reason:`TIDAL exact lookup failed before bridge insertion: ${error.message}`}};
+  }
  }
  if(!known)return {error:{success:false,failureType:requested.tidalTrackId||requested.isrc?'roon_catalog_missing':'not_found',reason:'Direct and album lookup failed; no matching saved exact TIDAL identity is available for the bridge.'}};
  const id=String(known.tidalTrackId||known.id||'');

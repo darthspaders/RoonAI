@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {createDirectBridge}=require('../src/directRoonBridge');const {RoonClient}=require('../src/roonClient');
+const {createDirectBridge,createDirectBridgeBatch}=require('../src/directRoonBridge');const {RoonClient}=require('../src/roonClient');
 const requested={artist:'M.O.S.',title:'Immensity (Extended Mix)',album:'Favourite Colours EP'};
 const exact={...requested,id:'432944544',isrc:'GBEWA2502225',durationMs:434000};
 test('saved exact identity reaches permanent bridge without TIDAL search',async()=>{
@@ -98,6 +98,52 @@ test('bulk queue sends strict TIDAL version mismatches to bridge instead of retu
  assert.equal(result.queuedCount,1);
  assert.equal(result.queued[0].directFailure.failureType,'version_mismatch');
  assert.equal(result.queued[0].bridge.tidalTrackId,'432944544');
+});
+
+test('Beatport chart rows verify through TIDAL before bridge insertion',async()=>{
+ let tidalLookups=0;
+ let bridgeRows=[];
+ const chartTrack={artist:'Miraculum',title:'Aftermath (Original Mix)',source:'beatport_chart',beatportTrackId:'299',isrc:'GBABC2600001'};
+ const tidalMatch={artist:'Miraculum',title:'Aftermath (Original Mix)',id:'987654321',isrc:'GBABC2600001',durationMs:420000};
+ const resolve=createDirectBridgeBatch({
+  knownTracks:()=>[],
+  tidal:{
+   getTrack:()=>{throw Error('must not use Beatport ID as TIDAL ID');},
+   findExactTrack:async(track,options)=>{tidalLookups++;assert.equal(track.beatportTrackId,'299');assert.equal(options.strict,true);return tidalMatch;}
+  },
+  bridge:{resolveBatch:async(rows)=>{bridgeRows=rows;return {results:rows.map(()=>({success:true,queueToken:'token',playlistId:'permanent',match:{title:tidalMatch.title,subtitle:tidalMatch.artist}}))};}}
+ });
+ const result=await resolve([{index:0,track:chartTrack,mode:'queue',policy:'strict'}],'z',{mode:'queue'});
+ assert.equal(tidalLookups,1);
+ assert.equal(bridgeRows[0].track.tidalTrackId,'987654321');
+ assert.equal(result[0].result.success,true);
+ assert.equal(result[0].result.bridge.tidalTrackId,'987654321');
+});
+
+test('Beatport chart TIDAL verification accepts omitted generic mix when ISRC matches',async()=>{
+ const chartTrack={artist:'Guy J',title:'Secret Serv1ce (Original Mix)',source:'beatport_chart',beatportTrackId:'305',isrc:'DEY032603175'};
+ const tidalMatch={artist:'Guy J',title:'Secret Serv1ce',id:'551357259',isrc:'DEY032603175',durationMs:420000};
+ const resolve=createDirectBridge({
+  knownTracks:()=>[],
+  tidal:{getTrack:()=>{throw Error('must not use Beatport ID as TIDAL ID');},findExactTrack:async()=>tidalMatch},
+  bridge:{resolve:async(row)=>({success:true,queueToken:'token',playlistId:'permanent',match:{title:row.track.title,subtitle:row.track.artist}})}
+ });
+ const result=await resolve(chartTrack,'z','queue','strict');
+ assert.equal(result.success,true);
+ assert.equal(result.bridge.tidalTrackId,'551357259');
+});
+
+test('Beatport chart TIDAL verification rejects ISRC conflicts',async()=>{
+ const chartTrack={artist:'DAVI',title:'In Deep (Extended Mix)',source:'beatport_chart',beatportTrackId:'306',isrc:'DEW872604607'};
+ const tidalMatch={artist:'Davi',title:'In Deep',id:'551680775',isrc:'DEW872604608',durationMs:420000};
+ const resolve=createDirectBridge({
+  knownTracks:()=>[],
+  tidal:{getTrack:()=>{throw Error('must not use Beatport ID as TIDAL ID');},findExactTrack:async()=>tidalMatch},
+  bridge:{resolve:()=>{throw Error('must not bridge conflicting ISRC');}}
+ });
+ const result=await resolve(chartTrack,'z','queue','strict');
+ assert.equal(result.success,false);
+ assert.equal(result.failureType,'roon_catalog_missing');
 });
 
 test('exact bridge persists unresolved TIDAL bridge rows for later retry',async()=>{

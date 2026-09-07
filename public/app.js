@@ -6617,7 +6617,7 @@ $("#beatportChartQueue")?.addEventListener("click", () => {
   const tracks = (state.beatportChartTracks || []).map(beatportChartTrackPayload);
   queueTrackList(tracks, $("#beatportChartQueue"), {
     source: "beatport_chart",
-    buttonText: "Queue chart",
+    buttonText: "Add to queue",
     mode: "append",
     targetCount: tracks.length,
     preferExtendedMixes: false,
