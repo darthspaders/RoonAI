@@ -77,6 +77,9 @@ const state = {
   musicMemoryFeedbackFilter: "",
   beatportChart: null,
   beatportChartTracks: [],
+  beatportCharts: [],
+  beatportChartsLoading: false,
+  beatportChartsLoaded: false,
   beatportChartLoading: false,
   beatportChartNeedsRefresh: true,
   beatportChartId: localStorage.getItem("beatportChartId") || "901032",
@@ -4909,6 +4912,54 @@ async function refreshMusicMemory({ append = false } = {}) {
   }
 }
 
+function beatportChartOptionLabel(chart = {}) {
+  const parts = [
+    chart.title || `Chart ${chart.id || ""}`.trim(),
+    chart.curator || "",
+    chart.publishDate ? formatDateTime(Date.parse(chart.publishDate)) : "",
+    chart.trackCount ? `${chart.trackCount} tracks` : ""
+  ].filter(Boolean);
+  return parts.join(" - ");
+}
+
+function renderBeatportChartSelect() {
+  const select = $("#beatportChartSelect");
+  const input = $("#beatportChartId");
+  if (!select) return;
+  const selectedId = state.beatportChartId || input?.value || "901032";
+  if (state.beatportChartsLoading && !state.beatportCharts.length) {
+    select.innerHTML = "<option value=\"\">Loading Progressive House charts...</option>";
+    select.disabled = true;
+    return;
+  }
+  const charts = state.beatportCharts || [];
+  const knownSelected = charts.some((chart) => String(chart.id) === String(selectedId));
+  const options = charts.map((chart) => (
+    `<option value="${escapeHtml(chart.id)}"${String(chart.id) === String(selectedId) ? " selected" : ""}>${escapeHtml(beatportChartOptionLabel(chart))}</option>`
+  ));
+  if (selectedId && !knownSelected) {
+    options.unshift(`<option value="${escapeHtml(selectedId)}" selected>Manual chart ${escapeHtml(selectedId)}</option>`);
+  }
+  select.innerHTML = options.length
+    ? options.join("")
+    : "<option value=\"\">No Progressive House charts found</option>";
+  select.disabled = !options.length;
+}
+
+async function refreshBeatportChartList() {
+  if (state.beatportChartsLoading) return;
+  state.beatportChartsLoading = true;
+  renderBeatportChartSelect();
+  try {
+    const payload = await getJson("/api/beatport/charts?genre_id=15&per_page=50");
+    state.beatportCharts = Array.isArray(payload?.charts) ? payload.charts : [];
+    state.beatportChartsLoaded = true;
+  } finally {
+    state.beatportChartsLoading = false;
+    renderBeatportChartSelect();
+  }
+}
+
 function beatportChartTrackPayload(track = {}) {
   return {
     artist: track.artist || "",
@@ -5012,6 +5063,7 @@ function renderBeatportChart() {
   const canQueue = Boolean(list.length && !state.beatportChartLoading);
   if (queue) queue.disabled = !canQueue;
   if (queueNext) queueNext.disabled = !canQueue;
+  renderBeatportChartSelect();
 }
 
 async function refreshBeatportChart() {
@@ -5027,6 +5079,8 @@ async function refreshBeatportChart() {
     const payload = await getJson(`/api/beatport/charts/${encodeURIComponent(chartId)}?per_page=100`);
     state.beatportChart = payload;
     state.beatportChartTracks = Array.isArray(payload?.tracks) ? payload.tracks : [];
+    state.beatportChartId = payload?.chart?.id || chartId;
+    localStorage.setItem("beatportChartId", state.beatportChartId);
     state.beatportChartNeedsRefresh = false;
     return payload;
   } finally {
@@ -6236,7 +6290,16 @@ function setActiveView(view) {
     });
   }
   if (target === "beatportCharts" && state.beatportChartNeedsRefresh && !state.beatportChartLoading) {
+    if (!state.beatportChartsLoaded && !state.beatportChartsLoading) {
+      refreshBeatportChartList().catch((error) => {
+        $("#beatportChartStatus").textContent = error.message;
+      });
+    }
     refreshBeatportChart().catch((error) => {
+      $("#beatportChartStatus").textContent = error.message;
+    });
+  } else if (target === "beatportCharts" && !state.beatportChartsLoaded && !state.beatportChartsLoading) {
+    refreshBeatportChartList().catch((error) => {
       $("#beatportChartStatus").textContent = error.message;
     });
   }
@@ -6479,6 +6542,18 @@ $("#musicMemoryResults")?.addEventListener("click", (event) => {
 
 $("#beatportChartForm")?.addEventListener("submit", (event) => {
   event.preventDefault();
+  refreshBeatportChart().catch((error) => {
+    $("#beatportChartStatus").textContent = error.message;
+  });
+});
+
+$("#beatportChartSelect")?.addEventListener("change", (event) => {
+  const chartId = String(event.target.value || "").replace(/[^0-9]/g, "");
+  if (!chartId) return;
+  const input = $("#beatportChartId");
+  if (input) input.value = chartId;
+  state.beatportChartId = chartId;
+  localStorage.setItem("beatportChartId", chartId);
   refreshBeatportChart().catch((error) => {
     $("#beatportChartStatus").textContent = error.message;
   });

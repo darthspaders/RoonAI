@@ -1500,6 +1500,7 @@ input {
 
 .musicMemorySearch input,
 .musicMemorySearch select,
+.beatportChartForm select,
 .beatportChartForm input {
   min-width: 0;
 }
@@ -1513,9 +1514,9 @@ input {
 
 .beatportChartForm {
   display: grid;
-  grid-template-columns: minmax(140px, 220px) auto;
+  grid-template-columns: minmax(260px, 1fr) minmax(110px, 150px) auto;
   gap: 8px;
-  min-width: min(100%, 360px);
+  min-width: min(100%, 720px);
 }
 
 .beatportChartPanel {

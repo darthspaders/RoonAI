@@ -157,7 +157,7 @@ function normalizeBeatportTrack(raw = {}) {
   const releaseDate = firstText(track.publish_date, track.new_release_date, track.release_date, track.date, release.publish_date, release.release_date);
   const title = firstText(track.name, track.title);
   const mixName = firstText(track.mix_name, track.mixName);
-  const imageUrl = firstImageUrl(track.image, track.images, release.image, release.images);
+  const imageUrl = firstImageUrl(release.image, release.images, track.image, track.images);
   return {
     source: "beatport",
     id: firstText(track.id, track.track_id),
@@ -221,6 +221,22 @@ function normalizeBeatportChart(raw = {}) {
     price: raw.price || null,
     rawJson: raw
   };
+}
+
+function extractBeatportCharts(payload) {
+  if (Array.isArray(payload)) return payload;
+  const candidates = [
+    payload?.charts?.data,
+    payload?.charts?.results,
+    payload?.charts,
+    payload?.results?.charts,
+    payload?.results,
+    payload?.data
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate;
+  }
+  return [];
 }
 
 function normalizedChartTrack(raw = {}, index = 0) {
@@ -655,7 +671,31 @@ class BeatportClient {
     return null;
   }
 
-  async getChart(chartId, { page = 1, perPage = 100 } = {}) {
+  async getCharts({ genreId = 15, page = 1, perPage = 50 } = {}) {
+    const normalizedPerPage = Math.max(1, Math.min(100, Number(perPage) || 50));
+    const normalizedPage = Math.max(1, Number(page) || 1);
+    const params = {
+      page: normalizedPage,
+      per_page: normalizedPerPage
+    };
+    const cleanGenreId = cleanText(genreId).replace(/[^0-9]/g, "");
+    if (cleanGenreId) params.genre_id = cleanGenreId;
+    const payload = await this.requestJson("/catalog/charts/", params);
+    const charts = extractBeatportCharts(payload).map(normalizeBeatportChart);
+    return {
+      charts,
+      pagination: {
+        count: Number(payload?.count || charts.length) || charts.length,
+        page: cleanText(payload?.page),
+        perPage: Number(payload?.per_page || normalizedPerPage) || normalizedPerPage,
+        next: cleanText(payload?.next),
+        previous: cleanText(payload?.previous)
+      },
+      diagnostics: this.diagnostics()
+    };
+  }
+
+  async getChart(chartId, { page = 1, perPage = 100, resolveMissingArtwork = true } = {}) {
     const id = cleanText(chartId).replace(/[^0-9]/g, "");
     if (!id) throw new Error("Beatport chart ID is required.");
     const chart = await this.requestJson(`/catalog/charts/${encodeURIComponent(id)}/`);
@@ -687,6 +727,19 @@ class BeatportClient {
       currentPage += 1;
     } while (next && currentPage < 100);
 
+    if (resolveMissingArtwork) {
+      for (const track of tracks) {
+        if (track.imageUrl || !track.id) continue;
+        const detail = await this.requestJson(`/catalog/tracks/${encodeURIComponent(track.id)}/`);
+        const normalized = normalizeBeatportTrack(detail || {});
+        if (!normalized.imageUrl) continue;
+        track.imageUrl = normalized.imageUrl;
+        track.metadataEnrichment.imageUrl = normalized.imageUrl;
+        track.metadataEnrichment.beatport.imageUrl = normalized.imageUrl;
+        track.beatport.imageUrl = normalized.imageUrl;
+      }
+    }
+
     return {
       chart: normalizeBeatportChart(chart),
       pagination: {
@@ -706,6 +759,7 @@ module.exports = {
   BeatportClient,
   BeatportTokenStore,
   beatportTrackIdFromUrl,
+  extractBeatportCharts,
   extractBeatportTracks,
   normalizeBeatportChart,
   normalizeBeatportToken,

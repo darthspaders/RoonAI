@@ -1259,6 +1259,26 @@ async function handleApi(req, res, url) {
     }) || { enabled: false, tracks: [], total: 0 });
   }
 
+  if (req.method === "GET" && pathname === "/api/beatport/charts") {
+    try {
+      const result = await beatport.getCharts({
+        genreId: url.searchParams.get("genre_id") || url.searchParams.get("genreId") || 15,
+        page: url.searchParams.get("page") || 1,
+        perPage: url.searchParams.get("per_page") || url.searchParams.get("perPage") || 50
+      });
+      return sendJson(res, 200, result || {
+        charts: [],
+        pagination: { count: 0, page: "", perPage: 0, next: "", previous: "" },
+        diagnostics: beatport.status()
+      });
+    } catch (error) {
+      return sendJson(res, error.status || 400, {
+        error: error.message,
+        beatport: beatport.status()
+      });
+    }
+  }
+
   if (req.method === "GET" && (pathname === "/api/beatport/chart" || pathname.startsWith("/api/beatport/charts/"))) {
     const chartId = pathname.startsWith("/api/beatport/charts/")
       ? pathname.split("/").filter(Boolean).at(-1)
