@@ -4800,6 +4800,7 @@ function musicMemoryTrackHtml(track = {}) {
     track.beatportMissing ? musicMemoryBadgeHtml(`Beatport ${track.latestBeatportStatus}`, "isMissing") : "",
     track.tidalId ? musicMemoryBadgeHtml("TIDAL", "isTidal") : "",
     track.feedbackCount ? musicMemoryBadgeHtml(`${track.feedbackCount} feedback`, "isFeedback") : "",
+    track.playCount ? musicMemoryBadgeHtml(`${track.playCount} play${track.playCount === 1 ? "" : "s"}`, "isSeen") : "",
     track.observationCount ? musicMemoryBadgeHtml(`${track.observationCount} seen`, "isSeen") : ""
   ].filter(Boolean).join("");
   const meta = memoryMetadataParts(track);

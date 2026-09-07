@@ -197,10 +197,11 @@ let musicMemory = null;
 function recordStandbyActivity(kind,tracks) {
   try {standbyEvents.record(kind,tracks);} catch(error) {console.error("[standby-activity] Persistence failed:",error.message);}
 }
-function rememberMusicObservations(tracks, source) {
+function rememberMusicObservations(tracks, source, optionsForTrack = null) {
   const list = Array.isArray(tracks) ? tracks : [tracks].filter(Boolean);
-  for (const track of list) {
-    try { musicMemory?.rememberObservation?.(track, source); } catch (error) { console.debug("[music-memory] Observation failed:", error.message); }
+  for (const [index, track] of list.entries()) {
+    const options = typeof optionsForTrack === "function" ? optionsForTrack(track, index) : (optionsForTrack || {});
+    try { musicMemory?.rememberObservation?.(track, source, options); } catch (error) { console.debug("[music-memory] Observation failed:", error.message); }
   }
 }
 roon.on("trackQueued", track => {
@@ -926,7 +927,13 @@ function eventPayload() {
   const stateWithRadio = attachRadioEnrichment(baseState);
   scheduleMetadataEnrichment(stateWithRadio);
   const state = attachMetadataEnrichment(stateWithRadio);
-  listeningHistory.recordState(state);
+  const addedPlays = listeningHistory.recordState(state);
+  rememberMusicObservations(addedPlays, "now_playing", (track) => ({
+    observedAt: track.playedAt,
+    sourceEventId: `listening-history:play:${track.zoneId || "zone"}:${track.key}:${track.playedAt || Date.now()}`,
+    context: track.zoneName,
+    rawJson: track
+  }));
   return {
     ...state,
     urls: getNetworkUrls(),
@@ -1198,7 +1205,13 @@ async function handleApi(req, res, url) {
     const baseState = withHqplayerStatus(roon.getState());
     scheduleRadioEnrichment(baseState);
     const state = attachRadioEnrichment(baseState);
-    listeningHistory.recordState(state);
+    const addedPlays = listeningHistory.recordState(state);
+    rememberMusicObservations(addedPlays, "now_playing", (track) => ({
+      observedAt: track.playedAt,
+      sourceEventId: `listening-history:play:${track.zoneId || "zone"}:${track.key}:${track.playedAt || Date.now()}`,
+      context: track.zoneName,
+      rawJson: track
+    }));
     return sendJson(res, 200, listeningHistory.report({
       roonState: state,
       tasteProfile,

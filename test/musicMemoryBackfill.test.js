@@ -85,7 +85,8 @@ test("music memory backfill source event ids are stable without source timestamp
     plays: [{
       artist: "Guy J",
       title: "Lost & Found",
-      tidalId: "999"
+      tidalId: "999",
+      playedAt: 1_767_225_600_000
     }]
   });
 
@@ -95,4 +96,5 @@ test("music memory backfill source event ids are stable without source timestamp
   assert.equal(first.observations.length, 1);
   assert.equal(first.observations[0].sourceEventId, second.observations[0].sourceEventId);
   assert.doesNotMatch(first.observations[0].sourceEventId, /\d{4}-\d{2}-\d{2}T/);
+  assert.equal(first.observations[0].observedAt, "2026-01-01T00:00:00.000Z");
 });

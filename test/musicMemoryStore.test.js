@@ -179,6 +179,7 @@ test("music memory search returns enrichment, feedback, observations, and artwor
   assert.equal(result.tracks[0].beatport.bpm, 123);
   assert.equal(result.tracks[0].beatport.releaseId, "7216259");
   assert.equal(result.tracks[0].feedbackCount, 1);
+  assert.equal(result.tracks[0].playCount, 1);
   assert.deepEqual(result.tracks[0].feedbackRatings, ["love"]);
   assert.equal(result.tracks[0].latestObservationSource, "now_playing");
   assert.equal(result.tracks[0].imageUrl, "https://geo-media.beatport.com/image.jpg");

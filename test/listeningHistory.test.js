@@ -78,7 +78,7 @@ test("real radio metadata can still record a real track", () => {
   const file = tempHistoryFile();
   const history = new ListeningHistory({ file });
 
-  history.recordState({
+  const added = history.recordState({
     zones: [{
       state: "playing",
       zone_id: "zone-1",
@@ -106,6 +106,29 @@ test("real radio metadata can still record a real track", () => {
   assert.equal(history.data.plays[0].title, "Medicine Drum");
   assert.equal(history.data.plays[0].imageKey, "");
   assert.equal(isNonContributoryPlay(history.data.plays[0]), false);
+  assert.equal(added.length, 1);
+  assert.equal(added[0].title, "Medicine Drum");
+  assert.equal(history.recordState({
+    zones: [{
+      state: "playing",
+      zone_id: "zone-1",
+      display_name: "HQPlayer",
+      now_playing: {
+        length: 540,
+        two_line: {
+          line1: "Progressive -DI.FM",
+          line2: "Unknown Artist"
+        },
+        radio_lookup: {
+          title: "Medicine Drum",
+          artist: "Ancient Analog",
+          album: "Songs From A Vortex Named WEHO",
+          isRadioProgram: false,
+          catalogEnrichmentAllowed: true
+        }
+      }
+    }]
+  }).length, 0);
 });
 
 test("history report exposes deeper taste DNA from feedback and track memory", () => {

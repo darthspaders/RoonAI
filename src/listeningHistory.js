@@ -501,6 +501,7 @@ class ListeningHistory {
 
   recordState(state = {}) {
     let changed = false;
+    const addedPlays = [];
     for (const zone of state.zones || []) {
       const track = trackFromZone(zone);
       if (!track || !track.key || track.key === "|") continue;
@@ -518,13 +519,16 @@ class ListeningHistory {
       ));
       if (duplicate) continue;
 
-      this.data.plays.unshift({
+      const play = {
         ...track,
         playedAt: now
-      });
+      };
+      this.data.plays.unshift(play);
+      addedPlays.push(play);
       changed = true;
     }
     if (changed) this.save();
+    return addedPlays;
   }
 
   report({ roonState = {}, tasteProfile, discoveryHistory, trackMemory } = {}) {

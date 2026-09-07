@@ -68,7 +68,7 @@ function compactTrack(input = {}) {
     album: cleanText(input.album || tidal.album || metadata.album),
     label: cleanText(input.label || tidal.label || metadata.label),
     releaseDate: cleanText(input.releaseDate || tidal.releaseDate || metadata.releaseDate),
-    durationMs: Number(input.durationMs || tidal.durationMs || metadata.durationMs || beatport.durationMs || 0) || null
+    durationMs: Number(input.durationMs || tidal.durationMs || metadata.durationMs || beatport.durationMs || (Number(input.lengthSeconds || 0) > 0 ? Number(input.lengthSeconds) * 1000 : 0) || 0) || null
   };
 }
 
@@ -79,7 +79,8 @@ function addTrack(collection, sourceFile, source, item, index, options = {}) {
     collection.unmapped.push({ sourceFile, source, index, reason: "missing stable identity and artist/title", raw: item });
     return null;
   }
-  const observedAt = isoTime(options.observedAt ?? item.at ?? item.timestamp ?? item.updatedAt ?? item.lastSeenAt ?? item.firstSeenAt);
+  const observedAt = isoTime(options.observedAt ?? item.playedAt ?? item.at ?? item.timestamp ?? item.updatedAt ?? item.lastSeenAt ?? item.firstSeenAt);
+  const count = Math.max(1, Number(options.count || item.playCount || item.play_count || item.plays || item.seenCount || 1) || 1);
   collection.tracks.push({
     key,
     track: {
@@ -99,7 +100,7 @@ function addTrack(collection, sourceFile, source, item, index, options = {}) {
       source,
       context: cleanText(options.context || item.discoveryLane || item.sourceType),
       observedAt,
-      count: Math.max(1, Number(options.count || item.seenCount || 1) || 1),
+      count,
       sourceEventId: `${sourceFile}:observation:${eventIdPart(source)}:${eventIdPart(index)}:${eventIdPart(key)}`,
       raw: item
     });
@@ -274,7 +275,7 @@ function collectFromData(dataDir = DATA_DIR) {
   asArray(discovery?.entries).forEach((entry, index) => addTrack(c, "discovery-history.json", "discovery_history", entry, index, { observedAt: entry.lastSeenAt || entry.firstSeenAt }));
 
   const listening = load("listening-history.json");
-  asArray(listening?.plays).forEach((play, index) => addTrack(c, "listening-history.json", play.isLiveRadio ? "live_radio" : "now_playing", play, index, { observedAt: play.at || play.lastSeenAt || play.timestamp }));
+  asArray(listening?.plays).forEach((play, index) => addTrack(c, "listening-history.json", play.isLiveRadio ? "live_radio" : "now_playing", play, index, { observedAt: play.playedAt || play.at || play.lastSeenAt || play.timestamp }));
 
   const standbyActivity = load("standby-activity.json");
   asArray(standbyActivity?.entries).forEach((entry, index) => addTrack(c, "standby-activity.json", entry.kind || "standby_activity", entry, index, { observedAt: entry.at, context: entry.kind }));

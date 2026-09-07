@@ -193,6 +193,7 @@ function memoryTrackFromRow(row = {}) {
     firstSeenAt: cleanText(row.first_seen_at),
     lastSeenAt: cleanText(row.last_seen_at),
     observationCount: Number(row.observation_count || 0) || 0,
+    playCount: Number(row.play_count || 0) || 0,
     latestObservationAt: cleanText(row.latest_observation_at),
     latestObservationSource: cleanText(row.latest_observation_source),
     feedbackCount: Number(row.feedback_count || 0) || 0,
@@ -743,6 +744,12 @@ class MusicMemoryStore {
       ) lo ON lo.track_identity_id = ti.id
       LEFT JOIN track_observation los ON los.track_identity_id = ti.id AND los.observed_at = lo.latest_observation_at
       LEFT JOIN (
+        SELECT track_identity_id, SUM(count) AS play_count
+        FROM track_observation
+        WHERE source IN ('now_playing', 'live_radio', 'roon_play', 'playback', 'played')
+        GROUP BY track_identity_id
+      ) pc ON pc.track_identity_id = ti.id
+      LEFT JOIN (
         SELECT track_identity_id, COUNT(*) AS feedback_count, GROUP_CONCAT(DISTINCT rating) AS feedback_ratings
         FROM taste_feedback
         GROUP BY track_identity_id
@@ -797,6 +804,7 @@ class MusicMemoryStore {
         pe.raw_json AS provider_raw_json,
         lo.latest_observation_at,
         los.source AS latest_observation_source,
+        pc.play_count,
         tf.feedback_count,
         tf.feedback_ratings,
         lba.status AS latest_beatport_status,
