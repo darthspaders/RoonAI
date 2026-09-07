@@ -71,6 +71,8 @@ In LM Studio, load the Qwen model, start the local server on port `1234`, and co
 
 Optional Synapse/OpenAI second brain:
 
+In this repo, **Synapse** is Rabbit Hole's name for the optional OpenAI/ChatGPT-backed reasoning layer. It is not a separate music provider or queue engine; it is the cloud model path Rabbit Hole can use for planning, reviewing, ranking, and tool-calling when local mode is not enough.
+
 ```env
 AI_MODE=auto
 OPENAI_ENABLED=true

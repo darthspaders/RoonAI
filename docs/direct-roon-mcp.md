@@ -8,7 +8,9 @@ Implemented and live-tested September 6, 2026. Rabbit Hole's existing authentica
 
 Refresh the MCP connection/tool list in ChatGPT if the new names are not visible. No new backend credentials are needed. The existing MCP authentication configuration remains in effect.
 
-## Synapse instructions
+## Synapse / ChatGPT Instructions
+
+In Rabbit Hole docs, **Synapse** means the optional OpenAI/ChatGPT-backed reasoning layer that can call the MCP tools. These instructions are for that model/client path, not for a separate queue implementation.
 
 For “add these tracks to Roon”, call `roon_queue_tracks` with JSON objects and `matchPolicy: flexible`. Do not use discovery, standby, scoring, novelty filtering, TIDAL verification or a string list parser. For an explicit verify-first request, perform exact TIDAL verification first, then queue the verified identities with strict matching. Verification alone does not authorize queue writes.
 
