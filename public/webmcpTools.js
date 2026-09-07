@@ -110,6 +110,101 @@
   });
 
   register({
+    name: "verify_tracks",
+    description: "Verify exact supplied artist/title/version pairs on TIDAL, optionally checking Roon queueability. No discovery, novelty filters, substitutions or writes. Saves results for an explicit later queue or playlist request.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tracks: {
+          type: "array",
+          minItems: 1,
+          maxItems: 40,
+          description: "Candidate tracks to verify. Prefer objects with artist and title; strings can use 'Artist - Title'.",
+          items: {
+            oneOf: [
+              { type: "string" },
+              {
+                type: "object",
+                properties: {
+                  artist: { type: "string" },
+                  title: { type: "string" },
+                  album: { type: "string" },
+                  year: { type: "integer" },
+                  releaseDate: { type: "string" },
+                  durationMs: { type: "integer" },
+                  tidalUrl: { type: "string" }
+                },
+                additionalProperties: true
+              }
+            ]
+          }
+        },
+        checkRoon: {
+          type: "boolean",
+          description: "Also verify that Roon exposes a queue action for each candidate."
+        },
+        requireRoonQueueable: {
+          type: "boolean",
+          description: "Alias for checkRoon."
+        },
+        allowKnown: {
+          type: "boolean",
+          description: "Allow tracks already in Rabbit Hole history or memory to be marked usable."
+        },
+        allowRepeats: {
+          type: "boolean",
+          description: "Alias for allowKnown."
+        },
+        minDurationMinutes: {
+          type: "number",
+          minimum: 0,
+          description: "Reject candidates shorter than this duration."
+        },
+        minDurationSeconds: { type: "number", minimum: 0 },
+        minDurationMs: { type: "integer", minimum: 0 },
+        preferExtendedMixes: { type: "boolean" },
+        strict: { type: "boolean" },
+        zoneId: { type: "string" },
+        max: { type: "integer", minimum: 1, maximum: 40 }
+      },
+      required: ["tracks"],
+      additionalProperties: false
+    },
+    execute: (input) => bridge.verifyTracks(input)
+  });
+
+  register({
+    name: "queue_supplied_tracks",
+    description: "Queue supplied lists using the existing bulk Roon path by default. queuePolicy strict opts into exact verification first. retryFailures retries only saved failures. Requires queue authorization.",
+    inputSchema: {type:"object",properties:{tracks:{oneOf:[{type:"string"},{type:"array",maxItems:500,items:{oneOf:[{type:"string"},{type:"object",additionalProperties:true}]}}]},queuePolicy:{type:"string",enum:["fast","strict"],default:"fast"},verifyBeforeQueue:{type:"boolean",default:false},retryFailures:{type:"boolean"},zoneId:{type:"string"}},additionalProperties:false},
+    execute: input => bridge.queueSuppliedTracks(input)
+  });
+  register({
+    name: "queue_verified_tracks",
+    description: "On explicit user request, resolve pending saved TIDAL identities and queue exact tracks through the shared bulk Roon path without discovery or substitutions. Uses the permanent exact TIDAL playlist after direct Roon misses unless allowBridge is false.",
+    inputSchema: { type: "object", properties: { count: trackCountProperty, zoneId: { type: "string" }, mode: { type: "string", enum: ["append"] }, allowBridge: { type: "boolean", default: true }, bridgeSyncDelaysMs: { type: "array", items: { type: "integer", minimum: 0, maximum: 120000 }, maxItems: 8 }, bridgeLookupTimeoutMs: { type: "integer", minimum: 1000, maximum: 60000 } }, additionalProperties: false },
+    execute: input => bridge.queueVerifiedTracks(input)
+  });
+  register({
+    name: "verify_exact_tracks",
+    description: "Parse and verify an exact artist-title list. Preserves versions, ignores surrounding instructions, saves exact results and Roon actions for queue_verified_tracks. No discovery.",
+    inputSchema: { type: "object", properties: { tracks: { oneOf: [{ type: "string" }, { type: "array", items: { oneOf: [{ type: "string" }, { type: "object", additionalProperties: true }] } }] }, checkRoon: { type: "boolean" }, zoneId: { type: "string" } }, required: ["tracks"], additionalProperties: false },
+    execute: input => bridge.verifyTracks(input)
+  });
+  register({
+    name: "send_verified_tracks_to_tidal_playlist",
+    description: "On explicit user request, create a TIDAL playlist with the saved exact verified IDs.",
+    inputSchema: { type: "object", properties: { count: trackCountProperty, title: { type: "string" }, description: { type: "string" } }, additionalProperties: false },
+    execute: input => bridge.sendVerifiedTracksToTidal(input)
+  });
+  register({
+    name: "resolve_verified_tracks_for_roon",
+    description: "Resolve saved exact TIDAL identities in Roon, retrying only unresolved tracks. No TIDAL search, discovery or queue execution. Reuses a designated exact-ID playlist after direct resolution fails unless allowBridge is false and reports when a manual Roon playlist refresh is needed.",
+    inputSchema: { type: "object", properties: { trackIds: { type: "array", items: { type: "string" } }, zoneId: { type: "string" }, allowBridge: { type: "boolean", default: true }, retries: { type: "integer", minimum: 0, maximum: 2 }, roonTimeoutMs: { type: "integer", minimum: 100, maximum: 30000 }, bridgeSyncDelaysMs: { type: "array", items: { type: "integer", minimum: 0, maximum: 120000 }, maxItems: 8 }, bridgeLookupTimeoutMs: { type: "integer", minimum: 1000, maximum: 60000 } }, additionalProperties: false },
+    execute: input => bridge.resolveVerifiedTracksForRoon(input)
+  });
+
+  register({
     name: "queue_rabbit_hole_tracks",
     description: "Queue the currently displayed Rabbit Hole result tracks into the selected Roon output zone.",
     inputSchema: {
@@ -124,6 +219,16 @@
         preferExtendedMixes: {
           type: "boolean",
           description: "Prefer extended versions during Roon queue resolution."
+        },
+        allowBridge: {
+          type: "boolean",
+          default: true,
+          description: "Use the permanent exact TIDAL bridge playlist when Roon cannot immediately resolve a verified track."
+        },
+        bridgeSyncDelaysMs: {
+          type: "array",
+          items: { type: "integer", minimum: 0, maximum: 120000 },
+          maxItems: 8
         }
       },
       additionalProperties: false
@@ -216,6 +321,16 @@
         preferExtendedMixes: {
           type: "boolean",
           description: "Prefer extended versions during Roon queue resolution."
+        },
+        allowBridge: {
+          type: "boolean",
+          default: true,
+          description: "Use the permanent exact TIDAL bridge playlist when Roon cannot immediately resolve a verified track."
+        },
+        bridgeSyncDelaysMs: {
+          type: "array",
+          items: { type: "integer", minimum: 0, maximum: 120000 },
+          maxItems: 8
         }
       },
       additionalProperties: false

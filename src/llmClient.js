@@ -1,4 +1,5 @@
 "use strict";
+const {memory} = require("./synapseMemory");
 
 const LLM_TIMEOUT_MS = 45_000;
 const OPENAI_COMPATIBLE_PROVIDERS = new Set(["openai-compatible", "openai_compatible", "lmstudio", "llamacpp"]);
@@ -100,6 +101,12 @@ ${seedText ? `Seed playlist / reference notes:\n${seedText}` : "Seed playlist / 
 Return ONLY valid JSON in this exact shape:
 {
   "intent": "one sentence",
+  "intentRoute": "genre | theme | activity | artist | similarity | era | mood | open",
+  "themeTerms": ["lyrical or emotional subject terms, not genres"],
+  "activityTerms": ["listening context terms such as driving, focus, sleep, party"],
+  "promptStrictness": "theme-first | activity-first | genre-first | artist-first | similarity-first | era-first | open-discovery",
+  "allowOutsideTaste": true,
+  "tasteInfluence": "strongly | lightly | not at all",
   "targetGenres": ["genre/style terms to search"],
   "vibeTerms": ["sonic traits and mood words"],
   "seedArtists": ["artists from the seed or now playing"],
@@ -113,8 +120,11 @@ Return ONLY valid JSON in this exact shape:
 Rules:
 - searchQueries should be catalogue-safe strings like "Anjunadeep melodic house 2026", "tech house Toolroom", or "Hernan Cattaneo progressive house".
 - Prefer artist/label/genre/year queries over guessed song titles.
+- For simple theme prompts like "love songs about being apart", use intentRoute "theme", keep targetGenres empty unless the user named a genre, add themeTerms such as "love" and "being apart", and create title/theme/tag search queries such as "long distance love electronic" or "missing you vocal electronic".
+- For activity prompts like "chill driving music", use intentRoute "activity", add activityTerms, and only use learned taste as a light preference unless the user asks for similar/taste-guided results.
 - For narrow genre/year discovery, include credible labels, artists, and one-ring adjacent scene terms; avoid generic SEO phrases like "best mix", "top hits", "playlist", or "summer vibes".
 - Do not default to progressive house just because the listener often likes it. Use progressive assumptions only when the request, seed, or explicit genre points there.
+- Pure Search means tasteInfluence "not at all". Explore/outside-taste/theme/activity/open discovery should allowOutsideTaste true. Similar Mode should keep tasteInfluence "strongly".
 - Treat "progressive psytrance" as psytrance, not progressive house. Treat "psychedelic trance" as a psytrance genre phrase, not a 70s/disco/funk vibe.
 - Do not include the current Roon artist as a seed when the user asks for an unrelated genre/date/vibe search.
 - If a year or date filter exists, include it in the relevant search queries.
@@ -137,9 +147,22 @@ function normalizeStringArray(value, limit = 16) {
   return result;
 }
 
+function normalizeBoolean(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  const key = String(value || "").trim().toLowerCase();
+  return ["1", "true", "yes", "y", "allow", "allowed"].includes(key);
+}
+
 function normalizeSearchPlan(plan = {}) {
   return {
     intent: String(plan.intent || "").replace(/\s+/g, " ").trim(),
+    intentRoute: String(plan.intentRoute || "").replace(/\s+/g, " ").trim(),
+    themeTerms: normalizeStringArray(plan.themeTerms, 12),
+    activityTerms: normalizeStringArray(plan.activityTerms, 10),
+    promptStrictness: String(plan.promptStrictness || "").replace(/\s+/g, " ").trim(),
+    allowOutsideTaste: normalizeBoolean(plan.allowOutsideTaste),
+    tasteInfluence: String(plan.tasteInfluence || "").replace(/\s+/g, " ").trim(),
     targetGenres: normalizeStringArray(plan.targetGenres, 12),
     vibeTerms: normalizeStringArray(plan.vibeTerms, 16),
     seedArtists: normalizeStringArray(plan.seedArtists, 12),
@@ -372,6 +395,7 @@ function normalizeBaseUrl(baseUrl = "") {
 }
 
 async function callOpenAiCompatible(config, prompt, timeoutMs = LLM_TIMEOUT_MS) {
+  const activeModel = await require("./localModelRuntime").resolveLocalModel(config);
   const baseUrl = normalizeBaseUrl(config.openAiCompatibleBaseUrl);
   if (!baseUrl) throw new Error("LLM_BASE_URL is not set.");
 
@@ -386,7 +410,7 @@ async function callOpenAiCompatible(config, prompt, timeoutMs = LLM_TIMEOUT_MS) 
     method: "POST",
     headers,
     body: JSON.stringify({
-      model: config.openAiCompatibleModel,
+      model: activeModel,
       messages: [
         { role: "system", content: "You generate strict JSON playlist candidates for Roon. Return only valid JSON." },
         { role: "user", content: prompt }
@@ -408,6 +432,7 @@ async function callOpenAiCompatible(config, prompt, timeoutMs = LLM_TIMEOUT_MS) 
 }
 
 function callConfiguredModel(config, modelPrompt, timeoutMs = LLM_TIMEOUT_MS) {
+  modelPrompt = [memory.context(modelPrompt), modelPrompt].filter(Boolean).join("\n\n");
   if (config.llmProvider === "openrouter") return callOpenRouter(config, modelPrompt, timeoutMs);
   if (OPENAI_COMPATIBLE_PROVIDERS.has(config.llmProvider)) {
     return callOpenAiCompatible(config, modelPrompt, timeoutMs);
@@ -415,7 +440,7 @@ function callConfiguredModel(config, modelPrompt, timeoutMs = LLM_TIMEOUT_MS) {
   return callOllama(config, modelPrompt, timeoutMs);
 }
 
-async function generateSearchPlan(config, options) {
+async function generateSearchPlan(config, options, timeoutMs = LLM_TIMEOUT_MS) {
   const requestedCount = Math.max(1, Math.min(requestedCountFor(options), 40));
   const prompt = buildSearchPlanPrompt({
     ...options,
@@ -423,7 +448,7 @@ async function generateSearchPlan(config, options) {
     count: requestedCount
   });
 
-  const raw = await callConfiguredModel(config, prompt);
+  const raw = await callConfiguredModel(config, prompt, timeoutMs);
   const plan = normalizeSearchPlan(extractJsonObject(raw));
   if (!plan.searchQueries.length && !plan.candidateArtists.length && !plan.candidateLabels.length && !plan.targetGenres.length) {
     throw new Error("The model did not return a usable search plan.");
@@ -436,6 +461,10 @@ async function generateSearchPlan(config, options) {
 }
 
 module.exports = {
+  buildSearchPlanPrompt,
+  extractJsonObject,
   generateSearchPlan,
+  normalizeSearchPlan,
+  requestedCountFor,
   scoreCandidateBatch
 };

@@ -3,6 +3,20 @@
 const fs = require("fs");
 const path = require("path");
 const { trackKey } = require("./sessionStore");
+const {
+  artistIdentityKey,
+  isCollisionSensitiveArtist
+} = require("./artistIdentity");
+const {
+  isNegativeRating,
+  isPositiveRating,
+  normalizeRating
+} = require("./feedbackRatings");
+const {
+  calibrationIssueCount,
+  calibrationIssueLabel,
+  calibrationIssueRate
+} = require("./calibrationSignals");
 
 function ensureDir(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -38,6 +52,75 @@ function labelFor(track = {}) {
   return cleanText(track.label || track.tidal?.label || "");
 }
 
+function tidalUrlFor(track = {}) {
+  return cleanText(
+    track.tidal?.tidalUrl ||
+    track.tidalUrl ||
+    track.metadataEnrichment?.tidalUrl ||
+    track.metadata_enrichment?.tidalUrl ||
+    track.metadata_enrichment?.tidal_url ||
+    ""
+  );
+}
+
+function artistForFeedback(track = {}) {
+  return cleanText(
+    track.artist ||
+    track.tidal?.artist ||
+    track.metadataEnrichment?.artist ||
+    track.metadata_enrichment?.artist ||
+    track.roon?.match?.subtitle ||
+    ""
+  );
+}
+
+function titleForFeedback(track = {}) {
+  return cleanText(
+    track.title ||
+    track.tidal?.title ||
+    track.metadataEnrichment?.title ||
+    track.metadata_enrichment?.title ||
+    track.roon?.match?.title ||
+    ""
+  );
+}
+
+function feedbackLookupKeys(track = {}) {
+  const keys = [];
+  const add = (key) => {
+    const cleanKey = cleanText(key).toLowerCase();
+    if (cleanKey && cleanKey !== "|" && !keys.includes(cleanKey)) keys.push(cleanKey);
+  };
+  const addArtistTitle = (artist, title) => {
+    const artistKey = normalize(artist);
+    const titleKey = normalize(title);
+    if (artistKey && titleKey) add(`${artistKey}|${titleKey}`);
+  };
+
+  add(trackKey(track));
+  add(tidalUrlFor(track));
+  addArtistTitle(track.artist, track.title);
+  addArtistTitle(track.tidal?.artist, track.tidal?.title);
+  addArtistTitle(track.metadataEnrichment?.artist, track.metadataEnrichment?.title);
+  addArtistTitle(track.metadata_enrichment?.artist, track.metadata_enrichment?.title);
+  addArtistTitle(track.roon?.match?.subtitle, track.roon?.match?.title);
+  return keys;
+}
+
+function sameFeedbackIdentity(entry = {}, track = {}) {
+  const entryTitle = cleanText(entry.title);
+  const trackTitle = titleForFeedback(track);
+  if (!entryTitle || !trackTitle || normalize(entryTitle) !== normalize(trackTitle)) return false;
+
+  const entryArtist = cleanText(entry.artist);
+  const trackArtist = artistForFeedback(track);
+  if (!entryArtist || !trackArtist) return false;
+  if (isCollisionSensitiveArtist(entryArtist) || isCollisionSensitiveArtist(trackArtist)) {
+    return artistIdentityKey(entryArtist) === artistIdentityKey(trackArtist);
+  }
+  return normalize(entryArtist) === normalize(trackArtist);
+}
+
 const AMBIGUOUS_SCENE_ANCHORS = new Set([
   "freedom fighters"
 ]);
@@ -51,18 +134,6 @@ function shouldBlockArtistSignal(track = {}, delta = 0) {
   if (delta >= 0) return false;
   if (trustedSceneLabel(labelFor(track))) return false;
   return splitArtists(track.artist).some((artist) => AMBIGUOUS_SCENE_ANCHORS.has(normalize(artist)));
-}
-
-function normalizeRating(value) {
-  const rating = cleanText(value).toLowerCase();
-  if (rating === "love") return "love";
-  if (rating === "good" || rating === "up") return "good";
-  if (rating === "ok" || rating === "okay") return "ok";
-  if (rating === "wrong_genre" || rating === "wrong genre" || rating === "wrong" || rating === "not what i asked for" || rating === "not_asked") return "wrong_genre";
-  if (rating === "reject_similar" || rating === "reject similar" || rating === "similar_bad" || rating === "similar") return "reject_similar";
-  if (rating === "skip" || rating === "down") return "skip";
-  if (rating === "never" || rating === "never again" || rating === "never_again") return "never";
-  return "good";
 }
 
 function ratingDelta(value) {
@@ -111,8 +182,8 @@ function feedbackCalibrationEntry(track = {}, rating = "", context = {}) {
   const source = cleanText(track.discoverySource || context.discoverySource || "Unknown source");
   const lane = cleanText(track.discoveryLane || context.discoveryLane || "unknown");
   const label = labelFor(track);
-  const negativeFeedback = ["wrong_genre", "reject_similar", "skip", "never"].includes(normalizedRating);
-  const positiveFeedback = ["love", "good"].includes(normalizedRating);
+  const negativeFeedback = isNegativeRating(normalizedRating);
+  const positiveFeedback = isPositiveRating(normalizedRating);
   const modelApproved = ["boosted", "unchanged", "warning"].includes(review.action) || Number(review.modelScore || 0) >= 70;
   const badBoost = negativeFeedback && review.action === "boosted";
   const promptMismatch = normalizedRating === "wrong_genre";
@@ -232,10 +303,12 @@ function rebuildCalibration(feedback = {}) {
   const rankedBuckets = (map) => Object.values(map)
     .map((entry) => ({
       ...entry,
+      issueCount: calibrationIssueCount(entry),
       missRate: entry.total ? Number((entry.modelMisses / entry.total).toFixed(2)) : 0,
+      issueRate: calibrationIssueRate(entry),
       longShotLikeRate: entry.total ? Number((entry.likedLongShots / entry.total).toFixed(2)) : 0
     }))
-    .sort((left, right) => right.modelMisses - left.modelMisses || right.total - left.total || left.name.localeCompare(right.name))
+    .sort((left, right) => right.issueCount - left.issueCount || right.total - left.total || left.name.localeCompare(right.name))
     .slice(0, 8);
   calibration.sources = rankedBuckets(sourceCounts).map((entry) => ({ source: entry.name, ...entry }));
   calibration.lanes = rankedBuckets(laneCounts).map((entry) => ({ lane: entry.name, ...entry }));
@@ -250,7 +323,7 @@ function rebuildCalibration(feedback = {}) {
 function calibrationBucketPenalty(entry = {}, weight = 1) {
   if (!entry) return 0;
   const total = Number(entry.total || 0);
-  const misses = Number(entry.modelMisses || 0);
+  const misses = calibrationIssueCount(entry);
   const badBoosts = Number(entry.badBoosts || 0);
   const promptMismatches = Number(entry.promptMismatches || 0);
   if (!total || !misses) return 0;
@@ -285,7 +358,7 @@ function findCalibrationBucket(items = [], key = "", property = "name") {
 
 function updateWeightedEntry(map, name, delta) {
   const displayName = canonicalArtistName(name);
-  const key = normalize(displayName);
+  const key = artistIdentityKey(displayName);
   if (!key) return;
   const current = map[key] || { name: displayName, score: 0, up: 0, down: 0 };
   current.name = displayName || current.name;
@@ -433,8 +506,15 @@ class TasteProfile {
   }
 
   getFeedbackFor(track = {}) {
-    const key = trackKey(track);
-    const rating = key ? this.read().feedback[key]?.rating || "" : "";
+    const profile = this.read();
+    for (const key of feedbackLookupKeys(track)) {
+      const rating = profile.feedback[key]?.rating || "";
+      if (rating) return normalizeRating(rating);
+    }
+    const matched = Object.values(profile.feedback || {})
+      .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")))
+      .find((entry) => sameFeedbackIdentity(entry, track));
+    const rating = matched?.rating || "";
     return rating ? normalizeRating(rating) : "";
   }
 
@@ -452,7 +532,8 @@ class TasteProfile {
     const reasons = [];
 
     for (const artist of splitArtists(track.artist)) {
-      const entry = profile.artists[normalize(artist)];
+      const entry = profile.artists[artistIdentityKey(artist)] ||
+        (!isCollisionSensitiveArtist(artist) ? profile.artists[normalize(artist)] : null);
       if (!entry?.score) continue;
       const value = Math.max(-8, Math.min(8, entry.score * 2));
       adjustment += value;
@@ -492,7 +573,7 @@ class TasteProfile {
       if (!penalty) continue;
       value += penalty;
       const name = entry.source || entry.lane || entry.label || entry.name || kind;
-      reasons.push(`${kind} ${name} ${entry.modelMisses}/${entry.total} feedback misses ${penalty}`);
+      reasons.push(`${kind} ${name} ${calibrationIssueLabel(entry)} ${penalty}`);
     }
 
     return {

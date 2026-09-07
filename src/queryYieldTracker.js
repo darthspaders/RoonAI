@@ -4,8 +4,8 @@ const fs = require("fs");
 const path = require("path");
 
 const DEFAULT_FILE = path.join(__dirname, "..", "data", "query-yield.json");
-const MAX_ENTRIES = 750;
-const MAX_EXAMPLES = 5;
+const DEFAULT_MAX_ENTRIES = 0;
+const DISPLAY_EXAMPLE_LIMIT = 5;
 
 function cleanText(value) {
   return String(value || "")
@@ -52,7 +52,7 @@ function clamp(value, min, max) {
 
 function rejectionBucketForReason(reason = "") {
   const text = String(reason || "").toLowerCase();
-  if (/\b(?:seo|catalogue filler|catalog filler|genre date|mix compilation|filler|sludge)\b/.test(text)) return "seo";
+  if (/\b(?:seo|catalogue filler|catalog filler|genre date|mix compilation|filler|sludge|audiobook|audio book|chapter|keyword upload)\b/.test(text)) return "seo";
   if (/\b(?:outside the requested|genre\/vibe|requested genre|scene|wrong genre|does not confirm|search query|corroborat|metadata)\b/.test(text)) return "genre";
   if (/\b(?:release|year|date|outside \d{4}|range)\b/.test(text)) return "date";
   if (/\b(?:previously suggested|held back|history)\b/.test(text)) return "history";
@@ -94,7 +94,7 @@ function displayEntry(entry = {}) {
     genreRejects: Number(entry.genreRejects || 0),
     errorCount: Number(entry.errorCount || 0),
     quality: entryQuality(entry),
-    examples: Array.isArray(entry.examples) ? entry.examples.slice(0, MAX_EXAMPLES) : []
+    examples: Array.isArray(entry.examples) ? entry.examples.slice(0, DISPLAY_EXAMPLE_LIMIT) : []
   };
 }
 
@@ -176,8 +176,9 @@ function summarizeRecords(records = [], adjustments = []) {
 }
 
 class QueryYieldTracker {
-  constructor(file = DEFAULT_FILE) {
+  constructor(file = DEFAULT_FILE, options = {}) {
     this.file = file;
+    this.maxEntries = Number(options.maxEntries ?? DEFAULT_MAX_ENTRIES);
   }
 
   read() {
@@ -296,20 +297,23 @@ class QueryYieldTracker {
       const example = cleanText(record.query);
       if (example && !entry.examples.includes(example)) {
         entry.examples.unshift(example);
-        entry.examples = entry.examples.slice(0, MAX_EXAMPLES);
       }
 
       snapshot.entries[template] = entry;
     }
 
     snapshot.updatedAt = updatedAt;
-    const entries = Object.values(snapshot.entries)
+    let entries = Object.values(snapshot.entries)
       .sort((left, right) => {
         const rightActivity = Number(right.attempts || 0) + Number(right.accepted || 0) + Number(right.rejected || 0);
         const leftActivity = Number(left.attempts || 0) + Number(left.accepted || 0) + Number(left.rejected || 0);
         return rightActivity - leftActivity;
-      })
-      .slice(0, MAX_ENTRIES);
+      });
+    if (Number.isFinite(this.maxEntries) && this.maxEntries > 0) {
+      entries = entries.slice(0, this.maxEntries);
+    }
+    snapshot.maxEntries = this.maxEntries || null;
+    snapshot.unlimited = !this.maxEntries;
     snapshot.entries = Object.fromEntries(entries.map((entry) => [entry.template, entry]));
     this.write(snapshot);
 

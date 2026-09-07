@@ -288,10 +288,65 @@ summary:focus-visible {
   justify-content: flex-end;
   gap: 6px;
   min-width: 0;
-  max-width: min(100%, 720px);
+  max-width: min(100%, 980px);
   padding: 4px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.035);
+}
+
+.aiModeControls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.aiModeControls label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid rgba(217, 179, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(5, 2, 11, 0.54);
+  box-shadow: var(--inner-light), inset 0 -18px 32px rgba(0, 0, 0, 0.12);
+}
+
+.aiModeControls span {
+  flex: 0 0 auto;
+  color: rgba(206, 179, 237, 0.78);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.aiModeControls select,
+.aiModeControls input {
+  min-height: 32px;
+  border-radius: 999px;
+  border-color: rgba(217, 179, 255, 0.12);
+  background: rgba(10, 5, 20, 0.82);
+}
+
+.aiModeControls select {
+  min-width: 104px;
+}
+
+.aiModeControls input {
+  width: min(210px, 24vw);
+  padding: 0 12px;
+  color: #fff;
+}
+
+.aiModeControls button {
+  min-height: 42px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 11px;
+  text-transform: uppercase;
 }
 
 .zonePicker {
@@ -500,7 +555,9 @@ select:focus option,
 
 .nowSourceFormat {
   display: inline-flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
   max-width: 100%;
   min-height: 24px;
   margin: 8px 0 0;
@@ -510,15 +567,28 @@ select:focus option,
   border-radius: 999px;
   background: rgba(12, 5, 24, 0.52);
   box-shadow: var(--inner-light), 0 0 18px rgba(143, 240, 255, 0.08);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 760;
-  line-height: 1;
+  line-height: 1.15;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .nowSourceFormat[hidden] {
   display: none;
+}
+
+.nowSourceFormat .sourcePrimary {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nowSourceFormat .sourceDetail {
+  color: var(--iris-text);
+  font-size: 0.92em;
+  font-weight: 680;
 }
 
 .artStack {
@@ -606,6 +676,22 @@ select:focus option,
   min-width: 0;
   width: 100%;
   min-height: 38px;
+}
+
+.nowTidalPlaylistTarget {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.nowTidalPlaylistTarget input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .nowTidalPlaylistCreate {
@@ -1365,6 +1451,7 @@ input {
 }
 
 .tidalMixHero,
+.playlistHero,
 .radioHero {
   display: flex;
   align-items: center;
@@ -1710,6 +1797,167 @@ input {
 
 .tidalMixEmpty {
   grid-column: 1 / -1;
+}
+
+.playlistBrowserGrid {
+  display: grid;
+  gap: 18px;
+  margin-top: 14px;
+}
+
+.playlistBrowserSection {
+  display: grid;
+  gap: 12px;
+}
+
+.playlistBrowserHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.playlistBrowserHeader h3 {
+  margin: 0;
+  color: #fff;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.playlistBrowserHeader span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-align: right;
+  text-transform: uppercase;
+}
+
+.playlistBrowserCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr));
+  gap: 14px;
+}
+
+.playlistBrowserCard {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  grid-template-areas:
+    "art body"
+    "actions actions";
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgba(20, 9, 38, 0.82), rgba(9, 4, 18, 0.92)) padding-box,
+    linear-gradient(135deg, rgba(217, 179, 255, 0.28), rgba(143, 240, 255, 0.13), rgba(255, 115, 216, 0.18)) border-box;
+  box-shadow: var(--inner-light), 0 18px 42px rgba(2, 0, 8, 0.34);
+}
+
+.playlistBrowserArt {
+  grid-area: art;
+  display: grid;
+  place-items: center;
+  width: 82px;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background:
+    linear-gradient(135deg, rgba(143, 240, 255, 0.18), rgba(255, 115, 216, 0.12)),
+    url("/assets/rabbit-hole-fallback.jpg") center / cover;
+}
+
+.playlistBrowserArt img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.playlistBrowserArt span {
+  color: rgba(250, 246, 255, 0.84);
+  font-size: 24px;
+  font-weight: 850;
+}
+
+.playlistBrowserBody {
+  grid-area: body;
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.playlistBrowserType {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.playlistBrowserBody h3 {
+  margin: 0;
+  color: #fff;
+  font-size: 19px;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
+}
+
+.playlistBrowserBody p,
+.playlistBrowserBody small {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.playlistBrowserActions {
+  grid-area: actions;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.playlistBrowserActions button,
+.playlistBrowserActions .buttonLink {
+  flex: 1 1 112px;
+  min-height: 34px;
+}
+
+.playlistBrowserActions .playlistBrowserDelete {
+  border-color: rgba(239, 118, 122, 0.5);
+  color: #ffd9dd;
+}
+
+.playlistBrowserActions .playlistBrowserDelete:hover {
+  border-color: rgba(239, 118, 122, 0.82);
+  background: rgba(239, 118, 122, 0.14);
+}
+
+.playlistBrowserEmpty {
+  padding: 14px;
+  border: 1px solid rgba(217, 179, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(6, 2, 13, 0.48);
+  color: var(--muted);
+}
+
+@media (max-width: 560px) {
+  .playlistBrowserCard {
+    grid-template-columns: 68px minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .playlistBrowserArt {
+    width: 68px;
+  }
+
+  .playlistBrowserBody h3 {
+    font-size: 17px;
+  }
 }
 
 .reportList,
@@ -2377,6 +2625,11 @@ input {
   color: #d9c3ff;
 }
 
+.scoreBadge.feedback {
+  background: linear-gradient(135deg, rgba(255, 47, 124, 0.95), rgba(187, 107, 255, 0.9));
+  color: #fff7fb;
+}
+
 .scoreGrid {
   display: grid;
   grid-template-columns: minmax(128px, 1fr) auto;
@@ -2544,6 +2797,77 @@ input {
 
 .resultDiagnostics strong {
   color: #fff;
+}
+
+.evidenceLedger {
+  display: grid;
+  gap: 8px;
+  width: min(620px, 100%);
+  margin: 10px 0 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(135, 211, 255, 0.22);
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgba(7, 3, 16, 0.96), rgba(13, 5, 24, 0.9)) padding-box,
+    linear-gradient(135deg, rgba(135, 211, 255, 0.24), rgba(224, 103, 255, 0.16)) border-box;
+  box-shadow: inset 0 1px 0 rgba(244, 232, 255, 0.08);
+}
+
+.evidenceLedgerHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.evidenceLedgerHead span {
+  color: rgba(135, 211, 255, 0.9);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.evidenceLedgerHead strong {
+  color: rgba(250, 246, 255, 0.86);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.evidenceLedgerGrid {
+  display: grid;
+  gap: 6px;
+}
+
+.evidenceLedgerGrid p {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(217, 179, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(5, 2, 11, 0.64);
+}
+
+.evidenceLedgerGrid span {
+  color: rgba(217, 179, 255, 0.72);
+  font-size: 11px;
+  font-weight: 840;
+  text-transform: uppercase;
+}
+
+.evidenceLedgerGrid b {
+  color: rgba(250, 246, 255, 0.9);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.discardedEvidence {
+  display: block;
+  margin-top: 3px;
+  color: rgba(135, 211, 255, 0.76);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.35;
 }
 
 .statusBlock {
@@ -3014,9 +3338,23 @@ button:disabled:hover {
   }
 
   .phoneAccess,
+  .aiModeControls,
   .zonePicker {
     flex: 1 1 280px;
     max-width: none;
+  }
+
+  .aiModeControls {
+    flex-wrap: wrap;
+  }
+
+  .aiModeControls label,
+  .aiModeControls button {
+    flex: 1 1 180px;
+  }
+
+  .aiModeControls input {
+    width: 100%;
   }
 
   .viewTabs {
@@ -3360,6 +3698,11 @@ button:disabled:hover {
 .scoreBadge.unscored {
   background: rgba(18, 8, 38, 0.95);
   color: #d9c3ff;
+}
+
+.scoreBadge.feedback {
+  background: rgba(72, 20, 65, 0.95);
+  color: #ffd6ea;
 }
 
 .scoreGrid {
@@ -4683,6 +5026,71 @@ body.playerFullWindow {
   pointer-events: none;
 }
 
+.pcTempOverlay {
+  display: none;
+  position: absolute;
+  top: max(70px, calc(56px + env(safe-area-inset-top)));
+  right: max(16px, env(safe-area-inset-right));
+  z-index: 30;
+  align-items: center;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.pcTempOverlay[hidden] {
+  display: none !important;
+}
+
+.player.isFullWindow .pcTempOverlay,
+.player:fullscreen .pcTempOverlay,
+.player:-webkit-full-screen .pcTempOverlay {
+  display: flex;
+}
+
+.pcTempChip {
+  display: inline-flex;
+  min-height: clamp(40px, 5.4vh, 56px);
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 clamp(14px, 2vw, 22px);
+  border: 1px solid rgba(199, 128, 255, 0.48);
+  border-radius: 999px;
+  background: rgba(7, 2, 14, 0.78);
+  box-shadow: var(--inner-light), 0 0 18px rgba(128, 71, 255, 0.12);
+  color: rgba(246, 234, 255, 0.92);
+  backdrop-filter: blur(10px);
+}
+
+.pcTempChip span {
+  font-size: clamp(12px, 1.7vh, 15px);
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(210, 178, 255, 0.72);
+  transform: translateY(1px);
+}
+
+.pcTempChip strong {
+  font-size: clamp(24px, 3.5vh, 36px);
+  line-height: 0.95;
+  color: #49ee91;
+}
+
+.pcTempChip.isHot strong {
+  color: #ffca6f;
+}
+
+.pcTempChip.isCritical strong {
+  color: #ff5b8a;
+}
+
+.pcTempChip.isUnavailable strong,
+.pcTempOverlay.isOffline .pcTempChip strong {
+  color: rgba(246, 234, 255, 0.42);
+}
+
 @media (min-width: 760px) and (orientation: landscape) {
   .player.isMaximized,
   .player.isFullWindow,
@@ -4730,6 +5138,20 @@ body.playerFullWindow {
   .player:-webkit-full-screen .nowSourceFormat {
     min-height: clamp(22px, 4vh, 30px);
     font-size: clamp(12px, 2.1vh, 16px);
+  }
+
+  .player.isFullWindow .nowSourceFormat,
+  .player:fullscreen .nowSourceFormat,
+  .player:-webkit-full-screen .nowSourceFormat {
+    margin-left: -12px;
+    padding: 7px 12px;
+    font-size: clamp(15px, 2.2vh, 18px);
+  }
+
+  .player.isFullWindow .nowSourceFormat .sourceDetail,
+  .player:fullscreen .nowSourceFormat .sourceDetail,
+  .player:-webkit-full-screen .nowSourceFormat .sourceDetail {
+    font-size: 0.96em;
   }
 
   .player.isMaximized .feedbackButtons,
@@ -4990,8 +5412,9 @@ body.playerFullWindow {
   .player:-webkit-full-screen .nowSourceFormat {
     min-height: 24px;
     margin-top: 8px;
-    padding: 4px 9px;
-    font-size: 12px;
+    margin-left: -4px;
+    padding: 5px 10px;
+    font-size: 13px;
   }
 
   .player.isFullWindow > .nowDiscoveryTools,
@@ -5122,5 +5545,122 @@ body.playerFullWindow {
   .player:fullscreen > .liveQueue,
   .player:-webkit-full-screen > .liveQueue {
     display: none !important;
+  }
+}
+
+/* Fullscreen tablet telemetry: reuse the live connection indicators below temperatures. */
+.player:is(.isFullWindow, :fullscreen, :-webkit-full-screen) .pcTempOverlay {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: clamp(270px, 28vw, 360px);
+  gap: 8px;
+  pointer-events: auto;
+}
+.fullscreenConnectionStatus { grid-column: 1 / -1; min-width: 0; }
+.nowTidalPlaylistTargets {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+.nowTidalPlaylistTargets .extraTidalPlaylist { display: none; }
+.player:is(.isFullWindow, :fullscreen, :-webkit-full-screen) .nowTidalPlaylistGroup {
+  grid-template-columns: minmax(0, 1fr);
+}
+.player:is(.isFullWindow, :fullscreen, :-webkit-full-screen) .nowTidalPlaylistTargets {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.player:is(.isFullWindow, :fullscreen, :-webkit-full-screen) .extraTidalPlaylist { display: grid; }
+.player:is(.isFullWindow, :fullscreen, :-webkit-full-screen) .nowTidalPlaylistTargets select {
+  min-height: 44px;
+  background-color: #14091f;
+  color: #f5eafa;
+}
+.nowTidalPlaylistTargets option { background: #14091f; color: #f5eafa; }
+@media (max-width: 699px) {
+  .player:is(.isFullWindow, :fullscreen, :-webkit-full-screen) .nowTidalPlaylistTargets {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.fullscreenConnectionStatus .statusStack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.fullscreenConnectionStatus .statusPill {
+  margin: 0;
+  min-height: 27px;
+  padding: 5px 10px;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  background: rgba(7, 2, 14, .84);
+  border: 1px solid rgba(199, 128, 255, .22);
+  border-radius: 10px;
+}
+.fullscreenConnectionStatus .statusPill::before { flex-shrink: 0; }
+.bridgeSyncPopup {
+  position: fixed;
+  z-index: 80;
+  right: 18px;
+  bottom: 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  width: min(520px, calc(100vw - 36px));
+  padding: 14px 16px;
+  color: #fff8e8;
+  background: rgba(28, 15, 3, .94);
+  border: 1px solid rgba(255, 188, 85, .55);
+  border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .34);
+}
+.bridgeSyncPopup[hidden] { display: none; }
+.bridgeSyncPopup strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 15px;
+  line-height: 1.25;
+}
+.bridgeSyncPopup p {
+  margin: 0;
+  color: rgba(255, 248, 232, .82);
+  font-size: 13px;
+  line-height: 1.35;
+}
+.bridgeSyncActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.bridgeSyncPopup button {
+  min-height: 36px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+@media (min-width: 700px) {
+  .player:is(.isFullWindow, :fullscreen, :-webkit-full-screen) > .now {
+    padding-right: calc(clamp(270px, 28vw, 360px) + 18px);
+    min-height: 350px;
+  }
+}
+@media (max-width: 699px) {
+  .player:is(.isFullWindow, :fullscreen, :-webkit-full-screen) .pcTempOverlay {
+    width: calc(100% - 32px);
+  }
+  .player:is(.isFullWindow, :fullscreen, :-webkit-full-screen) > .now {
+    padding-top: 345px;
+    padding-right: 0;
+  }
+  .bridgeSyncPopup {
+    left: 16px;
+    right: 16px;
+    bottom: 14px;
+    width: auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bridgeSyncActions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bridgeSyncPopup button {
+    width: 100%;
   }
 }

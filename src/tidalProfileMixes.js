@@ -1,5 +1,7 @@
 "use strict";
 
+const fs = require("fs");
+const path = require("path");
 const {
   CircuitBreaker,
   DEFAULT_TIDAL_CIRCUIT_COOLDOWN_MS,
@@ -14,6 +16,8 @@ const { TidalProfileAuth } = require("./tidalProfileAuth");
 const USER_AGENT = "RoonLocalAI/0.1.0";
 const TIDAL_OPENAPI_ROOT = "https://openapi.tidal.com/v2";
 const DEFAULT_CACHE_MS = 5 * 60 * 1000;
+const DEFAULT_PLAYLIST_TRACK_CACHE_MS = 30 * 60 * 1000;
+const DEFAULT_PLAYLIST_TRACK_CACHE_FILE = path.join(__dirname, "..", "data", "tidal-playlist-track-cache.json");
 const DEFAULT_ARTIST_RADIO_LIMIT = 12;
 const FULL_MIXES_SCOPE = "r_usr";
 const DEFAULT_ENDPOINTS = [
@@ -27,6 +31,7 @@ const RECOMMENDATION_RELATIONSHIPS = [
   { key: "myMixes", category: "My Mix" },
   { key: "offlineMixes", category: "Offline Mix" }
 ];
+const PLAYLIST_TRACK_RATE_LIMIT_COOLDOWN_MS = 2 * 60 * 1000;
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -36,6 +41,14 @@ function inputError(message) {
   const error = new Error(message);
   error.statusCode = 400;
   return error;
+}
+
+function isRateLimitError(error = {}) {
+  return Number(error.status || error.statusCode || 0) === 429 || /\bHTTP 429\b|rate limit|too many requests/i.test(error.message || "");
+}
+
+function isForbiddenError(error = {}) {
+  return Number(error.status || error.statusCode || 0) === 403 || /\bHTTP 403\b|forbidden|permission/i.test(error.message || "");
 }
 
 function normalizeText(value) {
@@ -412,6 +425,165 @@ function trackTidalUrl(track = {}) {
   return cleanText(track.tidal?.tidalUrl || track.tidalUrl || track.url);
 }
 
+function trackIsrc(track = {}) {
+  return cleanText(track.tidal?.isrc || track.isrc || track.recording?.isrc).toUpperCase();
+}
+
+function trackProviderIdentityKeys(track = {}) {
+  return Array.from(new Set([
+    trackTidalId(track),
+    trackTidalUrl(track)
+  ].map((value) => cleanText(value).toLowerCase()).filter(Boolean)));
+}
+
+function trackTextIdentityKeys(track = {}) {
+  const title = normalizeText(track.title || track.tidal?.title);
+  if (!title) return [];
+  const artists = artistMatchKeys(track.artist || track.tidal?.artist);
+  if (!artists.length) return [];
+  return Array.from(new Set(artists.map((artist) => `${artist}|${title}`)));
+}
+
+function preferredPlaylistIdentity(track = {}) {
+  const providerIds = trackProviderIdentityKeys(track);
+  if (providerIds.length) return { type: "provider", keys: providerIds };
+  const isrc = trackIsrc(track);
+  if (isrc) return { type: "isrc", keys: [isrc] };
+  return { type: "text", keys: trackTextIdentityKeys(track) };
+}
+
+function emptyPlaylistTrackCacheEntry(playlistId = "", now = Date.now()) {
+  return {
+    playlistId: cleanText(playlistId),
+    providerIds: new Set(),
+    isrcs: new Set(),
+    textKeys: new Set(),
+    tracksByProviderId: new Map(),
+    tracksByIsrc: new Map(),
+    tracksByTextKey: new Map(),
+    checkedCount: 0,
+    attemptedEndpoints: [],
+    fetchedAtMs: now,
+    fetchedAt: new Date(now).toISOString(),
+    updatedAtMs: now,
+    updatedAt: new Date(now).toISOString()
+  };
+}
+
+function addTrackToPlaylistTrackCache(entry, track = {}) {
+  if (!entry || !track) return;
+  const providerIds = trackProviderIdentityKeys(track);
+  for (const key of providerIds) {
+    entry.providerIds.add(key);
+    if (!entry.tracksByProviderId.has(key)) entry.tracksByProviderId.set(key, track);
+  }
+  const isrc = trackIsrc(track);
+  if (isrc) {
+    entry.isrcs.add(isrc);
+    if (!entry.tracksByIsrc.has(isrc)) entry.tracksByIsrc.set(isrc, track);
+  }
+  for (const key of trackTextIdentityKeys(track)) {
+    entry.textKeys.add(key);
+    if (!entry.tracksByTextKey.has(key)) entry.tracksByTextKey.set(key, track);
+  }
+}
+
+function buildPlaylistTrackCacheEntry(playlistId = "", tracks = [], { attemptedEndpoints = [], now = Date.now() } = {}) {
+  const entry = emptyPlaylistTrackCacheEntry(playlistId, now);
+  entry.attemptedEndpoints = attemptedEndpoints.slice();
+  entry.checkedCount = tracks.length;
+  for (const track of tracks) addTrackToPlaylistTrackCache(entry, track);
+  return entry;
+}
+
+function playlistCacheDuplicate(entry = null, track = {}) {
+  if (!entry) return null;
+  const identity = preferredPlaylistIdentity(track);
+  for (const key of identity.keys || []) {
+    if (identity.type === "provider" && entry.providerIds.has(key)) {
+      return { identityType: "provider", identityKey: key, existingTrack: entry.tracksByProviderId.get(key) || null };
+    }
+    if (identity.type === "isrc" && entry.isrcs.has(key)) {
+      return { identityType: "isrc", identityKey: key, existingTrack: entry.tracksByIsrc.get(key) || null };
+    }
+    if (identity.type === "text" && entry.textKeys.has(key)) {
+      return { identityType: "text", identityKey: key, existingTrack: entry.tracksByTextKey.get(key) || null };
+    }
+  }
+  return null;
+}
+
+function compactPlaylistCacheTrack(track = {}) {
+  return {
+    id: cleanText(track.id || track.tidal?.id || track.tidalId),
+    title: cleanText(track.title || track.tidal?.title),
+    artist: cleanText(track.artist || track.tidal?.artist),
+    album: cleanText(track.album || track.tidal?.album),
+    isrc: trackIsrc(track),
+    tidalUrl: trackTidalUrl(track)
+  };
+}
+
+function serializePlaylistTrackCacheEntry(entry = null) {
+  if (!entry) return null;
+  return {
+    playlistId: cleanText(entry.playlistId),
+    providerIds: Array.from(entry.providerIds || []),
+    isrcs: Array.from(entry.isrcs || []),
+    textKeys: Array.from(entry.textKeys || []),
+    tracksByProviderId: Array.from(entry.tracksByProviderId || []).map(([key, track]) => [key, compactPlaylistCacheTrack(track)]),
+    tracksByIsrc: Array.from(entry.tracksByIsrc || []).map(([key, track]) => [key, compactPlaylistCacheTrack(track)]),
+    tracksByTextKey: Array.from(entry.tracksByTextKey || []).map(([key, track]) => [key, compactPlaylistCacheTrack(track)]),
+    checkedCount: Number(entry.checkedCount || 0),
+    attemptedEndpoints: Array.isArray(entry.attemptedEndpoints) ? entry.attemptedEndpoints.slice(0, 20) : [],
+    fetchedAtMs: Number(entry.fetchedAtMs || 0),
+    fetchedAt: cleanText(entry.fetchedAt),
+    updatedAtMs: Number(entry.updatedAtMs || 0),
+    updatedAt: cleanText(entry.updatedAt)
+  };
+}
+
+function hydratePlaylistTrackCacheEntry(raw = {}) {
+  const playlistId = cleanText(raw.playlistId);
+  if (!playlistId) return null;
+  const now = Date.now();
+  const entry = emptyPlaylistTrackCacheEntry(playlistId, Number(raw.fetchedAtMs || raw.updatedAtMs || now));
+  entry.providerIds = new Set(Array.isArray(raw.providerIds) ? raw.providerIds.map((value) => cleanText(value).toLowerCase()).filter(Boolean) : []);
+  entry.isrcs = new Set(Array.isArray(raw.isrcs) ? raw.isrcs.map((value) => cleanText(value).toUpperCase()).filter(Boolean) : []);
+  entry.textKeys = new Set(Array.isArray(raw.textKeys) ? raw.textKeys.map(cleanText).filter(Boolean) : []);
+  entry.tracksByProviderId = new Map(Array.isArray(raw.tracksByProviderId) ? raw.tracksByProviderId.map(([key, track]) => [cleanText(key).toLowerCase(), track]).filter(([key]) => key) : []);
+  entry.tracksByIsrc = new Map(Array.isArray(raw.tracksByIsrc) ? raw.tracksByIsrc.map(([key, track]) => [cleanText(key).toUpperCase(), track]).filter(([key]) => key) : []);
+  entry.tracksByTextKey = new Map(Array.isArray(raw.tracksByTextKey) ? raw.tracksByTextKey.map(([key, track]) => [cleanText(key), track]).filter(([key]) => key) : []);
+  entry.checkedCount = Number(raw.checkedCount || Math.max(entry.providerIds.size, entry.isrcs.size, entry.textKeys.size));
+  entry.attemptedEndpoints = Array.isArray(raw.attemptedEndpoints) ? raw.attemptedEndpoints.map(cleanText).filter(Boolean) : [];
+  entry.fetchedAtMs = Number(raw.fetchedAtMs || now);
+  entry.fetchedAt = cleanText(raw.fetchedAt) || new Date(entry.fetchedAtMs).toISOString();
+  entry.updatedAtMs = Number(raw.updatedAtMs || entry.fetchedAtMs);
+  entry.updatedAt = cleanText(raw.updatedAt) || new Date(entry.updatedAtMs).toISOString();
+  return entry;
+}
+
+function exactPlaylistDuplicateMatches(left = {}, right = {}) {
+  const leftTidalId = trackTidalId(left).toLowerCase();
+  const rightTidalId = trackTidalId(right).toLowerCase();
+  if (leftTidalId && rightTidalId) return leftTidalId === rightTidalId;
+
+  const leftTidalUrl = trackTidalUrl(left).toLowerCase();
+  const rightTidalUrl = trackTidalUrl(right).toLowerCase();
+  if (leftTidalUrl && rightTidalUrl) return leftTidalUrl === rightTidalUrl;
+
+  const leftTitle = normalizeText(left.title || left.tidal?.title);
+  const rightTitle = normalizeText(right.title || right.tidal?.title);
+  if (!leftTitle || !rightTitle || leftTitle !== rightTitle) return false;
+
+  const leftArtists = artistMatchKeys(left.artist || left.tidal?.artist);
+  const rightArtists = artistMatchKeys(right.artist || right.tidal?.artist);
+  if (!leftArtists.length || !rightArtists.length) return false;
+  return leftArtists.some((leftArtist) => rightArtists.some((rightArtist) => (
+    leftArtist === rightArtist || leftArtist.includes(rightArtist) || rightArtist.includes(leftArtist)
+  )));
+}
+
 function uniqueTidalTrackRefs(tracks = []) {
   const refs = [];
   const skipped = [];
@@ -433,7 +605,8 @@ function uniqueTidalTrackRefs(tracks = []) {
       id,
       type: "tracks",
       title: cleanText(track?.title || track?.tidal?.title),
-      artist: cleanText(track?.artist || track?.tidal?.artist)
+      artist: cleanText(track?.artist || track?.tidal?.artist),
+      isrc: trackIsrc(track)
     });
   }
   return { refs, skipped };
@@ -473,7 +646,9 @@ function normalizeUserPlaylist(payload = {}, fallbackTitle = "") {
     description: cleanText(attributes.description),
     url: firstExternalLink(attributes) || playlistUrlFromId(id),
     rawType: firstText(attributes.playlistType, data.type, "playlist"),
-    itemCount: itemCountFromPlaylist({ data })
+    itemCount: listedItemCountFromPlaylist({ data }),
+    createdAt: cleanText(attributes.createdAt),
+    lastModifiedAt: cleanText(attributes.lastModifiedAt)
   };
 }
 
@@ -540,6 +715,16 @@ function itemCountFromPlaylist(payload = {}) {
   return Array.isArray(items) ? items.length : 0;
 }
 
+function listedItemCountFromPlaylist(payload = {}) {
+  const data = payload?.data || payload || {};
+  const attributes = data.attributes || {};
+  for (const value of [attributes.numberOfItems, attributes.numberOfTrackItems, attributes.totalNumberOfItems]) {
+    const count = Number(value);
+    if (Number.isFinite(count) && count >= 0) return count;
+  }
+  return itemCountFromPlaylist({ data });
+}
+
 function coverArtIdFromPlaylist(payload = {}) {
   const coverArt = payload?.data?.relationships?.coverArt?.data;
   if (Array.isArray(coverArt)) return cleanText(coverArt[0]?.id);
@@ -596,10 +781,17 @@ function normalizeOfficialPlaylistTracks(payload = {}, { mix = null } = {}) {
     .filter((track) => track?.type === "tracks")
     .map((track) => {
       const attributes = track.attributes || {};
-      const artists = relationshipItems(track, "artists")
-        .map((artistRef) => included.get(`${artistRef.type}:${artistRef.id}`)?.attributes?.name)
-        .map(cleanText)
-        .filter(Boolean);
+      const artistRefs = relationshipItems(track, "artists")
+        .map((artistRef) => {
+          const artist = included.get(`${artistRef.type}:${artistRef.id}`);
+          return {
+            id: cleanText(artistRef.id),
+            name: cleanText(artist?.attributes?.name)
+          };
+        })
+        .filter((artist) => artist.id || artist.name);
+      const artists = artistRefs.map((artist) => artist.name).filter(Boolean);
+      const artistIds = artistRefs.map((artist) => artist.id).filter(Boolean);
       const albumRef = relationshipItems(track, "albums")[0];
       const album = albumRef ? included.get(`${albumRef.type}:${albumRef.id}`) : null;
       const title = firstText(
@@ -609,13 +801,16 @@ function normalizeOfficialPlaylistTracks(payload = {}, { mix = null } = {}) {
       );
       const artist = artists.join(", ");
       if (!title || !artist) return null;
-      return {
+      const isrc = cleanText(attributes.isrc);
+      const normalized = {
         title,
         artist,
         album: firstText(album?.attributes?.title),
         year: cleanText(album?.attributes?.releaseDate || "").slice(0, 4),
         releaseDate: cleanText(album?.attributes?.releaseDate),
         durationMs: durationMsFromIsoDuration(attributes.duration),
+        artists: artistRefs,
+        artistIds,
         label: cleanText(attributes.copyright?.text || album?.attributes?.copyright?.text),
         source: "TIDAL profile mix",
         discoverySource: mix?.title ? `TIDAL mix: ${mix.title}` : "TIDAL profile mix",
@@ -623,6 +818,8 @@ function normalizeOfficialPlaylistTracks(payload = {}, { mix = null } = {}) {
           id: cleanText(track.id),
           title,
           artist,
+          artists: artistRefs,
+          artistIds,
           album: firstText(album?.attributes?.title),
           durationMs: durationMsFromIsoDuration(attributes.duration),
           tidalUrl: firstExternalLink(attributes),
@@ -630,6 +827,11 @@ function normalizeOfficialPlaylistTracks(payload = {}, { mix = null } = {}) {
         },
         tidalUrl: firstExternalLink(attributes)
       };
+      if (isrc) {
+        normalized.isrc = isrc;
+        normalized.tidal.isrc = isrc;
+      }
+      return normalized;
     })
     .filter(Boolean);
 }
@@ -650,15 +852,33 @@ class TidalProfileMixes {
     this.clock = config.clock || (() => Date.now());
     this.timeoutMs = positiveNumber(config.timeoutMs, DEFAULT_TIDAL_FETCH_TIMEOUT_MS, { min: 500, max: 120_000 });
     this.cacheMs = positiveNumber(config.cacheMs, DEFAULT_CACHE_MS, { min: 0, max: 60 * 60_000 });
+    this.playlistTrackCacheMs = positiveNumber(config.playlistTrackCacheMs, DEFAULT_PLAYLIST_TRACK_CACHE_MS, { min: 1000, max: 24 * 60 * 60_000 });
+    this.playlistTrackCacheFile = config.playlistTrackCacheFile === false
+      ? ""
+      : (Object.prototype.hasOwnProperty.call(config, "playlistTrackCacheFile")
+        ? cleanText(config.playlistTrackCacheFile)
+        : "");
+    this.playlistTrackFetchMinIntervalMs = positiveNumber(config.playlistTrackFetchMinIntervalMs, 0, { min: 0, max: 10_000 });
     this.circuitBreaker = config.circuitBreaker || new CircuitBreaker({
       label: "TIDAL profile mixes",
       failureThreshold: config.failureThreshold || DEFAULT_TIDAL_CIRCUIT_FAILURE_THRESHOLD,
       cooldownMs: config.circuitCooldownMs || DEFAULT_TIDAL_CIRCUIT_COOLDOWN_MS,
       clock: this.clock
     });
+    this.playlistWriteCircuitBreaker = config.playlistWriteCircuitBreaker || new CircuitBreaker({
+      label: "TIDAL playlist writes",
+      failureThreshold: config.playlistWriteFailureThreshold || config.failureThreshold || DEFAULT_TIDAL_CIRCUIT_FAILURE_THRESHOLD,
+      cooldownMs: config.playlistWriteCircuitCooldownMs || config.circuitCooldownMs || DEFAULT_TIDAL_CIRCUIT_COOLDOWN_MS,
+      clock: this.clock
+    });
     this.cache = null;
     this.playlistCache = null;
+    this.playlistTrackCache = new Map();
+    this.playlistTrackFetchFailures = new Map();
+    this.playlistTrackFetchPromises = new Map();
+    this.nextPlaylistTrackFetchAtMs = 0;
     this.userIdCache = "";
+    this.loadPlaylistTrackCache();
   }
 
   isConfigured() {
@@ -676,7 +896,13 @@ class TidalProfileMixes {
       artistRadioFallback: this.artistRadioFallback,
       timeoutMs: this.timeoutMs,
       cacheMs: this.cacheMs,
+      playlistTrackCacheMs: this.playlistTrackCacheMs,
+      playlistTrackCacheCount: this.playlistTrackCache.size,
+      playlistTrackFetchFailureCount: this.playlistTrackFetchFailures.size,
+      playlistTrackFetchMinIntervalMs: this.playlistTrackFetchMinIntervalMs,
+      playlistTrackCachePersisted: Boolean(this.playlistTrackCacheFile),
       circuit: this.circuitBreaker.status(),
+      playlistWriteCircuit: this.playlistWriteCircuitBreaker.status(),
       lastFetchedAt: this.cache?.fetchedAt || "",
       lastError: this.cache?.error || ""
     };
@@ -688,6 +914,48 @@ class TidalProfileMixes {
     return Array.from(new Set(base.map((endpoint) => withCommonParams(endpoint, this))));
   }
 
+  loadPlaylistTrackCache() {
+    if (!this.playlistTrackCacheFile) return;
+    try {
+      const json = JSON.parse(fs.readFileSync(this.playlistTrackCacheFile, "utf8"));
+      const entries = Array.isArray(json.playlists) ? json.playlists : [];
+      for (const raw of entries) {
+        const entry = hydratePlaylistTrackCacheEntry(raw);
+        const key = this.playlistTrackCacheKey(entry?.playlistId);
+        if (key && entry) this.playlistTrackCache.set(key, entry);
+      }
+    } catch {
+      this.playlistTrackCache = new Map();
+    }
+  }
+
+  savePlaylistTrackCache() {
+    if (!this.playlistTrackCacheFile) return;
+    const playlists = Array.from(this.playlistTrackCache.values())
+      .map(serializePlaylistTrackCacheEntry)
+      .filter(Boolean)
+      .sort((left, right) => cleanText(left.playlistId).localeCompare(cleanText(right.playlistId)));
+    try {
+      fs.mkdirSync(path.dirname(this.playlistTrackCacheFile), { recursive: true });
+      fs.writeFileSync(this.playlistTrackCacheFile, `${JSON.stringify({
+        updatedAt: new Date(this.clock()).toISOString(),
+        playlistTrackCacheMs: this.playlistTrackCacheMs,
+        playlists
+      }, null, 2)}\n`);
+    } catch {
+      // Cache persistence is an optimization; duplicate checks still work in memory.
+    }
+  }
+
+  async waitForPlaylistTrackFetchSlot() {
+    const interval = Number(this.playlistTrackFetchMinIntervalMs || 0);
+    if (!interval) return;
+    const now = this.clock();
+    const waitMs = Math.max(0, Number(this.nextPlaylistTrackFetchAtMs || 0) - now);
+    if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+    this.nextPlaylistTrackFetchAtMs = this.clock() + interval;
+  }
+
   hasFullMixesScope() {
     return hasScope(this.auth?.status?.().scope || "", FULL_MIXES_SCOPE);
   }
@@ -696,9 +964,13 @@ class TidalProfileMixes {
     accept = "application/json",
     method = "GET",
     body = null,
-    contentType = ""
+    contentType = "",
+    circuitBreaker = this.circuitBreaker,
+    label = ""
   } = {}) {
-    this.circuitBreaker.assertCanRequest();
+    const breaker = circuitBreaker === undefined ? this.circuitBreaker : circuitBreaker;
+    const requestLabel = label || breaker?.label || "TIDAL profile request";
+    if (breaker) breaker.assertCanRequest();
     const token = this.auth ? await this.auth.getAccessToken() : this.accessToken;
     if (!token) throw new Error("TIDAL profile access token is missing.");
     let response;
@@ -722,10 +994,10 @@ class TidalProfileMixes {
       response = await fetchWithTimeout(url, request, {
         timeoutMs: this.timeoutMs,
         fetchImpl: this.fetchImpl,
-        label: "TIDAL profile mixes"
+        label: requestLabel
       });
     } catch (error) {
-      this.circuitBreaker.recordFailure(error);
+      if (breaker) breaker.recordFailure(error);
       throw error;
     }
 
@@ -747,13 +1019,13 @@ class TidalProfileMixes {
         json?.error ||
         text
       );
-      const error = httpStatusError("TIDAL profile mixes", response.status);
+      const error = httpStatusError(requestLabel, response.status);
       if (detail) error.message = `${error.message}: ${detail}`;
-      this.circuitBreaker.recordFailure(error);
+      if (breaker) breaker.recordFailure(error);
       throw error;
     }
 
-    this.circuitBreaker.recordSuccess();
+    if (breaker) breaker.recordSuccess();
     return json || { ok: true, status: response.status };
   }
 
@@ -769,10 +1041,22 @@ class TidalProfileMixes {
     return !scope || hasScope(scope, "playlists.write");
   }
 
+  hasCollectionWriteScope() {
+    const scope = this.auth?.status?.().scope || "";
+    return !scope || hasScope(scope, "collection.write") || hasScope(scope, "w_usr");
+  }
+
   assertPlaylistWriteReady() {
     if (!this.isConfigured()) throw inputError("TIDAL profile token missing. Connect TIDAL profile access first.");
     if (!this.hasPlaylistWriteScope()) {
       throw inputError("TIDAL profile token does not include playlists.write. Reconnect TIDAL from Rabbit Hole after adding that scope.");
+    }
+  }
+
+  assertCollectionWriteReady() {
+    if (!this.isConfigured()) throw inputError("TIDAL profile token missing. Connect TIDAL profile access first.");
+    if (!this.hasCollectionWriteScope()) {
+      throw inputError("TIDAL refused to delete the playlist resource, and your saved token does not include collection.write. Reconnect TIDAL from Rabbit Hole so Delete can remove playlists from your TIDAL collection.");
     }
   }
 
@@ -807,6 +1091,41 @@ class TidalProfileMixes {
     ].filter(Boolean)));
   }
 
+  userPlaylistCollectionQueries() {
+    return [
+      {
+        label: "owned playlists",
+        pathname: "/playlists",
+        params: {
+          "filter[owners.id]": "me"
+        }
+      },
+      {
+        label: "collaborator playlists",
+        pathname: "/playlists",
+        params: {
+          "filter[collaborators.id]": "me"
+        }
+      }
+    ];
+  }
+
+  async userPlaylistRemovalRelationshipPaths() {
+    let currentUserId = "";
+    try {
+      currentUserId = await this.currentUserId();
+    } catch {
+      currentUserId = "";
+    }
+
+    return Array.from(new Set([
+      "/userCollectionPlaylists/me/relationships/items",
+      currentUserId ? `/userCollections/${encodeURIComponent(currentUserId)}/relationships/playlists` : "",
+      this.userId ? `/userCollections/${encodeURIComponent(this.userId)}/relationships/playlists` : "",
+      "/userCollections/me/relationships/playlists"
+    ].filter(Boolean)));
+  }
+
   async fetchUserPlaylistPage(pathname = "", cursor = "") {
     const params = {
       countryCode: this.countryCode,
@@ -829,6 +1148,35 @@ class TidalProfileMixes {
       payload,
       nextCursor,
       endpoint: openApiUrl(pathname, params)
+    };
+  }
+
+  async fetchUserPlaylistCollectionPage(query = {}, cursor = "") {
+    const params = {
+      countryCode: this.countryCode,
+      include: "coverArt",
+      sort: "-createdAt",
+      "page[limit]": "50",
+      ...(query.params || {})
+    };
+    if (cursor) params["page[cursor]"] = cursor;
+    const pathname = query.pathname || "/playlists";
+    const payload = await this.fetchOpenApiJson(pathname, params);
+    const next = cleanText(payload?.links?.next);
+    let nextCursor = "";
+    if (next) {
+      try {
+        const nextUrl = new URL(next, TIDAL_OPENAPI_ROOT);
+        nextCursor = cleanText(nextUrl.searchParams.get("page[cursor]"));
+      } catch {
+        nextCursor = "";
+      }
+    }
+    return {
+      payload,
+      nextCursor,
+      endpoint: openApiUrl(pathname, params),
+      label: query.label || pathname
     };
   }
 
@@ -864,9 +1212,30 @@ class TidalProfileMixes {
     }
 
     const attemptedEndpoints = [];
+    const playlists = [];
     let lastError = "";
-    for (const pathname of await this.userPlaylistRelationshipPaths()) {
-      const playlists = [];
+    let successfulPlaylistCollectionEndpoints = 0;
+
+    for (const query of this.userPlaylistCollectionQueries()) {
+      let cursor = "";
+      let page = 0;
+      try {
+        do {
+          const pageResult = await this.fetchUserPlaylistCollectionPage(query, cursor);
+          attemptedEndpoints.push(pageResult.endpoint);
+          successfulPlaylistCollectionEndpoints += 1;
+          playlists.push(...playlistSummariesFromPayload(pageResult.payload));
+          cursor = pageResult.nextCursor;
+          page += 1;
+        } while (cursor && page < 10);
+      } catch (error) {
+        lastError = error.message;
+        attemptedEndpoints.push(`${openApiUrl(query.pathname || "/playlists", query.params || {})} -> ${error.message}`);
+      }
+    }
+
+    const legacyRelationshipPaths = successfulPlaylistCollectionEndpoints ? [] : await this.userPlaylistRelationshipPaths();
+    for (const pathname of legacyRelationshipPaths) {
       let cursor = "";
       let page = 0;
       try {
@@ -877,47 +1246,50 @@ class TidalProfileMixes {
           cursor = pageResult.nextCursor;
           page += 1;
         } while (cursor && page < 5);
-
-        const seen = new Set();
-        const unique = playlists
-          .filter((playlist) => {
-            const key = playlist.id.toLowerCase();
-            if (!key || seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          })
-          .sort((left, right) => left.title.localeCompare(right.title));
-        const detailed = [];
-        for (const playlist of unique) {
-          if (playlist.title !== playlist.id) {
-            detailed.push(playlist);
-            continue;
-          }
-          try {
-            const detail = await this.fetchPlaylistSummary(playlist.id);
-            if (detail?.endpoint) attemptedEndpoints.push(detail.endpoint);
-            detailed.push(detail?.playlist || playlist);
-          } catch {
-            detailed.push(playlist);
-          }
-        }
-
-        const result = {
-          ...this.status(),
-          connected: true,
-          playlists: detailed.sort((left, right) => left.title.localeCompare(right.title)),
-          count: detailed.length,
-          attemptedEndpoints,
-          sourceEndpoint: attemptedEndpoints.at(-1) || "",
-          fetchedAt: new Date(now).toISOString(),
-          warning: detailed.length ? "" : "TIDAL responded, but no user playlists were found."
-        };
-        this.playlistCache = { result, fetchedAtMs: now, fetchedAt: result.fetchedAt, error: result.warning || "" };
-        return result;
+        break;
       } catch (error) {
         lastError = error.message;
         attemptedEndpoints.push(`${openApiUrl(pathname)} -> ${error.message}`);
       }
+    }
+
+    if (successfulPlaylistCollectionEndpoints || playlists.length) {
+      const seen = new Set();
+      const unique = playlists
+        .filter((playlist) => {
+          const key = playlist.id.toLowerCase();
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .sort((left, right) => left.title.localeCompare(right.title));
+      const detailed = [];
+      for (const playlist of unique) {
+        if (playlist.title !== playlist.id) {
+          detailed.push(playlist);
+          continue;
+        }
+        try {
+          const detail = await this.fetchPlaylistSummary(playlist.id);
+          if (detail?.endpoint) attemptedEndpoints.push(detail.endpoint);
+          detailed.push(detail?.playlist || playlist);
+        } catch {
+          detailed.push(playlist);
+        }
+      }
+
+      const result = {
+        ...this.status(),
+        connected: true,
+        playlists: detailed.sort((left, right) => left.title.localeCompare(right.title)),
+        count: detailed.length,
+        attemptedEndpoints,
+        sourceEndpoint: attemptedEndpoints.find((endpoint) => endpoint.includes("/v2/playlists?")) || attemptedEndpoints.at(-1) || "",
+        fetchedAt: new Date(now).toISOString(),
+        warning: detailed.length ? "" : "TIDAL responded, but no user playlists were found."
+      };
+      this.playlistCache = { result, fetchedAtMs: now, fetchedAt: result.fetchedAt, error: result.warning || "" };
+      return result;
     }
 
     const result = {
@@ -928,7 +1300,6 @@ class TidalProfileMixes {
       attemptedEndpoints,
       error: lastError || "No TIDAL user playlist endpoint returned data."
     };
-    this.playlistCache = { result, fetchedAtMs: now, fetchedAt: "", error: result.error };
     return result;
   }
 
@@ -940,6 +1311,8 @@ class TidalProfileMixes {
     }, {
       method: "POST",
       contentType: "application/vnd.api+json",
+      circuitBreaker: this.playlistWriteCircuitBreaker,
+      label: "TIDAL playlist writes",
       body: {
         data: {
           type: "playlists",
@@ -951,7 +1324,12 @@ class TidalProfileMixes {
       }
     });
     this.playlistCache = null;
-    return normalizeCreatedPlaylist(payload, safeTitle);
+    const playlist = normalizeCreatedPlaylist(payload, safeTitle);
+    if (playlist.id) {
+      this.playlistTrackCache.set(this.playlistTrackCacheKey(playlist.id), emptyPlaylistTrackCacheEntry(playlist.id, this.clock()));
+      this.savePlaylistTrackCache();
+    }
+    return playlist;
   }
 
   async addTracksToPlaylist(playlistId = "", refs = []) {
@@ -973,12 +1351,288 @@ class TidalProfileMixes {
       }, {
         method: "POST",
         contentType: "application/vnd.api+json",
+        circuitBreaker: this.playlistWriteCircuitBreaker,
+        label: "TIDAL playlist writes",
         body: { data }
       });
+      this.onTracksAdded?.(refs.filter(ref => data.some(item => String(item.id) === String(ref.id))));
       addedCount += data.length;
       chunks += 1;
     }
+    this.recordPlaylistTrackCacheAdditions(id, refs, { create: true });
     return { addedCount, chunks };
+  }
+
+  async deletePlaylist(playlistId = "", { title = "" } = {}) {
+    this.assertPlaylistWriteReady();
+    const id = cleanText(playlistId);
+    if (!id) throw inputError("Missing TIDAL playlist id.");
+    let fullDeleteError = null;
+    try {
+      await this.fetchOpenApiJson(`/playlists/${encodeURIComponent(id)}`, {}, {
+        method: "DELETE",
+        circuitBreaker: this.playlistWriteCircuitBreaker,
+        label: "TIDAL playlist writes"
+      });
+    } catch (error) {
+      if (!isForbiddenError(error)) throw error;
+      fullDeleteError = error;
+      await this.removePlaylistFromUserCollection(id);
+    }
+    this.clearPlaylistLocalCaches(id);
+    return {
+      connected: true,
+      deleted: true,
+      fullDelete: !fullDeleteError,
+      removedFromCollection: Boolean(fullDeleteError),
+      warning: fullDeleteError ? "TIDAL would not delete that playlist resource, so Rabbit Hole removed it from your TIDAL collection instead." : "",
+      playlist: {
+        id,
+        title: cleanText(title)
+      }
+    };
+  }
+
+  clearPlaylistLocalCaches(playlistId = "") {
+    const id = cleanText(playlistId);
+    this.playlistCache = null;
+    const cacheKey = this.playlistTrackCacheKey(id);
+    this.playlistTrackCache.delete(cacheKey);
+    this.playlistTrackFetchFailures.delete(cacheKey);
+    this.playlistTrackFetchPromises.delete(cacheKey);
+    this.savePlaylistTrackCache();
+  }
+
+  async removePlaylistFromUserCollection(playlistId = "") {
+    this.assertCollectionWriteReady();
+    const id = cleanText(playlistId);
+    if (!id) throw inputError("Missing TIDAL playlist id.");
+    const body = {
+      data: [{
+        id,
+        type: "playlists"
+      }]
+    };
+    const paths = await this.userPlaylistRemovalRelationshipPaths();
+    let lastError = null;
+    for (const pathname of paths) {
+      try {
+        const payload = await this.fetchOpenApiJson(pathname, {}, {
+          method: "DELETE",
+          contentType: "application/vnd.api+json",
+          circuitBreaker: this.playlistWriteCircuitBreaker,
+          label: "TIDAL collection writes",
+          body
+        });
+        return {
+          removed: true,
+          endpoint: pathname,
+          response: payload
+        };
+      } catch (error) {
+        lastError = error;
+        if (isForbiddenError(error)) break;
+      }
+    }
+    throw lastError || new Error("TIDAL did not accept the playlist collection removal request.");
+  }
+
+  playlistTrackCacheKey(playlistId = "") {
+    return cleanText(playlistId).toLowerCase();
+  }
+
+  cachedPlaylistTrackEntry(playlistId = "") {
+    const key = this.playlistTrackCacheKey(playlistId);
+    if (!key) return null;
+    const entry = this.playlistTrackCache.get(key);
+    if (!entry) return null;
+    if (this.clock() - Number(entry.fetchedAtMs || 0) > this.playlistTrackCacheMs) return null;
+    return entry;
+  }
+
+  stalePlaylistTrackEntry(playlistId = "") {
+    const key = this.playlistTrackCacheKey(playlistId);
+    if (!key) return null;
+    return this.playlistTrackCache.get(key) || null;
+  }
+
+  playlistTrackFetchFailure(playlistId = "") {
+    const key = this.playlistTrackCacheKey(playlistId);
+    if (!key) return null;
+    const failure = this.playlistTrackFetchFailures.get(key);
+    if (!failure) return null;
+    if (Number(failure.retryAfterMs || 0) <= this.clock()) {
+      this.playlistTrackFetchFailures.delete(key);
+      return null;
+    }
+    return failure;
+  }
+
+  recordPlaylistTrackFetchFailure(playlistId = "", error = {}) {
+    const key = this.playlistTrackCacheKey(playlistId);
+    if (!key || !isRateLimitError(error)) return null;
+    const retryAfterMs = this.clock() + PLAYLIST_TRACK_RATE_LIMIT_COOLDOWN_MS;
+    const failure = {
+      message: cleanText(error.message) || "TIDAL rate limited playlist duplicate checks.",
+      retryAfterMs,
+      retryAfter: new Date(retryAfterMs).toISOString()
+    };
+    this.playlistTrackFetchFailures.set(key, failure);
+    return failure;
+  }
+
+  recordPlaylistTrackCacheAdditions(playlistId = "", tracks = [], { create = false } = {}) {
+    const key = this.playlistTrackCacheKey(playlistId);
+    if (!key) return null;
+    let entry = this.playlistTrackCache.get(key);
+    if (!entry && create) {
+      entry = emptyPlaylistTrackCacheEntry(playlistId, this.clock());
+      this.playlistTrackCache.set(key, entry);
+    }
+    if (!entry) return null;
+    for (const track of tracks || []) addTrackToPlaylistTrackCache(entry, track);
+    entry.checkedCount = Math.max(Number(entry.checkedCount || 0), entry.providerIds.size);
+    entry.updatedAtMs = this.clock();
+    entry.updatedAt = new Date(entry.updatedAtMs).toISOString();
+    this.savePlaylistTrackCache();
+    return entry;
+  }
+
+  async fetchPlaylistTrackCache(playlistId = "", { maxPages = 100 } = {}) {
+    const id = cleanText(playlistId);
+    if (!id) throw inputError("Missing TIDAL playlist id.");
+    if (!this.isConfigured()) throw inputError("TIDAL profile token missing. Connect TIDAL profile access first.");
+    const key = this.playlistTrackCacheKey(id);
+    const existing = this.playlistTrackFetchPromises.get(key);
+    if (existing) return existing;
+
+    const promise = this.fetchPlaylistTrackCacheNow(id, { maxPages })
+      .finally(() => this.playlistTrackFetchPromises.delete(key));
+    this.playlistTrackFetchPromises.set(key, promise);
+    return promise;
+  }
+
+  async fetchPlaylistTrackCacheNow(playlistId = "", { maxPages = 100 } = {}) {
+    const id = cleanText(playlistId);
+    const attemptedEndpoints = [];
+    let cursor = "";
+    let page = 0;
+    const tracks = [];
+    do {
+      const params = {
+        countryCode: this.countryCode,
+        include: "items,items.artists,items.albums",
+        "page[limit]": "50"
+      };
+      if (cursor) params["page[cursor]"] = cursor;
+      const itemsPath = `/playlists/${encodeURIComponent(id)}/relationships/items`;
+      attemptedEndpoints.push(openApiUrl(itemsPath, params));
+      await this.waitForPlaylistTrackFetchSlot();
+      const payload = await this.fetchOpenApiJson(itemsPath, params, {
+        circuitBreaker: null,
+        label: "TIDAL playlist duplicate check"
+      });
+      tracks.push(...normalizeOfficialPlaylistTracks(payload));
+
+      const next = cleanText(payload?.links?.next);
+      cursor = "";
+      if (next) {
+        try {
+          const nextUrl = new URL(next, TIDAL_OPENAPI_ROOT);
+          cursor = cleanText(nextUrl.searchParams.get("page[cursor]"));
+        } catch {
+          cursor = "";
+        }
+      }
+      page += 1;
+    } while (cursor && page < Math.max(1, Number(maxPages || 100)));
+
+    const entry = buildPlaylistTrackCacheEntry(id, tracks, {
+      attemptedEndpoints,
+      now: this.clock()
+    });
+    this.playlistTrackCache.set(this.playlistTrackCacheKey(id), entry);
+    this.playlistTrackFetchFailures.delete(this.playlistTrackCacheKey(id));
+    this.savePlaylistTrackCache();
+    return entry;
+  }
+
+  async playlistTrackDuplicate(playlistId = "", track = {}, { maxPages = 100, force = false } = {}) {
+    const id = cleanText(playlistId);
+    if (!id) throw inputError("Missing TIDAL playlist id.");
+    if (!this.isConfigured()) throw inputError("TIDAL profile token missing. Connect TIDAL profile access first.");
+
+    const cached = force ? null : this.cachedPlaylistTrackEntry(id);
+    if (cached) {
+      const duplicate = playlistCacheDuplicate(cached, track);
+      return {
+        duplicate: Boolean(duplicate),
+        checkedCount: cached.checkedCount,
+        attemptedEndpoints: cached.attemptedEndpoints,
+        source: "cache",
+        identityType: duplicate?.identityType || preferredPlaylistIdentity(track).type,
+        existingTrack: duplicate?.existingTrack || null
+      };
+    }
+
+    const stale = this.stalePlaylistTrackEntry(id);
+    const recentFailure = this.playlistTrackFetchFailure(id);
+    if (!stale && recentFailure) {
+      const error = new Error(`${recentFailure.message} Retry after ${recentFailure.retryAfter}.`);
+      error.status = 429;
+      error.retryable = true;
+      error.retryAfter = recentFailure.retryAfter;
+      throw error;
+    }
+    if (stale && recentFailure) {
+      const duplicate = playlistCacheDuplicate(stale, track);
+      return {
+        duplicate: Boolean(duplicate),
+        checkedCount: stale.checkedCount,
+        attemptedEndpoints: stale.attemptedEndpoints,
+        source: "stale-cache",
+        stale: true,
+        rateLimited: true,
+        warning: recentFailure.message,
+        retryAfter: recentFailure.retryAfter,
+        identityType: duplicate?.identityType || preferredPlaylistIdentity(track).type,
+        existingTrack: duplicate?.existingTrack || null
+      };
+    }
+
+    let entry = null;
+    try {
+      entry = await this.fetchPlaylistTrackCache(id, { maxPages });
+    } catch (error) {
+      const failure = this.recordPlaylistTrackFetchFailure(id, error);
+      const fallback = this.stalePlaylistTrackEntry(id);
+      const duplicate = fallback ? playlistCacheDuplicate(fallback, track) : null;
+      if (fallback) {
+        return {
+          duplicate: Boolean(duplicate),
+          checkedCount: fallback.checkedCount,
+          attemptedEndpoints: fallback.attemptedEndpoints,
+          source: "stale-cache",
+          stale: true,
+          rateLimited: Boolean(failure),
+          warning: error.message,
+          retryAfter: failure?.retryAfter || "",
+          identityType: duplicate?.identityType || preferredPlaylistIdentity(track).type,
+          existingTrack: duplicate?.existingTrack || null
+        };
+      }
+      throw error;
+    }
+
+    const duplicate = playlistCacheDuplicate(entry, track);
+    return {
+      duplicate: Boolean(duplicate),
+      checkedCount: entry.checkedCount,
+      attemptedEndpoints: entry.attemptedEndpoints,
+      source: "fresh-cache",
+      identityType: duplicate?.identityType || preferredPlaylistIdentity(track).type,
+      existingTrack: duplicate?.existingTrack || null
+    };
   }
 
   async createQueuePlaylist(tracks = [], { title = "", description = "" } = {}) {
@@ -1007,28 +1661,130 @@ class TidalProfileMixes {
     };
   }
 
-  async addTrackToPlaylist(playlistId = "", track = {}, { playlistTitle = "" } = {}) {
+  async addTrackToPlaylist(playlistId = "", track = {}, { playlistTitle = "", allowDuplicate = false, checkDuplicate = true, forceDuplicateCheck = false, verifyAfterWrite = false } = {}) {
     const { refs, skipped } = uniqueTidalTrackRefs([track]);
     if (!refs.length) {
       throw inputError("The current track does not include a TIDAL track ID, so Rabbit Hole cannot add it to a TIDAL playlist.");
     }
+    const playlist = normalizeUserPlaylist({
+      id: cleanText(playlistId),
+      type: "playlists",
+      attributes: {
+        name: cleanText(playlistTitle)
+      }
+    });
+    const shouldCheckDuplicate = checkDuplicate && !allowDuplicate;
+    let duplicateCheck = { duplicate: false, checkedCount: 0, attemptedEndpoints: [] };
+    if (shouldCheckDuplicate) {
+      try {
+        duplicateCheck = await this.playlistTrackDuplicate(playlistId, { ...track, tidal: { ...(track.tidal || {}), id: refs[0].id } }, {
+          force: forceDuplicateCheck
+        });
+      } catch (error) {
+        return {
+          connected: true,
+          requested: 1,
+          addableCount: refs.length,
+          skippedCount: skipped.length,
+          skipped,
+          duplicate: false,
+          duplicateCheckUnavailable: true,
+          duplicateCheckError: error.message,
+          added: false,
+          addedCount: 0,
+          chunks: 0,
+          playlist,
+          duplicateCheck: {
+            duplicate: false,
+            checkedCount: 0,
+            attemptedEndpoints: [],
+            unavailable: true,
+            error: error.message
+          },
+          track: {
+            id: refs[0].id,
+            title: refs[0].title,
+            artist: refs[0].artist
+          },
+          trackIds: refs.map((ref) => ref.id)
+        };
+      }
+    }
+    if (duplicateCheck.duplicate && !allowDuplicate) {
+      return {
+        connected: true,
+        requested: 1,
+        addableCount: refs.length,
+        skippedCount: skipped.length,
+        skipped,
+        duplicate: true,
+        added: false,
+        addedCount: 0,
+        chunks: 0,
+        playlist,
+        existingTrack: duplicateCheck.existingTrack,
+        duplicateCheck,
+        track: {
+          id: refs[0].id,
+          title: refs[0].title,
+          artist: refs[0].artist
+        },
+        trackIds: refs.map((ref) => ref.id)
+      };
+    }
     const added = await this.addTracksToPlaylist(playlistId, refs);
     this.playlistCache = null;
+    let writeVerification = null;
+    if (verifyAfterWrite) {
+      const fresh = await this.fetchPlaylistTrackCacheNow(playlistId);
+      const duplicate = playlistCacheDuplicate(fresh, { ...track, tidal: { ...(track.tidal || {}), id: refs[0].id } });
+      writeVerification = {
+        verified: Boolean(duplicate),
+        checkedCount: fresh.checkedCount,
+        attemptedEndpoints: fresh.attemptedEndpoints,
+        identityType: duplicate?.identityType || preferredPlaylistIdentity(track).type,
+        existingTrack: duplicate?.existingTrack || null
+      };
+      if (!duplicate) {
+        return {
+          connected: true,
+          requested: 1,
+          addableCount: refs.length,
+          skippedCount: skipped.length,
+          skipped,
+          duplicate: false,
+          added: false,
+          addedCount: 0,
+          chunks: added.chunks,
+          playlist,
+          existingTrack: null,
+          duplicateCheck,
+          writeVerification,
+          writeVerificationFailed: true,
+          warning: "TIDAL accepted the playlist write request, but a fresh playlist read did not contain the requested track.",
+          track: {
+            id: refs[0].id,
+            title: refs[0].title,
+            artist: refs[0].artist
+          },
+          trackIds: refs.map((ref) => ref.id)
+        };
+      }
+    }
     return {
       connected: true,
       requested: 1,
       addableCount: refs.length,
       skippedCount: skipped.length,
       skipped,
+      duplicate: Boolean(duplicateCheck.duplicate),
+      added: true,
       addedCount: added.addedCount,
       chunks: added.chunks,
-      playlist: normalizeUserPlaylist({
-        id: cleanText(playlistId),
-        type: "playlists",
-        attributes: {
-          name: cleanText(playlistTitle)
-        }
-      }),
+      playlist,
+      existingTrack: duplicateCheck.existingTrack || null,
+      duplicateCheck,
+      writeVerification,
       track: {
         id: refs[0].id,
         title: refs[0].title,

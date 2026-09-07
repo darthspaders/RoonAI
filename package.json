@@ -4,7 +4,9 @@
   "description": "Local AI playlist and control assistant for Roon",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "node scripts/start-all.js",
+    "start:app": "node src/server.js",
+    "restart": "powershell -ExecutionPolicy Bypass -File scripts/restart-all.ps1",
     "check": "node scripts/check-syntax.js",
     "test": "node --test"
   },

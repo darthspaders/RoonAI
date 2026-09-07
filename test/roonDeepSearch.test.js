@@ -171,6 +171,64 @@ test("Roon internet radio station action rows can play directly", async () => {
   assert.equal(browseCalls[0].zone_or_output_id, "output-1");
 });
 
+test("Roon playlist delete follows a delete confirmation action", async () => {
+  const roon = new RoonClient();
+  const browseCalls = [];
+  let loadCount = 0;
+  roon.browse = {
+    browse(payload, callback) {
+      browseCalls.push(payload);
+      if (payload.item_key === "delete-playlist") {
+        callback(null, { action: "list" });
+        return;
+      }
+      if (payload.item_key === "confirm-delete") {
+        callback(null, { action: "message", message: "Deleted" });
+        return;
+      }
+      callback(null, { action: "list", list: { title: "Weekend" } });
+    },
+    load(_payload, callback) {
+      loadCount += 1;
+      if (loadCount === 1) {
+        callback(null, {
+          list: { title: "Playlists" },
+          items: [
+            { title: "Weekend", subtitle: "12 tracks", item_key: "playlist-key", hint: "list" }
+          ]
+        });
+        return;
+      }
+      if (loadCount === 2) {
+        callback(null, {
+          list: { title: "Weekend" },
+          items: [
+            { title: "Play", subtitle: "", item_key: "play-playlist", hint: "action" },
+            { title: "Delete Playlist", subtitle: "", item_key: "delete-playlist", hint: "action" }
+          ]
+        });
+        return;
+      }
+      callback(null, {
+        list: { title: "Delete Playlist" },
+        items: [
+          { title: "Cancel", subtitle: "", item_key: "cancel-delete", hint: "action" },
+          { title: "Delete", subtitle: "", item_key: "confirm-delete", hint: "action" }
+        ]
+      });
+    }
+  };
+
+  const result = await roon.deletePlaylist("stale-key", "Weekend");
+
+  assert.equal(result.deleted, true);
+  assert.equal(result.action, "Delete Playlist");
+  assert.equal(result.confirmationAction, "Delete");
+  assert.equal(browseCalls[1].item_key, "playlist-key");
+  assert.equal(browseCalls[2].item_key, "delete-playlist");
+  assert.equal(browseCalls[3].item_key, "confirm-delete");
+});
+
 test("Roon artist-anchor queries do not match title-only collisions", async () => {
   const roon = new RoonClient();
   roon.transport = {};
@@ -814,7 +872,7 @@ test("Roon queue resolver drills into matching release when track search has tit
   assert.equal(result.action, "Add To Queue");
 });
 
-test("Roon queue resolver accepts remix title when remix artist is in requested credits", async () => {
+test("Roon queue resolver does not infer a remix version solely from artist credits", async () => {
   const roon = new RoonClient();
   roon.transport = {};
   roon.zones.set("zone-1", { zone_id: "zone-1" });
@@ -887,9 +945,9 @@ test("Roon queue resolver accepts remix title when remix artist is in requested 
     title: "Ouverture"
   }, "zone-1", "queue");
 
-  assert.equal(result.success, true);
+  assert.equal(result.success, false);
   assert.equal(result.match.item_key, "track-ouverture-khen");
-  assert.equal(result.action, "Add To Queue");
+  assert.equal(result.playable, undefined);
 });
 
 test("Roon queue resolver accepts exact remix title from Various Artists compilation", async () => {
@@ -1051,7 +1109,7 @@ test("Roon queue resolver drills exact title row when queue action is nested one
   assert.equal(result.action, "Add To Queue");
 });
 
-test("Roon queue resolver can use same-artist version fallback when base title has no exact hit", async () => {
+test("Roon queue resolver rejects a named remix when plain title has no exact hit", async () => {
   const roon = new RoonClient();
   roon.transport = {};
   roon.zones.set("zone-1", { zone_id: "zone-1" });
@@ -1118,9 +1176,9 @@ test("Roon queue resolver can use same-artist version fallback when base title h
     title: "Neurotransmitter"
   }, "zone-1", "queue");
 
-  assert.equal(result.success, true);
+  assert.equal(result.success, false);
   assert.equal(result.match.item_key, "track-neuro-remix");
-  assert.equal(result.action, "Add To Queue");
+  assert.equal(result.playable, undefined);
 });
 
 test("Roon queue resolver uses matching remixes release when track artist differs", async () => {

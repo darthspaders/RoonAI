@@ -1,16 +1,53 @@
 "use strict";
 
 const http = require("http");
+const voiceExecution = require("./voiceExecution");
+const { createVoiceApi } = require("./voiceApi");
+const {memory} = require("./synapseMemory");
+const { bridgeSyncAlertFromResult } = require("./bridgeSyncAlert");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { URL } = require("url");
 const config = require("./config");
+const { FreshPool, FreshnessEvents, searchFreshPool, identityKeys: standbyIdentityKeys } = require("./standbyFreshness");
+const { recordRefresh } = require("./standbyNovelty");
+const { reviewStandbyPool, generateStandbySearchPlan } = require("./standbySynapseReview");
+const { ExternalTrackQueue } = require("./externalTrackQueue");
+const { exactIntent, verifyExactTracks, queueExactTracks } = require("./exactTrackVerification");
+const { resolveVerifiedTracksForRoon } = require("./roonExactResolution");
+const { ExactRoonBridge } = require("./exactRoonBridge");
+const { RoonInternalTidalSync } = require("./roonInternalTidalSync");
+const { ExactVerificationStore } = require("./exactVerificationStore");
+const exactVerificationStore = new ExactVerificationStore(path.join(__dirname, "..", "data", "last-exact-verification.json"));
+let lastExactVerification = exactVerificationStore.read();
+let latestResultSource = "discovery";
+let latestBridgeSyncAlert = null;
+async function runExactVerification(body) {
+  const result = await verifyExactTracks(body, { tidal, roon, logger: entry => console.warn("[exact-verification]", JSON.stringify(entry)) });
+  lastExactVerification = result;
+  exactVerificationStore.save(result);
+  latestResultSource = "exact_verification";
+  scheduleBroadcast();
+  return result;
+}
+
+function defaultRoonZoneId() {
+  const zones = roon.getState().zones;
+  const selected = sessionStore.read()?.options?.zoneId;
+  return zones.find(zone => zone.zone_id === selected)?.zone_id ||
+    zones.find(zone => zone.state === "playing")?.zone_id ||
+    zones[0]?.zone_id;
+}
+
 const {
   candidateIdentityKeys,
+  artistKeysForCandidate,
   buildDiscoveryProfile,
   belowMinimumSoftRejectReason,
   autoBroadenSearchPasses,
+  allowsArtistRepeatFallback,
+  defaultPerRunArtistCap,
   discoverTracks,
   discoveryStatusFor,
   effectiveDiscoveryCount,
@@ -25,36 +62,105 @@ const {
   reasonFor,
   rejectReason,
   scoreBreakdownFor,
+  selectDiscoveryLaneCandidates,
+  shouldContinueAutoBroadenAfterError,
   whyBulletsFor
 } = require("./discoveryEngine");
 const { DiscoveryHistory } = require("./discoveryHistory");
 const { ListeningHistory } = require("./listeningHistory");
 const { generateSearchPlan, scoreCandidateBatch } = require("./llmClient");
 const { LastFmClient } = require("./lastFmClient");
+const { MetadataEnrichmentService } = require("./metadataEnrichmentService");
+const { createRabbitHoleMcpHttpHandler, createRabbitHoleMcpTools } = require("./mcpHttpServer");
+const { createModelRouter } = require("./modelProviders");
+const {
+  appSnapshot: buildAppSnapshot,
+  sessionSnapshot: buildSessionSnapshot
+} = require("./statusSnapshot");
 const {
   createModelReviewAudit,
   classifyModelReviewChange,
   modelReviewAuditItem,
   recordModelReviewAudit
 } = require("./modelReviewAudit");
+const { createModelCandidateReviewer } = require("./modelCandidateReview");
 const { QueryYieldTracker } = require("./queryYieldTracker");
+const { recordFeedbackAcrossStores } = require("./feedbackRecorder");
+const {
+  feedbackCalibrationContext: buildFeedbackCalibrationContext,
+  feedbackTrackWithSessionContext: buildFeedbackTrackWithSessionContext,
+  isRadioPlaybackTrack
+} = require("./feedbackContext");
+const { createTidalLookupResolver } = require("./tidalLookupResolver");
+const { createAgentTrackVerifier } = require("./agentTrackVerifier");
+const { createRoonTidalEnricher } = require("./roonTidalEnrichment");
+const { createRoonFirstDecorator } = require("./roonFirstDecorator");
+const {
+  createRoonFirstRescueRunner,
+  roonFirstResultIsEnough
+} = require("./roonFirstRescueRunner");
+const { createRoonQueueableFilter } = require("./roonQueueableFilter");
+const { createStandbyRefreshService } = require("./standbyRefreshService");
+const { createPcMonitorStatus } = require("./pcMonitorStatus");
+const { createLlmHealthStatus } = require("./llmHealthStatus");
+const { createCurrentTrackMetadataEnrichment } = require("./currentTrackMetadataEnrichment");
+const { createRadioEnrichmentService } = require("./radioEnrichmentService");
+const { createSimilarArtistExpansion } = require("./similarArtistExpansion");
+const {
+  diversifyCandidates,
+  requestAllowsArtistCluster
+} = require("./discoveryDiversity");
+const { createDiscoveryRequestPolicy } = require("./discoveryRequestPolicy");
+const { createDiscoveryResultVerification } = require("./discoveryResultVerification");
+const { createDiscoveryOrchestration } = require("./discoveryOrchestration");
+const {
+  createDiscoveryNoveltyPolicy,
+  requestAllowsPreviousSuggestions
+} = require("./discoveryNoveltyPolicy");
+const {
+  normalizeMatchText,
+  tidalEnrichmentMatches,
+  tidalPlaylistFallbackMatches
+} = require("./tidalMatchRules");
 const { GenreProfileStore } = require("./genreProfileStore");
 const { HQPlayerStatus } = require("./hqplayerStatus");
 const { RoonClient } = require("./roonClient");
 const { RabbitHoleGraph } = require("./rabbitHoleGraph");
-const { RadioMetadataResolver, parseRadioTrack } = require("./radioMetadataResolver");
+const { RadioMetadataResolver } = require("./radioMetadataResolver");
+const {
+  cleanArtworkUrl,
+  cleanHttpUrl,
+  cleanRadioText,
+  normalizeRadioText,
+  parseRoonPresenceNowState,
+  radioEnrichmentHasArtwork,
+  radioEnrichmentKey,
+  radioEnrichmentResultKey,
+  radioTrackFromZone,
+  summarizeZoneTrack
+} = require("./radioPlaybackState");
 const { SessionStore, trackKey } = require("./sessionStore");
-const { StandbyCandidateStore } = require("./standbyCandidateStore");
+const { StandbyCandidateStore, isStandbySeoSludge } = require("./standbyCandidateStore");
+const {
+  mergeStandbyRefillPool,
+  standbyFreshSourcePasses,
+  summarizeStandbyFreshness
+} = require("./standbyDiscoveryPlanner");
 const { TidalPinnedMixStore } = require("./tidalPinnedMixes");
 const { TasteProfile, normalizeRating, ratingDelta } = require("./tasteProfile");
 const { TidalProfileMixes } = require("./tidalProfileMixes");
-const { TidalVerifier, trackSourceQualityFromMetadata } = require("./tidalVerifier");
+const { TidalVerifier } = require("./tidalVerifier");
 const { TrackMemory } = require("./trackMemory");
+const { QueueAttemptStore } = require("./queueAttemptStore");
+const { mergeTrackLists } = require("./trackListMerge");
 const yearRangeUtil = require("./yearRange");
 
 const publicDir = path.join(__dirname, "..", "public");
 const MAX_JSON_BODY_BYTES = 5 * 1024 * 1024;
-const TIDAL_QUALITY_LOOKUP_TIMEOUT_MS = 8_000;
+const TIDAL_QUALITY_LOOKUP_TIMEOUT_MS = Math.max(
+  8_000,
+  Math.min(30_000, Number(process.env.TIDAL_QUALITY_LOOKUP_TIMEOUT_MS || Math.max(15_000, Number(config.tidal.timeoutMs || 12_000) + 3_000)))
+);
 const TIDAL_PLAYLIST_VERIFY_TIMEOUT_MS = Math.max(8_000, Math.min(45_000, Number(process.env.TIDAL_PLAYLIST_VERIFY_TIMEOUT_MS || 18_000)));
 const TIDAL_PLAYLIST_FALLBACK_TIMEOUT_MS = Math.max(6_000, Math.min(30_000, Number(process.env.TIDAL_PLAYLIST_FALLBACK_TIMEOUT_MS || 12_000)));
 const STANDBY_TARGET_COUNT = Math.max(1, Math.min(100, Number(process.env.STANDBY_TARGET_COUNT || 25)));
@@ -64,19 +170,68 @@ const STANDBY_ERROR_REFRESH_INTERVAL_MS = Math.max(5 * 60_000, Number(process.en
 const STANDBY_REFRESH_TIMEOUT_MS = Math.max(12_000, Math.min(90_000, Number(process.env.STANDBY_REFRESH_TIMEOUT_MS || 35_000)));
 const STANDBY_MODEL_TIMEOUT_MS = Math.max(8_000, Math.min(60_000, Number(process.env.STANDBY_MODEL_TIMEOUT_MS || 25_000)));
 const roon = new RoonClient();
-const tidal = new TidalVerifier(config.tidal);
+const directRoonQueue = new (require('./directRoonQueue').DirectRoonQueue)(roon,
+  entry => console.info('[direct-roon-queue]', JSON.stringify(entry)),
+  () => (lastExactVerification?.tracks || []).filter(row => row.tidal?.verified).map(row => ({ ...row.track, tidalTrackId: row.tidalTrackId })));
 const discoveryHistory = new DiscoveryHistory();
+const {
+  freshUnseenTracks,
+  previouslySuggestedTrack,
+  suppressPreviouslySuggestedResultTracks
+} = createDiscoveryNoveltyPolicy({
+  discoveryHistory,
+  candidateIdentityKeys
+});
 const listeningHistory = new ListeningHistory();
 const sessionStore = new SessionStore();
 const tasteProfile = new TasteProfile();
 const trackMemory = new TrackMemory();
+const queueAttemptStore = new QueueAttemptStore();
 const standbyStore = new StandbyCandidateStore({ targetCount: STANDBY_TARGET_COUNT });
+const standbyEvents = new FreshnessEvents();
+function recordStandbyActivity(kind,tracks) {
+  try {standbyEvents.record(kind,tracks);} catch(error) {console.error("[standby-activity] Persistence failed:",error.message);}
+}
+roon.on("trackQueued", track => recordStandbyActivity("queued", [track]));
 const lastfm = new LastFmClient(config.lastfm);
 const tidalProfileMixes = new TidalProfileMixes(config.tidalProfileMixes);
+tidalProfileMixes.onTracksAdded = tracks => recordStandbyActivity("playlist", tracks);
+const roonInternalTidalSync = new RoonInternalTidalSync(config.roonInternal, console);
+const exactRoonBridge = new ExactRoonBridge({
+  profile: tidalProfileMixes,
+  roon,
+  file: path.join(__dirname, "..", "data", "exact-bridge.json"),
+  internalTidalSync: roonInternalTidalSync,
+  ...config.exactRoonBridge
+});
+const externalTrackQueue = new ExternalTrackQueue({ roon, verify: runExactVerification,
+  save: result => { if (lastExactVerification === result) exactVerificationStore.save(result); },
+  bridge: exactRoonBridge
+});
+{
+  const directBridge = require("./directRoonBridge");
+  const directBridgeDeps = { knownTracks: () => directRoonQueue.knownTracks(), tidal: { getTrack: (id) => tidal.getTrack(id) }, bridge: exactRoonBridge };
+  roon.resolveDirectBridge = directBridge.createDirectBridge(directBridgeDeps);
+  roon.resolveDirectBridgeBatch = directBridge.createDirectBridgeBatch(directBridgeDeps);
+}
 const tidalPinnedMixes = new TidalPinnedMixStore({ file: config.tidalProfileMixes.pinnedFile });
+const tidal = new TidalVerifier({
+  ...config.tidal,
+  profileAccessTokenProvider: () => tidalProfileMixes.auth.getAccessToken()
+});
 const queryYieldTracker = new QueryYieldTracker();
 const genreProfileStore = new GenreProfileStore();
 const rabbitHoleGraph = new RabbitHoleGraph();
+const { withSimilarArtistSeeds } = createSimilarArtistExpansion({
+  buildDiscoveryProfile,
+  config,
+  lastfm,
+  normalizeScoringMode,
+  rabbitHoleGraph,
+  tasteProfile,
+  withTimeout
+});
+const artBridgeProvider = createArtBridgeProvider(config.artBridge);
 const radioMetadataResolver = new RadioMetadataResolver({
   enabled: config.radioMetadata.enabled,
   cacheMax: config.radioMetadata.cacheMax,
@@ -95,21 +250,198 @@ const radioMetadataResolver = new RadioMetadataResolver({
   spotifyMarket: config.radioMetadata.spotifyMarket,
   spotifyClientId: config.radioMetadata.spotifyClientId,
   spotifyClientSecret: config.radioMetadata.spotifyClientSecret,
+  albumArtProvider: artBridgeProvider,
   logger: console
+});
+const {
+  attachRadioEnrichment,
+  scheduleRadioEnrichment
+} = createRadioEnrichmentService({
+  cleanArtworkUrl,
+  cleanHttpUrl,
+  cleanRadioText,
+  config,
+  fetchJsonWithTimeout,
+  parseRoonPresenceNowState,
+  radioEnrichmentHasArtwork,
+  radioEnrichmentKey,
+  radioEnrichmentResultKey,
+  radioMetadataResolver,
+  radioTrackFromZone,
+  scheduleBroadcast,
+  tidal,
+  tidalEnrichmentMatches
+});
+const metadataEnrichment = new MetadataEnrichmentService({
+  tidal,
+  metadataResolver: radioMetadataResolver,
+  artBridge: config.artBridge,
+  cacheFile: config.metadataEnrichment.cacheFile,
+  minConfidence: config.metadataEnrichment.minConfidence,
+  timeoutMs: config.metadataEnrichment.timeoutMs,
+  logger: console
+});
+const {
+  attachMetadataEnrichment,
+  scheduleMetadataEnrichment
+} = createCurrentTrackMetadataEnrichment({
+  cleanRadioText,
+  config,
+  metadataEnrichment,
+  scheduleBroadcast,
+  summarizeZoneTrack
 });
 const hqplayerStatus = new HQPlayerStatus({
   ...config.hqplayer,
   activePlaybackProvider: () => roon.hasActivePlayback(),
   onChange: () => scheduleBroadcast()
 });
-const clients = new Set();
-const radioEnrichmentCache = new Map();
-const STATE_UPDATE_DEBOUNCE_MS = 1000;
 const OPENAI_COMPATIBLE_PROVIDERS = new Set(["openai-compatible", "openai_compatible", "lmstudio", "llamacpp"]);
+const {
+  booleanFlag,
+  isStrictRoonQueueMode,
+  shouldSkipModelForCatalogSearch,
+  strictSearchBudgets,
+  withNormalizedYearFilter
+} = createDiscoveryRequestPolicy({
+  buildDiscoveryProfile,
+  config,
+  minimumScoreFor,
+  normalizeMatchText,
+  openAiCompatibleProviders: OPENAI_COMPATIBLE_PROVIDERS,
+  yearRangeUtil
+});
+const {
+  queueableStatusChecks,
+  roonMatchSummary,
+  roonVerificationTimeoutFallback,
+  shouldRunRoonFirstRescue,
+  syncFinalResultVerification,
+  tidalPlaylistBridgeResult
+} = createDiscoveryResultVerification({
+  candidateIdentityKeys,
+  mergeTrackLists,
+  normalizeMatchText
+});
+const {
+  applyModelCandidateReview
+} = createModelCandidateReviewer({
+  candidateIdentityKeys,
+  classifyModelReviewChange,
+  config,
+  createModelReviewAudit,
+  mergeTrackLists,
+  modelReviewAuditItem,
+  normalizeMatchText,
+  recordModelReviewAudit,
+  scoreCandidateBatch,
+  tasteProfile
+});
+const {
+  rebalanceDiscoveryResult,
+  runAutoBroadenSearches
+} = createDiscoveryOrchestration({
+  artistKeysForCandidate,
+  autoBroadenSearchPasses,
+  buildDiscoveryProfile,
+  defaultPerRunArtistCap,
+  discoverTracks,
+  discoveryHistory,
+  mergeTrackLists,
+  queryYieldTracker,
+  selectDiscoveryLaneCandidates,
+  shouldContinueAutoBroadenAfterError,
+  tasteProfile,
+  tidal,
+  withTimeout
+});
+const tidalLookupResolver = createTidalLookupResolver({
+  tidal,
+  metadataEnrichment,
+  hqplayerStatus,
+  isRadioPlaybackTrack,
+  withTimeout,
+  qualityLookupTimeoutMs: TIDAL_QUALITY_LOOKUP_TIMEOUT_MS,
+  playlistVerifyTimeoutMs: TIDAL_PLAYLIST_VERIFY_TIMEOUT_MS,
+  playlistFallbackTimeoutMs: TIDAL_PLAYLIST_FALLBACK_TIMEOUT_MS
+});
+const {
+  findExactTidalCatalogueTrack,
+  resolveCurrentTrackQuality,
+  resolveTidalTrackForPlaylist
+} = tidalLookupResolver;
+const { verifyTracksForAgent } = createAgentTrackVerifier({
+  tidal,
+  roon,
+  discoveryHistory,
+  trackMemory,
+  trackKey,
+  findExactTidalCatalogueTrack,
+  withTimeout,
+  roonMatchSummary,
+  booleanFlag,
+  playlistVerifyTimeoutMs: TIDAL_PLAYLIST_VERIFY_TIMEOUT_MS
+});
+const { enrichRoonTracksOpportunistically } = createRoonTidalEnricher({
+  tidal,
+  wait
+});
+const roonFirstDecorator = createRoonFirstDecorator({
+  buildDiscoveryProfile,
+  releaseFilterRequiresVerification,
+  parseRequestedCount,
+  minimumScoreFor,
+  minimumScoreLabel,
+  mergeTrackLists,
+  discoveryHistory,
+  enrichRoonTracksOpportunistically,
+  nearYearFallbackOptions,
+  rejectReason,
+  previouslyRecommendedArtistReason,
+  scoreBreakdownFor,
+  tasteProfile,
+  belowMinimumSoftRejectReason,
+  reasonFor,
+  whyBulletsFor,
+  discoveryStatusFor,
+  queueableStatusChecks,
+  diversifyCandidates,
+  requestAllowsArtistCluster
+});
+const { runFreshRoonRescue } = createRoonFirstRescueRunner({
+  roon,
+  withTimeout,
+  mergeTrackLists,
+  parseRequestedCount,
+  releaseFilterRequiresVerification,
+  decorateRoonFirstResult: roonFirstDecorator.decorateRoonFirstResult,
+  decorateRoonFirstTimeoutFallback: roonFirstDecorator.decorateRoonFirstTimeoutFallback
+});
+const {
+  filterForRoonQueueable,
+  verifyPlaylistWithRoon
+} = createRoonQueueableFilter({
+  allowsArtistRepeatFallback,
+  artistKeysForCandidate,
+  buildDiscoveryProfile,
+  candidateIdentityKeys,
+  defaultPerRunArtistCap,
+  minimumScoreFor,
+  normalizeMatchText,
+  queueableStatusChecks,
+  rejectReason,
+  requestPrefersExtendedMixes,
+  roon,
+  roonMatchSummary,
+  tidal,
+  yearRangeUtil
+});
+const clients = new Set();
+const STATE_UPDATE_DEBOUNCE_MS = 1000;
+const EVENT_STREAM_HEARTBEAT_MS = Math.max(5000, Number(process.env.EVENT_STREAM_HEARTBEAT_MS || 15000));
 let broadcastTimer = null;
 let lastBroadcastData = "";
-let standbyRefreshTimer = null;
-let standbyRefreshInFlight = null;
+let modelRouter = null;
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -121,6 +453,60 @@ const mimeTypes = {
   ".jpeg": "image/jpeg",
   ".webp": "image/webp"
 };
+
+const {
+  refreshStandbyPool,
+  scheduleStandbyRefresh,
+  standbyCleanText,
+  standbyFreshSummary
+} = createStandbyRefreshService({
+  booleanFlag,
+  candidateIdentityKeys,
+  config,
+  discoverTracks,
+  discoveryHistory,
+  FreshPool,
+  generateSearchPlan,
+  generateStandbySearchPlan,
+  genreProfileStore,
+  getModelRouter: () => modelRouter,
+  lastFmHistoryForDiscovery,
+  listeningHistory,
+  normalizeMatchText,
+  queryYieldTracker,
+  recordRefresh,
+  reviewStandbyPool,
+  scheduleBroadcast,
+  searchFreshPool,
+  sessionStore,
+  STANDBY_ERROR_REFRESH_INTERVAL_MS,
+  STANDBY_MODEL_TIMEOUT_MS,
+  STANDBY_PARTIAL_REFRESH_INTERVAL_MS,
+  STANDBY_REFRESH_INTERVAL_MS,
+  STANDBY_REFRESH_TIMEOUT_MS,
+  STANDBY_TARGET_COUNT,
+  standbyEvents,
+  standbyFreshSourcePasses,
+  standbyIdentityKeys,
+  standbyStore,
+  summarizeStandbyFreshness,
+  tasteProfile,
+  tidal,
+  trackMemory,
+  previouslySuggestedTrack,
+  voiceExecution,
+  withNormalizedYearFilter,
+  withTimeout
+});
+const { pcMonitorSnapshot } = createPcMonitorStatus({
+  config,
+  fetchJsonWithTimeout
+});
+const { llmHealth, llmSnapshot } = createLlmHealthStatus({
+  config,
+  fetchJsonWithTimeout,
+  openAiCompatibleProviders: OPENAI_COMPATIBLE_PROVIDERS
+});
 
 const webMcpHeaders = {
   "Cross-Origin-Opener-Policy": "same-origin",
@@ -158,6 +544,35 @@ function getNetworkUrls() {
     }
   }
   return Array.from(new Set(urls));
+}
+
+function formatInternalHttpHost(host) {
+  const value = String(host || "").trim();
+  if (!value || value === "0.0.0.0" || value === "::") return "127.0.0.1";
+  return value.includes(":") && !value.startsWith("[") ? `[${value}]` : value;
+}
+
+function cleanHeaderValue(value = "") {
+  return String(Array.isArray(value) ? value[0] : value || "").split(",")[0].trim();
+}
+
+function requestOrigin(req) {
+  const host = cleanHeaderValue(req.headers["x-forwarded-host"] || req.headers.host);
+  if (!host || /[/?#]/.test(host)) return "";
+  const forwardedProto = cleanHeaderValue(req.headers["x-forwarded-proto"]);
+  const protocol = /^(https?|wss?)$/i.test(forwardedProto)
+    ? forwardedProto.replace(/^ws/i, "http").toLowerCase()
+    : (req.socket?.encrypted ? "https" : "http");
+  try {
+    return new URL(`${protocol}://${host}`).origin;
+  } catch {
+    return "";
+  }
+}
+
+function tidalOAuthRedirectUriForRequest(req) {
+  const origin = requestOrigin(req);
+  return origin ? `${origin}/api/tidal/oauth/callback` : tidalProfileMixes.auth.redirectUri;
 }
 
 function sendJson(res, status, body) {
@@ -216,29 +631,6 @@ function oauthPage({ title, message, details = "", error = false } = {}) {
 </html>`;
 }
 
-function normalizeBaseUrl(baseUrl = "") {
-  return String(baseUrl || "").replace(/\/+$/, "");
-}
-
-function llmSnapshot() {
-  const openAiCompatible = OPENAI_COMPATIBLE_PROVIDERS.has(config.llmProvider);
-  const model = openAiCompatible
-    ? config.openAiCompatibleModel
-    : (config.llmProvider === "openrouter" ? config.openRouterModel : config.ollamaModel);
-  const label = openAiCompatible
-    ? "LM STUDIO"
-    : (config.llmProvider === "openrouter" ? "OPENROUTER" : "OLLAMA");
-  const baseUrl = openAiCompatible
-    ? config.openAiCompatibleBaseUrl
-    : (config.llmProvider === "openrouter" ? "https://openrouter.ai/api/v1" : config.ollamaBaseUrl);
-  return {
-    provider: config.llmProvider,
-    label,
-    model,
-    baseUrl
-  };
-}
-
 async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 2500) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -257,122 +649,47 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 2500) {
   }
 }
 
-function openAiCompatibleOrigin(baseUrl = "") {
-  try {
-    return new URL(baseUrl).origin;
-  } catch {
-    return "";
-  }
+function createArtBridgeProvider(bridgeConfig = {}) {
+  if (/^(0|false|no)$/i.test(String(bridgeConfig.enabled))) return null;
+  const cacheUrl = cleanHttpUrl(bridgeConfig.cacheUrl);
+  if (!cacheUrl) return null;
+  return {
+    cachePublicUrl: async (sourceUrl, imageKey = "", track = {}) => cacheArtworkThroughBridge(sourceUrl, imageKey, track)
+  };
 }
 
-function modelStateMessage(label, model, state, modelFound = true) {
-  if (!modelFound) return `${label} reachable, configured model not found`;
-  if (state === "loaded") return "Local model ready";
-  if (state === "loading") return `${label} model is loading`;
-  if (state === "not-loaded") return `${label} reachable, configured model not loaded`;
-  if (state) return `${label} model state: ${state}`;
-  return `${label} reachable, model runtime state unavailable`;
-}
+async function cacheArtworkThroughBridge(sourceUrl, imageKey = "", track = {}) {
+  const cleanSourceUrl = cleanArtworkUrl(sourceUrl);
+  const cacheUrl = cleanHttpUrl(config.artBridge.cacheUrl);
+  if (!config.artBridge.enabled || !cleanSourceUrl || !cacheUrl) return cleanSourceUrl;
 
-async function lmStudioRuntimeModels(baseUrl, headers = {}) {
-  const origin = openAiCompatibleOrigin(baseUrl);
-  if (!origin) return null;
-  try {
-    const { response, body } = await fetchJsonWithTimeout(`${origin}/api/v0/models`, { headers }, 2500);
-    if (!response.ok || !Array.isArray(body?.data)) return null;
-    return body.data
-      .map((model) => ({
-        id: model.id || "",
-        state: model.state || "",
-        type: model.type || "",
-        loadedContextLength: model.loaded_context_length || null,
-        maxContextLength: model.max_context_length || null
-      }))
-      .filter((model) => model.id);
-  } catch {
-    return null;
-  }
-}
-
-async function llmHealth() {
-  const snapshot = llmSnapshot();
-  const headers = {};
-  if (config.openAiCompatibleApiKey) headers.authorization = `Bearer ${config.openAiCompatibleApiKey}`;
-  if (config.openRouterApiKey) headers.authorization = `Bearer ${config.openRouterApiKey}`;
+  const artist = cleanRadioText(track.artist || track.inputArtist);
+  const title = cleanRadioText(track.title || track.inputTitle);
+  const key = cleanRadioText(imageKey) ||
+    (artist || title ? `rabbit-hole:${normalizeRadioText(artist)}|${normalizeRadioText(title)}` : "");
 
   try {
-    if (OPENAI_COMPATIBLE_PROVIDERS.has(config.llmProvider)) {
-      const baseUrl = normalizeBaseUrl(config.openAiCompatibleBaseUrl);
-      const { response, body } = await fetchJsonWithTimeout(`${baseUrl}/models`, { headers }, 2500);
-      const models = Array.isArray(body?.data) ? body.data.map((model) => model.id).filter(Boolean) : [];
-      const runtimeModels = await lmStudioRuntimeModels(baseUrl, headers);
-      if (runtimeModels?.length) {
-        const runtimeModel = snapshot.model
-          ? runtimeModels.find((model) => model.id === snapshot.model)
-          : runtimeModels.find((model) => model.state === "loaded");
-        const modelFound = !snapshot.model || Boolean(runtimeModel);
-        const runtimeState = runtimeModel?.state || "";
-        const loaded = Boolean(modelFound && runtimeState === "loaded");
-        return {
-          ...snapshot,
-          online: response.ok && loaded,
-          reachable: response.ok,
-          loaded,
-          models,
-          runtimeModels,
-          runtimeState,
-          message: response.ok
-            ? modelStateMessage(snapshot.label, snapshot.model, runtimeState, modelFound)
-            : `${snapshot.label} returned HTTP ${response.status}`
-        };
-      }
-      const loaded = !snapshot.model || models.includes(snapshot.model);
-      return {
-        ...snapshot,
-        online: response.ok && loaded,
-        reachable: response.ok,
-        loaded,
-        models,
-        message: response.ok
-          ? (loaded ? "Local model ready" : "LM Studio reachable, configured model not loaded")
-          : `LM Studio returned HTTP ${response.status}`
-      };
-    }
+    const { response, body } = await fetchJsonWithTimeout(cacheUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json"
+      },
+      body: JSON.stringify({
+        sourceUrl: cleanSourceUrl,
+        imageKey: key,
+        artist,
+        title
+      })
+    }, Math.max(300, Math.min(5000, Number(config.artBridge.timeoutMs || 1200))));
 
-    if (config.llmProvider === "openrouter") {
-      return {
-        ...snapshot,
-        online: Boolean(config.openRouterApiKey),
-        reachable: Boolean(config.openRouterApiKey),
-        loaded: Boolean(config.openRouterApiKey),
-        message: config.openRouterApiKey ? "OpenRouter key configured" : "OPENROUTER_API_KEY is missing"
-      };
-    }
-
-    const baseUrl = normalizeBaseUrl(config.ollamaBaseUrl);
-    const { response, body } = await fetchJsonWithTimeout(`${baseUrl}/api/tags`, {}, 2500);
-    const models = Array.isArray(body?.models) ? body.models.map((model) => model.name).filter(Boolean) : [];
-    const loaded = !snapshot.model || models.includes(snapshot.model);
-    return {
-      ...snapshot,
-      online: response.ok && loaded,
-      reachable: response.ok,
-      loaded,
-      models,
-      message: response.ok
-        ? (loaded ? "Ollama model ready" : "Ollama reachable, configured model not loaded")
-        : `Ollama returned HTTP ${response.status}`
-    };
+    const bridgedUrl = cleanArtworkUrl(body?.url);
+    if (response.ok && bridgedUrl) return bridgedUrl;
   } catch (error) {
-    return {
-      ...snapshot,
-      online: false,
-      reachable: false,
-      loaded: false,
-      models: [],
-      message: error?.name === "AbortError" ? "Local model check timed out" : (error.message || "Local model is offline")
-    };
+    console.warn(`Artwork bridge cache failed for ${new URL(cleanSourceUrl).hostname}: ${error.message}`);
   }
+
+  return cleanSourceUrl;
 }
 
 function withHqplayerStatus(state) {
@@ -389,332 +706,6 @@ function withHqplayerStatus(state) {
       }))
     }))
   };
-}
-
-function summarizeZoneTrack(zone = {}) {
-  const now = zone.now_playing;
-  if (!now) return null;
-  return {
-    title: now.two_line?.line1 || now.three_line?.line1 || now.one_line?.line1 || "",
-    artist: now.two_line?.line2 || now.three_line?.line2 || now.one_line?.line2 || "",
-    album: now.three_line?.line3 || "",
-    durationMs: now.length ? Number(now.length) * 1000 : null
-  };
-}
-
-function cleanRadioText(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-
-function cleanHttpUrl(value) {
-  const text = cleanRadioText(value);
-  if (!text) return "";
-  try {
-    const url = new URL(text);
-    return ["http:", "https:"].includes(url.protocol) ? url.toString() : "";
-  } catch {
-    return "";
-  }
-}
-
-function normalizeRadioText(value) {
-  return cleanRadioText(value)
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function splitRadioArtistTitle(value) {
-  const text = cleanRadioText(value);
-  const parts = text.split(/\s+[-\u2013\u2014]\s+/).map(cleanRadioText).filter(Boolean);
-  if (parts.length < 2) return null;
-  return {
-    artist: parts[0],
-    title: parts.slice(1).join(" - ")
-  };
-}
-
-function looksLikeRadioProgramTitle(value) {
-  const text = cleanRadioText(value);
-  if (!text) return false;
-  const monthAndYear = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4}\b/i;
-  return monthAndYear.test(text) ||
-    /\b(?:episode|showcase|takeover|podcast|radio\s+show|guest\s+mix|dj\s+set|live\s+set|monthly\s+mix|weekly\s+mix|mixed\s+by|with\s+[a-z0-9][\w .'-]{2,})\b/i.test(text);
-}
-
-function looksLikeStationText(value) {
-  const text = cleanRadioText(value);
-  if (!text) return false;
-  return /\b(?:station|fm|di\.?fm|frisky|proton|afterhours|live\s+radio|radio\s+station|stream|premium)\b/i.test(text);
-}
-
-function looksLikeNonMusicStatus(value) {
-  return /\b(?:muted detected|twitch stream|system output|no media|no track|silence)\b/i.test(cleanRadioText(value));
-}
-
-function radioTrackFromZone(zone = {}) {
-  const now = zone.now_playing;
-  if (!now) return null;
-
-  const line1 = cleanRadioText(now.two_line?.line1 || now.three_line?.line1 || now.one_line?.line1);
-  const line2 = cleanRadioText(now.two_line?.line2 || now.three_line?.line2 || now.one_line?.line2);
-  const threeTitle = cleanRadioText(now.three_line?.line2);
-  const threeArtist = cleanRadioText(now.three_line?.line3);
-  const rawAlbum = cleanRadioText(now.three_line?.line3 || "");
-  const oneLine = cleanRadioText(now.one_line?.line1);
-  if (!line1 && !line2) return null;
-  if (looksLikeNonMusicStatus(`${zone.display_name || ""} ${line1} ${line2} ${rawAlbum}`)) return null;
-
-  const splitLine2 = splitRadioArtistTitle(line2);
-  const splitLine1 = splitRadioArtistTitle(line1);
-  const artistDuplicatesTitle = line2 && normalizeRadioText(line2) === normalizeRadioText(line1);
-  const streamLike = !zone.is_seek_allowed || looksLikeStationText(`${zone.display_name || ""} ${line1} ${line2} ${rawAlbum}`);
-
-  let artist = line2;
-  let title = line1;
-  const parsed = streamLike ? parseRadioTrack({
-    title: line1,
-    artist: line2,
-    album: rawAlbum,
-    originalTitle: line1,
-    originalArtist: line2,
-    originalAlbum: rawAlbum,
-    activityDetails: oneLine || line1,
-    activityState: line2
-  }) : null;
-
-  if (streamLike && parsed?.artist && parsed?.title) {
-    artist = parsed.artist;
-    title = parsed.title;
-  } else if (streamLike && threeTitle && threeArtist && !looksLikeStationText(threeArtist)) {
-    artist = threeArtist;
-    title = threeTitle;
-  } else if (streamLike && splitLine2) {
-    artist = splitLine2.artist;
-    title = splitLine2.title;
-  } else if (splitLine1 && (!artist || artistDuplicatesTitle || streamLike || looksLikeStationText(artist))) {
-    artist = splitLine1.artist;
-    title = splitLine1.title;
-  }
-
-  artist = cleanRadioText(artist);
-  title = cleanRadioText(title);
-  if (!artist || !title) return null;
-  if (looksLikeNonMusicStatus(`${artist} ${title}`)) return null;
-  if (!streamLike && !artistDuplicatesTitle && !(splitLine1 && normalizeRadioText(line2).includes(normalizeRadioText(splitLine1.artist)))) return null;
-  const isRadioProgram = streamLike && looksLikeRadioProgramTitle(title);
-
-  return {
-    artist,
-    title,
-    album: rawAlbum,
-    durationMs: now.length ? Number(now.length) * 1000 : null,
-    isRadioProgram,
-    catalogEnrichmentAllowed: !isRadioProgram,
-    source: "Roon radio metadata"
-  };
-}
-
-function radioEnrichmentKey(track = {}) {
-  if (!track) return "";
-  const artist = normalizeRadioText(track.artist);
-  const title = normalizeRadioText(track.title);
-  return artist && title ? `${artist}|${title}` : "";
-}
-
-function radioEnrichmentResultKey(result = {}) {
-  return cleanRadioText(result.radioTrackKey || result.key) || radioEnrichmentKey(result.lookup || result);
-}
-
-function parseRoonPresenceNowState(body = {}) {
-  const version = cleanRadioText(body?.version);
-  if (!version || version === "idle") return null;
-
-  const parts = version.split("|").map(cleanRadioText);
-  const artist = parts[0] || "";
-  const title = parts[1] || "";
-  const albumArtUrl = cleanHttpUrl(parts[2]);
-  if (!artist || !title || !albumArtUrl) return null;
-
-  return {
-    key: radioEnrichmentKey({ artist, title }),
-    title,
-    artist,
-    albumArtUrl,
-    tidalUrl: cleanHttpUrl(parts[3]),
-    signalPath: parts.slice(4).join("|"),
-    source: "roonpresence"
-  };
-}
-
-async function lookupRoonPresenceRadioArtwork(lookup = {}, key = "") {
-  const url = cleanHttpUrl(config.radioMetadata.roonPresenceNowStateUrl);
-  if (!url || !key) return null;
-
-  try {
-    const { response, body } = await fetchJsonWithTimeout(url, {
-      headers: { accept: "application/json" }
-    }, Math.max(300, Math.min(5000, Number(config.radioMetadata.roonPresenceTimeoutMs || 1200))));
-    if (!response.ok) return null;
-
-    const mirror = parseRoonPresenceNowState(body);
-    if (!mirror?.albumArtUrl || mirror.key !== key) return null;
-
-    return {
-      ...mirror,
-      key,
-      title: lookup.title,
-      artist: lookup.artist
-    };
-  } catch {
-    return null;
-  }
-}
-
-function attachRadioEnrichment(state = {}) {
-  return {
-    ...state,
-    zones: (state.zones || []).map((zone) => {
-      const lookup = radioTrackFromZone(zone);
-      const key = radioEnrichmentKey(lookup);
-      const cached = key ? radioEnrichmentCache.get(key) : null;
-      const cachedResult = cached?.result && radioEnrichmentResultKey(cached.result) === key ? cached.result : null;
-      if (!lookup && !cached?.result) return zone;
-      if (lookup?.catalogEnrichmentAllowed === false) return {
-        ...zone,
-        now_playing: {
-          ...(zone.now_playing || {}),
-          radio_lookup: lookup
-        }
-      };
-
-      return {
-        ...zone,
-        now_playing: {
-          ...(zone.now_playing || {}),
-          radio_lookup: lookup,
-          ...(cachedResult ? { radio_enrichment: cachedResult } : {})
-        }
-      };
-    })
-  };
-}
-
-function trimRadioEnrichmentCache(max = 200) {
-  if (radioEnrichmentCache.size <= max) return;
-  const entries = [...radioEnrichmentCache.entries()]
-    .sort((left, right) => Number(left[1]?.updatedAt || 0) - Number(right[1]?.updatedAt || 0));
-  for (const [key] of entries.slice(0, radioEnrichmentCache.size - max)) {
-    radioEnrichmentCache.delete(key);
-  }
-}
-
-function radioMetadataToEnrichment(lookup = {}, metadata = {}, tidalResult = null) {
-  if (lookup?.catalogEnrichmentAllowed === false) return null;
-  if (!metadata && !tidalResult) return null;
-
-  const requiresExactMetadata = Boolean(cleanRadioText(lookup.artist) && cleanRadioText(lookup.title));
-  const exactMetadata = metadata && (!requiresExactMetadata || tidalEnrichmentMatches(lookup, metadata)) ? metadata : null;
-  const exactTidalResult = tidalResult && tidalEnrichmentMatches(lookup, tidalResult) ? tidalResult : null;
-  if (metadata && requiresExactMetadata && !exactMetadata) {
-    console.warn(`Ignoring loose radio metadata for ${lookup.artist} - ${lookup.title}: ${metadata.artist || "unknown artist"} - ${metadata.title || "unknown title"}`);
-  }
-  if (tidalResult && !exactTidalResult) {
-    console.warn(`Ignoring loose radio TIDAL match for ${lookup.artist} - ${lookup.title}: ${tidalResult.artist} - ${tidalResult.title}`);
-  }
-
-  const imageUrl = cleanRadioText(exactTidalResult?.imageUrl || exactMetadata?.albumArtUrl);
-  const tidalUrl = cleanRadioText(exactTidalResult?.tidalUrl || exactTidalResult?.url || exactMetadata?.tidalUrl);
-  const album = cleanRadioText(exactTidalResult?.album || exactMetadata?.album);
-  const durationMs = Number(exactTidalResult?.durationMs || exactMetadata?.durationMs || 0) || lookup.durationMs || null;
-  const radioTrackKey = radioEnrichmentKey(lookup);
-
-  if (!imageUrl && !tidalUrl && !album && !durationMs && !exactTidalResult) return null;
-
-  return {
-    ...(exactTidalResult || {}),
-    key: radioTrackKey,
-    radioTrackKey,
-    radioArtworkResolved: Boolean(imageUrl),
-    title: cleanRadioText(exactTidalResult?.title || exactMetadata?.title || lookup.title),
-    artist: cleanRadioText(exactTidalResult?.artist || exactMetadata?.artist || lookup.artist),
-    album,
-    durationMs,
-    tidalUrl,
-    url: tidalUrl,
-    imageUrl,
-    lookup,
-    source: exactMetadata?.source ? `radio-${exactMetadata.source}` : (exactTidalResult ? "tidal-radio-enrichment" : "radio-metadata")
-  };
-}
-
-async function resolveRadioEnrichment(lookup, key) {
-  if (lookup?.catalogEnrichmentAllowed === false) return null;
-  const roonPresence = await lookupRoonPresenceRadioArtwork(lookup, key);
-  if (roonPresence) return radioMetadataToEnrichment(lookup, roonPresence, null);
-
-  const metadataPromise = config.radioMetadata.enabled
-    ? radioMetadataResolver.lookup(lookup, key).catch((error) => {
-      console.warn("Radio metadata resolver failed", error.message);
-      return null;
-    })
-    : Promise.resolve(null);
-  const tidalPromise = tidal.isConfigured()
-    ? tidal.verify(lookup, { strict: false }).catch((error) => {
-      console.warn("Radio TIDAL enrichment failed", error.message);
-      return null;
-    })
-    : Promise.resolve(null);
-
-  const [metadata, tidalResult] = await Promise.all([metadataPromise, tidalPromise]);
-  return radioMetadataToEnrichment(lookup, metadata, tidalResult);
-}
-
-function scheduleRadioEnrichment(state = {}) {
-  if (!config.radioMetadata.enabled && !tidal.isConfigured()) return;
-
-  for (const zone of state.zones || []) {
-    const lookup = radioTrackFromZone(zone);
-    const key = radioEnrichmentKey(lookup);
-    if (!key) continue;
-    if (lookup.catalogEnrichmentAllowed === false) {
-      radioEnrichmentCache.delete(key);
-      continue;
-    }
-
-    const cached = radioEnrichmentCache.get(key);
-    if (cached?.pending) continue;
-    if (cached?.result) continue;
-    if (cached?.error && Date.now() - Number(cached.updatedAt || 0) < 15 * 60 * 1000) continue;
-
-    radioEnrichmentCache.set(key, {
-      pending: true,
-      lookup,
-      updatedAt: Date.now()
-    });
-
-    resolveRadioEnrichment(lookup, key)
-      .then((result) => {
-        radioEnrichmentCache.set(key, {
-          lookup,
-          result,
-          updatedAt: Date.now()
-        });
-        trimRadioEnrichmentCache();
-        if (result) scheduleBroadcast();
-      })
-      .catch((error) => {
-        radioEnrichmentCache.set(key, {
-          lookup,
-          error: error.message,
-          updatedAt: Date.now()
-        });
-        trimRadioEnrichmentCache();
-      });
-  }
 }
 
 function withTrackMemory(state) {
@@ -814,2173 +805,64 @@ async function lastFmHistoryForDiscovery() {
   }
 }
 
-function cleanSeedText(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-
-function normalizeSeedText(value) {
-  return cleanSeedText(value)
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function splitSeedArtists(value) {
-  return cleanSeedText(value)
-    .split(/\s+(?:and|feat\.?|featuring|with)\s+|[,/&+|]+/i)
-    .map(cleanSeedText)
-    .filter((part) => part && part.length > 1 && part.length <= 80);
-}
-
-function genericSeedArtist(value = "") {
-  const text = normalizeSeedText(value);
-  return !text || /^(?:various artists?|unknown artist|unknown|n a|na|va|v a|soundtrack|house music|techno music|trance music|psytrance|ambient music|electronic dance music|edm|dance music)$/.test(text);
-}
-
-function requestUsesNowPlayingSeed(options = {}) {
-  const request = cleanSeedText(options.request);
-  const genres = cleanSeedText(options.genres);
-  const text = normalizeSeedText(`${options.request || ""} ${options.reference || ""}`);
-  if (!request && !genres) return true;
-  return /\b(?:now playing|current roon|current track|current song|what is playing|this track|this song|use current|like this|like what is playing|around what is playing)\b/.test(text);
-}
-
-function referenceSeedArtists(reference = "", limit = 20) {
-  const artists = [];
-  for (const line of String(reference || "").split(/\r?\n/)) {
-    const text = cleanSeedText(line);
-    const match = text.match(/^(.+?)\s+-\s+(.+)$/);
-    if (!match) continue;
-    artists.push(...splitSeedArtists(match[1]));
-    if (artists.length >= limit) break;
-  }
-  return artists.slice(0, limit);
-}
-
-function baseArtistsForSimilarExpansion(options = {}, limit = 8) {
-  const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
-  const scoringMode = normalizeScoringMode(options);
-  const candidates = [
-    ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
-    ...(scoringMode === "similar" && Array.isArray(plan.candidateArtists) ? plan.candidateArtists : []),
-    ...referenceSeedArtists(options.reference, 20),
-    ...(requestUsesNowPlayingSeed(options) ? [options.nowPlaying?.artist] : [])
-  ];
-  const seen = new Set();
-  const result = [];
-  for (const value of candidates) {
-    for (const artist of splitSeedArtists(value)) {
-      const key = normalizeSeedText(artist);
-      if (!key || seen.has(key) || genericSeedArtist(artist)) continue;
-      seen.add(key);
-      result.push(artist);
-      if (result.length >= limit) return result;
-    }
-  }
-  return result;
-}
-
-async function withSimilarArtistSeeds(options = {}, requestedCount = 8) {
-  if (normalizeScoringMode(options) === "pure") {
-    return {
-      ...options,
-      similarArtistExpansion: {
-        enabled: false,
-        reason: "Pure Search keeps similar-artist expansion disabled so the prompt remains the hard constraint."
-      }
-    };
-  }
-  const status = lastfm.status();
-  const baseArtists = baseArtistsForSimilarExpansion(options, 8);
-  if (!baseArtists.length) {
-    return {
-      ...options,
-      similarArtistExpansion: {
-        enabled: false,
-        reason: "No credible seed artists available for similar-artist expansion."
-      }
-    };
-  }
-  if (status.enabled === false || !status.apiKeyConfigured) {
-    return {
-      ...options,
-      similarArtistExpansion: {
-        enabled: false,
-        seeds: baseArtists,
-        reason: status.enabled === false ? "Last.fm lookup disabled." : "LASTFM_API_KEY is missing."
-      }
-    };
-  }
-
-  const limit = Math.max(4, Math.min(16, Math.ceil(Number(requestedCount || 8) * 0.75)));
-  const timeoutMs = Math.max(1200, Math.min(4500, Number(config.lastfm.timeoutMs || 3500)));
-  try {
-    const related = await withTimeout(
-      rabbitHoleGraph.similarArtistsForSeeds(baseArtists, { config }, {
-        seedLimit: 4,
-        perSeed: 6,
-        limit
-      }),
-      timeoutMs,
-      "Similar artist expansion timed out."
-    );
-    const similarArtistSeeds = [];
-    const seen = new Set((options.similarArtistSeeds || []).map(normalizeSeedText));
-    for (const item of related || []) {
-      const name = cleanSeedText(item.name);
-      const key = normalizeSeedText(name);
-      if (!key || seen.has(key) || genericSeedArtist(name)) continue;
-      seen.add(key);
-      similarArtistSeeds.push(name);
-    }
-    return {
-      ...options,
-      similarArtistSeeds: [
-        ...(Array.isArray(options.similarArtistSeeds) ? options.similarArtistSeeds : []),
-        ...similarArtistSeeds
-      ],
-      similarArtistExpansion: {
-        enabled: true,
-        source: "Last.fm artist.getsimilar",
-        seeds: baseArtists.slice(0, 4),
-        returned: similarArtistSeeds.length,
-        artists: similarArtistSeeds
-      }
-    };
-  } catch (error) {
-    return {
-      ...options,
-      similarArtistExpansion: {
-        enabled: false,
-        seeds: baseArtists.slice(0, 4),
-        reason: error.message || "Similar artist expansion failed."
-      }
-    };
-  }
-}
-
-function mergeTrackLists(...lists) {
-  const seen = new Set();
-  const merged = [];
-  for (const list of lists) {
-    for (const track of list || []) {
-      const keys = candidateIdentityKeys(track);
-      const key = keys[0] || `${track.artist || ""}|${track.title || ""}`.toLowerCase();
-      if (!key || seen.has(key)) continue;
-      for (const candidateKey of keys) seen.add(candidateKey);
-      seen.add(key);
-      merged.push(track);
-    }
-  }
-  return merged;
-}
-
-function standbyCleanText(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-
-function standbyOptionValue(overrides = {}, sessionOptions = {}, key, fallback = "", behavior = {}) {
-  const override = standbyCleanText(overrides[key]);
-  if (override) return override;
-  if (behavior.useSession === false) return fallback;
-  const sessionValue = standbyCleanText(sessionOptions[key]);
-  return sessionValue || fallback;
-}
-
-function standbyRequestText(request = "") {
-  const text = standbyCleanText(request);
-  if (!text) return "";
-  if (/\bstandby pool\b/i.test(text)) return text;
-  return `${text} Standby pool: prioritize fresh adjacent artists, labels, remixers, and radio-like sources; avoid repeating top liked or previously recommended artists unless the prompt names them directly.`;
-}
-
-function standbySearchOptions(overrides = {}, behavior = {}) {
-  const session = sessionStore.read();
-  const sessionOptions = session.options || {};
-  const optionBehavior = { useSession: behavior.useSession !== false };
-  const now = new Date();
-  const currentYear = now.getFullYear();
-  const topArtists = tasteProfile.getTopArtists(10);
-  const tastePrompt = topArtists.length
-    ? `Taste anchors: ${topArtists.join(", ")}. Use them as gravity, not repeats.`
-    : "Taste anchors are still forming. Favor high-confidence adjacent discoveries.";
-  const request = standbyRequestText(standbyOptionValue(
-    overrides,
-    sessionOptions,
-    "request",
-    `Find tracks that fit my current Rabbit Hole taste profile. ${tastePrompt} Prioritize adjacent artists, labels, remixers, radio-like sources, long-form versions, and non-obvious discoveries.`,
-    optionBehavior
-  ));
-
-  const options = {
-    request,
-    reference: standbyOptionValue(overrides, sessionOptions, "reference", "", optionBehavior),
-    genres: standbyOptionValue(overrides, sessionOptions, "genres", "progressive house, melodic house, organic house, melodic techno", optionBehavior),
-    years: standbyOptionValue(overrides, sessionOptions, "years", `${Math.max(2000, currentYear - 6)}-${currentYear}`, optionBehavior),
-    mood: standbyOptionValue(overrides, sessionOptions, "mood", "hypnotic, deep, melodic, cosmic, psychedelic, underground, long / extended", optionBehavior),
-    language: standbyOptionValue(overrides, sessionOptions, "language", "", optionBehavior),
-    minScore: standbyOptionValue(overrides, sessionOptions, "minScore", "", optionBehavior),
-    scoringMode: standbyOptionValue(overrides, sessionOptions, "scoringMode", "explore", optionBehavior),
-    releasePreset: standbyOptionValue(overrides, sessionOptions, "releasePreset", "", optionBehavior),
-    releaseExactDate: standbyOptionValue(overrides, sessionOptions, "releaseExactDate", "", optionBehavior),
-    releaseStartDate: standbyOptionValue(overrides, sessionOptions, "releaseStartDate", "", optionBehavior),
-    releaseEndDate: standbyOptionValue(overrides, sessionOptions, "releaseEndDate", "", optionBehavior),
-    count: String(STANDBY_TARGET_COUNT),
-    standbyPool: "true",
-    requireRoonQueueable: "",
-    nowPlaying: overrides.nowPlaying || sessionOptions.nowPlaying || null
-  };
-
-  for (const [key, value] of Object.entries(overrides || {})) {
-    if (value === undefined || value === null) continue;
-    if (["zoneId", "count", "requireRoonQueueable", "strictRoonQueueable", "roonStrict"].includes(key)) continue;
-    if (typeof value === "string" && !value.trim()) continue;
-    if (options[key] === undefined) options[key] = value;
-  }
-  for (const [key, value] of Object.entries(options)) {
-    if (typeof value === "string" && !value.trim()) delete options[key];
-  }
-  return options;
-}
-
-function standbyNextRefreshIso(delayMs = STANDBY_REFRESH_INTERVAL_MS) {
-  return new Date(Date.now() + Math.max(0, Number(delayMs || 0))).toISOString();
-}
-
-function standbyTidalBackoffDelayMs() {
-  const circuit = tidal.status()?.circuit || {};
-  const retryAfterMs = Number(circuit.retryAfterMs || 0);
-  return Math.max(STANDBY_ERROR_REFRESH_INTERVAL_MS, retryAfterMs);
-}
-
-function standbyTidalBackoffMessage() {
-  const circuit = tidal.status()?.circuit || {};
-  const detail = standbyCleanText(circuit.lastError || "");
-  return detail
-    ? `TIDAL search is backing off after fetch failures (${detail}). Current standby tracks were kept.`
-    : "TIDAL search is backing off after fetch failures. Current standby tracks were kept.";
-}
-
-function standbyResultLooksLikeTidalBackoff(result = {}) {
-  const tracks = mergeTrackLists(result.tracks || [], result.alternates || []);
-  if (tracks.length) return false;
-
-  const diagnostics = result.verification?.poolDiagnostics || {};
-  const buckets = Array.isArray(diagnostics.buckets) ? diagnostics.buckets : [];
-  const tidalIssueCount = buckets
-    .filter((bucket) => /tidal|api|fetch|timeout|circuit/i.test(String(bucket.label || "")))
-    .reduce((sum, bucket) => sum + Number(bucket.count || 0), 0);
-  const discarded = Number(result.verification?.discarded || result.discarded?.length || 0);
-  const queryYield = diagnostics.queryYield || result.verification?.queryYield || {};
-  const queryErrors = Number(queryYield.errors || queryYield.errorCount || 0);
-
-  return Boolean(
-    discarded > 0 &&
-    (tidalIssueCount >= Math.max(1, Math.ceil(discarded * 0.75)) || queryErrors >= Math.max(1, Number(queryYield.attempted || 0) * 0.75))
-  );
-}
-
-async function refreshStandbyPool({ force = false, reason = "background", options = {} } = {}) {
-  if (standbyRefreshInFlight) return standbyRefreshInFlight;
-
-  const current = standbyStore.summary();
-  if (!force && current.count >= STANDBY_TARGET_COUNT) {
-    return current;
-  }
-
-  if (tidal.status()?.circuit?.state === "open") {
-    standbyStore.markRefreshStart({ reason });
-    const summary = standbyStore.markRefreshEnd({
-      reason,
-      error: standbyTidalBackoffMessage(),
-      kept: current.count,
-      nextRefreshAt: standbyNextRefreshIso(standbyTidalBackoffDelayMs())
-    });
-    scheduleBroadcast();
-    return summary;
-  }
-
-  standbyRefreshInFlight = (async () => {
-    const startedAt = Date.now();
-    standbyStore.markRefreshStart({ reason });
-    scheduleBroadcast();
-
-    try {
-      const hasExplicitOptions = Boolean(options && Object.keys(options).length);
-      const useSession = reason !== "background" || hasExplicitOptions;
-      let searchBody = withNormalizedYearFilter(standbySearchOptions(options, { useSession }));
-      searchBody.scoringMode = normalizeScoringMode(searchBody);
-      searchBody = genreProfileStore.augmentOptions(searchBody);
-      let searchProfile = buildDiscoveryProfile(searchBody);
-      const requestedCount = Math.max(STANDBY_TARGET_COUNT, effectiveDiscoveryCount(searchBody, searchProfile));
-      let modelResult = { plan: null };
-      let modelError = "";
-      try {
-        modelResult = await withTimeout(
-          generateSearchPlan(config, {
-            ...searchBody,
-            effectiveCount: requestedCount,
-            originalRequestedCount: STANDBY_TARGET_COUNT
-          }),
-          STANDBY_MODEL_TIMEOUT_MS,
-          "Standby model planning took too long."
-        );
-      } catch (error) {
-        modelError = error.message || "Standby model planning failed.";
-        modelResult = { plan: null };
-      }
-      searchBody = {
-        ...searchBody,
-        count: String(requestedCount),
-        effectiveCount: requestedCount,
-        originalRequestedCount: STANDBY_TARGET_COUNT,
-        llmSearchPlan: modelResult?.plan || null,
-        llmCandidates: [],
-        requireRoonQueueable: "",
-        modelReviewTimeoutMs: STANDBY_MODEL_TIMEOUT_MS,
-        discoveryRuntimeMs: Math.max(8_000, Math.min(30_000, STANDBY_REFRESH_TIMEOUT_MS - 5_000))
-      };
-      if (normalizeScoringMode(searchBody) !== "pure") {
-        searchBody = await withSimilarArtistSeeds(searchBody, requestedCount);
-        searchProfile = buildDiscoveryProfile(searchBody);
-      }
-
-      const scrobbleHistory = await lastFmHistoryForDiscovery();
-      let discovered = await withTimeout(
-        discoverTracks({
-          tidal,
-          options: searchBody,
-          history: discoveryHistory,
-          tasteProfile,
-          scrobbleHistory,
-          queryYieldTracker
-        }),
-        STANDBY_REFRESH_TIMEOUT_MS,
-        "Standby discovery took too long."
-      );
-      discovered = await runAutoBroadenSearches(
-        discovered,
-        searchBody,
-        searchProfile,
-        requestedCount,
-        scrobbleHistory,
-        {
-          discoveryTimeoutMs: STANDBY_REFRESH_TIMEOUT_MS,
-          modelTimeoutMs: 0,
-          roonQueueTimeoutMs: 0,
-          roonFirstTimeoutMs: 0
-        }
-      );
-      discovered.verification = {
-        ...(discovered.verification || {}),
-        modelPlanQueryCount: modelResult?.plan?.searchQueries?.length || 0,
-        modelPlan: modelResult?.plan || null,
-        modelError,
-        modelProvider: config.llmProvider,
-        modelName: config.llmProvider === "openrouter"
-          ? config.openRouterModel
-          : (OPENAI_COMPATIBLE_PROVIDERS.has(config.llmProvider)
-            ? config.openAiCompatibleModel
-            : config.ollamaModel)
-      };
-      let modelCandidateReview = { enabled: false, scored: 0, rejected: 0, error: "" };
-      try {
-        const reviewed = await withTimeout(
-          applyModelCandidateReview(discovered, searchBody),
-          STANDBY_MODEL_TIMEOUT_MS + 5_000,
-          "Standby model candidate review took too long."
-        );
-        discovered = reviewed.result;
-        modelCandidateReview = reviewed.review;
-        if (modelError && !modelCandidateReview.error) {
-          modelCandidateReview.planningError = modelError;
-        }
-      } catch (error) {
-        modelCandidateReview = {
-          enabled: false,
-          scored: 0,
-          rejected: 0,
-          error: error.message,
-          planningError: modelError || ""
-        };
-      }
-      discovered.verification = {
-        ...(discovered.verification || {}),
-        modelCandidateReview
-      };
-
-      const result = syncFinalResultVerification(
-        tidalPlaylistBridgeResult(discovered, requestedCount),
-        requestedCount
-      );
-      const poolTracks = mergeTrackLists(result.tracks, result.alternates).slice(0, STANDBY_TARGET_COUNT);
-      if (!poolTracks.length && standbyResultLooksLikeTidalBackoff(result)) {
-        const summary = standbyStore.markRefreshEnd({
-          reason,
-          runtimeMs: Date.now() - startedAt,
-          generated: Number(result.verification?.generated || (result.discarded || []).length),
-          kept: current.count,
-          discarded: Number(result.verification?.discarded || (result.discarded || []).length),
-          error: standbyTidalBackoffMessage(),
-          nextRefreshAt: standbyNextRefreshIso(standbyTidalBackoffDelayMs())
-        });
-        scheduleBroadcast();
-        return summary;
-      }
-
-      const addResult = standbyStore.add(poolTracks, {
-        reason,
-        source: "Standby discovery"
-      });
-      if (poolTracks.length) {
-        trackMemory.record(poolTracks, Date.now(), { incrementSeen: false });
-      }
-      const nextDelayMs = addResult.summary.count < STANDBY_TARGET_COUNT
-        ? STANDBY_PARTIAL_REFRESH_INTERVAL_MS
-        : STANDBY_REFRESH_INTERVAL_MS;
-      const summary = standbyStore.markRefreshEnd({
-        reason,
-        runtimeMs: Date.now() - startedAt,
-        generated: Number(result.verification?.generated || poolTracks.length + (result.discarded || []).length),
-        kept: addResult.summary.count,
-        discarded: Number(result.verification?.discarded || (result.discarded || []).length),
-        nextRefreshAt: addResult.summary.count < STANDBY_TARGET_COUNT ? standbyNextRefreshIso(nextDelayMs) : ""
-      });
-      scheduleBroadcast();
-      return summary;
-    } catch (error) {
-      const summary = standbyStore.markRefreshEnd({
-        reason,
-        runtimeMs: Date.now() - startedAt,
-        error: error.message || "Standby discovery failed.",
-        nextRefreshAt: standbyNextRefreshIso(STANDBY_ERROR_REFRESH_INTERVAL_MS)
-      });
-      scheduleBroadcast();
-      return summary;
-    }
-  })();
-
-  try {
-    return await standbyRefreshInFlight;
-  } finally {
-    standbyRefreshInFlight = null;
-  }
-}
-
-function scheduleStandbyRefresh(delayMs = STANDBY_REFRESH_INTERVAL_MS) {
-  if (standbyRefreshTimer) clearTimeout(standbyRefreshTimer);
-  standbyRefreshTimer = setTimeout(async () => {
-    standbyRefreshTimer = null;
-    let nextDelayMs = STANDBY_REFRESH_INTERVAL_MS;
-    try {
-      const summary = await refreshStandbyPool({ reason: "background" });
-      nextDelayMs = summary?.lastError
-        ? STANDBY_ERROR_REFRESH_INTERVAL_MS
-        : (Number(summary?.count || 0) < STANDBY_TARGET_COUNT
-          ? STANDBY_PARTIAL_REFRESH_INTERVAL_MS
-          : STANDBY_REFRESH_INTERVAL_MS);
-    } finally {
-      scheduleStandbyRefresh(nextDelayMs);
-    }
-  }, Math.max(1_000, Number(delayMs || STANDBY_REFRESH_INTERVAL_MS)));
-}
-
-function discoveryPoolCount(result = {}) {
-  return mergeTrackLists(result.tracks, result.alternates).length;
-}
-
-function mergeQueryYieldSummaries(base = {}, extra = {}) {
-  if (!base?.recordCount && !extra?.recordCount) return base?.recordCount ? base : extra;
-  const combineItems = (left = [], right = [], limit = 8) => [...left, ...right].slice(0, limit);
-  return {
-    enabled: Boolean(base.enabled || extra.enabled),
-    attempted: Number(base.attempted || 0) + Number(extra.attempted || 0),
-    returned: Number(base.returned || 0) + Number(extra.returned || 0),
-    accepted: Number(base.accepted || 0) + Number(extra.accepted || 0),
-    rejected: Number(base.rejected || 0) + Number(extra.rejected || 0),
-    seoRejects: Number(base.seoRejects || 0) + Number(extra.seoRejects || 0),
-    genreRejects: Number(base.genreRejects || 0) + Number(extra.genreRejects || 0),
-    errorCount: Number(base.errorCount || 0) + Number(extra.errorCount || 0),
-    recordCount: Number(base.recordCount || 0) + Number(extra.recordCount || 0),
-    prunedCount: Number(base.prunedCount || 0) + Number(extra.prunedCount || 0),
-    adjustments: combineItems(base.adjustments || [], extra.adjustments || []),
-    pruned: combineItems(base.pruned || [], extra.pruned || [], 12),
-    laneBudgetStops: combineItems(base.laneBudgetStops || [], extra.laneBudgetStops || [], 8),
-    best: combineItems(base.best || [], extra.best || []),
-    worst: combineItems(base.worst || [], extra.worst || []),
-    error: base.error || extra.error || ""
-  };
-}
-
-function annotateAutoBroadenTracks(list = [], pass = {}) {
-  return list.map((track) => ({
-    ...track,
-    autoBroadened: true,
-    discoverySource: track.discoverySource || pass.label || "Auto-broadened search",
-    discoveryLane: track.discoveryLane || pass.lane || "core-expanded",
-    statusChecks: Array.from(new Set([
-      ...(Array.isArray(track.statusChecks) ? track.statusChecks : []),
-      pass.label || "Auto-broadened search"
-    ].filter(Boolean)))
-  }));
-}
-
-async function runAutoBroadenSearches(discovered = {}, baseOptions = {}, searchProfile = buildDiscoveryProfile(baseOptions), requestedCount = 8, scrobbleHistory = null, budgets = {}) {
-  const passes = autoBroadenSearchPasses(baseOptions, searchProfile, discovered, requestedCount);
-  const queryYieldHealth = passes.find((pass) => pass.queryYieldHealth)?.queryYieldHealth || null;
-  const summary = {
-    enabled: true,
-    attempted: 0,
-    added: 0,
-    poolBefore: discoveryPoolCount(discovered),
-    poolAfter: discoveryPoolCount(discovered),
-    targetPool: passes[0]?.targetPool || 0,
-    yieldAware: Boolean(queryYieldHealth?.retryNeeded),
-    queryYieldHealth,
-    lanes: [],
-    errors: []
-  };
-
-  const initialDiscoveryError = String(discovered.verification?.discoveryError || "");
-  if (/\b(?:timed out|took too long)\b/i.test(initialDiscoveryError)) {
-    return {
-      ...discovered,
-      verification: {
-        ...(discovered.verification || {}),
-        autoBroaden: {
-          ...summary,
-          enabled: false,
-          skipped: true,
-          reason: "Initial TIDAL discovery timed out; skipped auto-broaden retries to return control to the UI."
-        }
-      }
-    };
-  }
-
-  if (!passes.length) {
-    return {
-      ...discovered,
-      verification: {
-        ...(discovered.verification || {}),
-        autoBroaden: summary
-      }
-    };
-  }
-
-  let current = discovered;
-  const perPassTimeoutMs = Math.max(12_000, Math.min(60_000, Math.floor(Number(budgets.discoveryTimeoutMs || 30_000) / 2)));
-
-  for (const pass of passes) {
-    const beforePool = discoveryPoolCount(current);
-    if (beforePool >= pass.targetPool && (current.tracks || []).length >= requestedCount) break;
-
-    summary.attempted += 1;
-    try {
-      const broadened = await withTimeout(
-        discoverTracks({
-          tidal,
-          options: {
-            ...pass.options,
-            discoveryRuntimeMs: Math.max(8_000, Math.min(30_000, perPassTimeoutMs - 2_000))
-          },
-          history: discoveryHistory,
-          tasteProfile,
-          scrobbleHistory,
-          queryYieldTracker
-        }),
-        perPassTimeoutMs,
-        `${pass.label} took too long.`
-      );
-      const broadenedTracks = annotateAutoBroadenTracks(broadened.tracks || [], pass);
-      const broadenedAlternates = annotateAutoBroadenTracks(broadened.alternates || [], pass);
-      current = {
-        ...current,
-        tracks: mergeTrackLists(current.tracks, broadenedTracks),
-        alternates: mergeTrackLists(current.alternates, broadenedAlternates),
-        discarded: [...(current.discarded || []), ...(broadened.discarded || [])],
-        verification: {
-          ...(current.verification || {}),
-          queryYield: mergeQueryYieldSummaries(current.verification?.queryYield, broadened.verification?.queryYield),
-          autoBroaden: summary
-        }
-      };
-
-      const afterPool = discoveryPoolCount(current);
-      const added = Math.max(0, afterPool - beforePool);
-      summary.added += added;
-      summary.poolAfter = afterPool;
-      summary.lanes.push({
-        lane: pass.lane,
-        label: pass.label,
-        reason: pass.reason,
-        yieldAware: pass.lane === "yield-retry" || Boolean(pass.queryYieldHealth?.retryNeeded),
-        generated: broadened.verification?.generated || 0,
-        kept: broadened.tracks?.length || 0,
-        alternates: broadened.alternates?.length || 0,
-        added
-      });
-    } catch (error) {
-      summary.errors.push({
-        lane: pass.lane,
-        label: pass.label,
-        error: error.message
-      });
-      if (/\b(?:timed out|took too long)\b/i.test(String(error.message || ""))) {
-        break;
-      }
-    }
-  }
-
-  return {
-    ...current,
-    verification: {
-      ...(current.verification || {}),
-      autoBroaden: {
-        ...summary,
-        poolAfter: discoveryPoolCount(current)
-      }
-    }
-  };
-}
-
-function clampScore(value, min = 1, max = 100) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return min;
-  return Math.max(min, Math.min(max, Math.round(number)));
-}
-
-function normalizeMatchText(value) {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function boundedEditDistance(left, right, maxDistance) {
-  if (left === right) return 0;
-  if (Math.abs(left.length - right.length) > maxDistance) return maxDistance + 1;
-
-  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
-  for (let i = 1; i <= left.length; i += 1) {
-    const current = [i];
-    let rowMin = current[0];
-    for (let j = 1; j <= right.length; j += 1) {
-      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
-      current[j] = Math.min(
-        previous[j] + 1,
-        current[j - 1] + 1,
-        previous[j - 1] + cost
-      );
-      rowMin = Math.min(rowMin, current[j]);
-    }
-    if (rowMin > maxDistance) return maxDistance + 1;
-    previous = current;
-  }
-  return previous[right.length];
-}
-
-function artistNameLooksClose(left, right) {
-  if (left === right) return true;
-  if (left.length >= 4 && right.length >= 4 && (left.includes(right) || right.includes(left))) return true;
-  const maxLength = Math.max(left.length, right.length);
-  const minLength = Math.min(left.length, right.length);
-  if (minLength < 6) return false;
-  const maxDistance = maxLength >= 10 ? 2 : 1;
-  if (Math.abs(left.length - right.length) > maxDistance) return false;
-  if (left.slice(0, 3) !== right.slice(0, 3)) return false;
-  return boundedEditDistance(left, right, maxDistance) <= maxDistance;
-}
-
-function llmScoreKey(track = {}) {
-  const direct = track.tidal?.id || track.tidalId || track.id || track.trackId || track.tidal?.tidalUrl || track.tidalUrl;
-  if (direct) return String(direct).trim();
-  const keys = candidateIdentityKeys(track);
-  return keys[0] || `${normalizeMatchText(track.artist)}|${normalizeMatchText(track.title)}`;
-}
-
-function scoreLabelForPercent(percent) {
-  const score = Number(percent || 0);
-  if (score >= 90) return "Excellent";
-  if (score >= 80) return "Strong";
-  if (score >= 70) return "Good";
-  if (score >= 55) return "Loose";
-  return "Weak";
-}
-
-function hardModelReject(score = {}) {
-  if (!score.rejected) return false;
-  const reason = normalizeMatchText(score.rejectionReason);
-  if (!reason) return false;
-  if (Number(score.finalScore || 0) >= 65 && Number(score.scores?.genreConfidence || 0) >= 55) return false;
-  return /\b(?:playlist|compilation|seo|chart|karaoke|cover|tribute|live|remaster|reissue|anniversary|deluxe|archive|background|catalogue|filler|spam)\b/.test(reason);
-}
-
-function mergeWhy(existing = [], additions = []) {
-  const seen = new Set();
-  const merged = [];
-  for (const item of [...additions, ...existing]) {
-    const text = String(item || "").replace(/\s+/g, " ").trim();
-    const key = normalizeMatchText(text);
-    if (!text || seen.has(key)) continue;
-    seen.add(key);
-    merged.push(text);
-    if (merged.length >= 8) break;
-  }
-  return merged;
-}
-
-function applyModelReview(track = {}, score = {}) {
-  if (!score || !score.trackId) return track;
-  const modelScores = score.scores || {};
-  const existingBreakdown = track.scoreBreakdown || {};
-  const promptPercent = clampScore(modelScores.promptMatch, 0, 100);
-  const tastePercent = clampScore(modelScores.tasteMatch, 0, 100);
-  const finalScore = clampScore(score.finalScore, 0, 100);
-  const currentScore = Number(track.score || existingBreakdown.total || 0) || finalScore;
-  const genreConfidence = clampScore(modelScores.genreConfidence, 0, 100);
-  const scorePenalty = genreConfidence && genreConfidence < 50 ? 6 : 0;
-  const blendedScore = clampScore((currentScore * 0.78) + (finalScore * 0.22) - scorePenalty);
-  const modelWhy = mergeWhy(score.why || [], score.rejectionReason ? [`Model warning: ${score.rejectionReason}`] : []);
-  const matchWhy = mergeWhy(existingBreakdown.matchWhy || track.matchWhy || [], modelWhy);
-  const scoreBreakdown = {
-    ...existingBreakdown,
-    total: blendedScore,
-    promptMatch: {
-      ...(existingBreakdown.promptMatch || {}),
-      percent: promptPercent,
-      label: scoreLabelForPercent(promptPercent)
-    },
-    tasteMatch: {
-      ...(existingBreakdown.tasteMatch || {}),
-      percent: tastePercent,
-      label: scoreLabelForPercent(tastePercent)
-    },
-    matchGenre: score.genre || existingBreakdown.matchGenre || track.matchGenre || "",
-    matchWhy,
-    llmReview: {
-      finalScore,
-      freshness: modelScores.freshness,
-      artistLabelMatch: modelScores.artistLabelMatch,
-      lengthPreference: modelScores.lengthPreference,
-      genreConfidence,
-      rejected: score.rejected,
-      rejectionReason: score.rejectionReason
-    }
-  };
-  return {
-    ...track,
-    score: blendedScore,
-    scoreBreakdown,
-    promptMatch: scoreBreakdown.promptMatch,
-    tasteMatch: scoreBreakdown.tasteMatch,
-    matchGenre: scoreBreakdown.matchGenre,
-    matchWhy,
-    why: mergeWhy(track.why || [], modelWhy),
-    reason: track.reason ? `${track.reason}; model-reviewed` : "model-reviewed",
-    llmReview: scoreBreakdown.llmReview
-  };
-}
-
-async function applyModelCandidateReview(discovered = {}, options = {}) {
-  const combined = mergeTrackLists(discovered.tracks, discovered.alternates).slice(0, 50);
-  if (!combined.length) return {
-    result: discovered,
-    review: { enabled: false, scored: 0, rejected: 0, error: "No candidates to review." }
-  };
-
-  const review = await scoreCandidateBatch(config, {
-    tracks: combined,
-    options,
-    tasteProfile: tasteProfile.read(),
-    timeoutMs: Math.max(5_000, Math.min(60_000, Number(options.modelReviewTimeoutMs || 30_000)))
-  });
-  const scoreMap = new Map();
-  for (const score of review.scores || []) {
-    if (score.trackId) scoreMap.set(score.trackId, score);
-  }
-
-  let rejected = 0;
-  let rejectedKept = 0;
-  const audit = createModelReviewAudit();
-  const discarded = [...(discovered.discarded || [])];
-  const rejectedCandidates = [];
-  const requestedCount = Math.max(0, Math.min(50, Number(
-    discovered.verification?.requested ||
-    discovered.requestedCount ||
-    options.effectiveCount ||
-    options.count ||
-    0
-  )));
-
-  function hasSeenCandidate(track = {}, seen = new Set()) {
-    const keys = candidateIdentityKeys(track);
-    return keys.length && keys.some((key) => seen.has(key));
-  }
-
-  function markSeenCandidate(track = {}, seen = new Set()) {
-    for (const key of candidateIdentityKeys(track)) seen.add(key);
-  }
-
-  function keepRejectedCandidate(record = {}) {
-    const reviewedTrack = applyModelReview(record.track, record.score);
-    const afterScore = Number(reviewedTrack.score || reviewedTrack.scoreBreakdown?.total || 0) || record.beforeScore;
-    const item = modelReviewAuditItem(reviewedTrack, record.score, record.beforeScore, afterScore, "warning");
-    recordModelReviewAudit(audit, item, "warning");
-    rejectedKept += 1;
-    return {
-      ...reviewedTrack,
-      modelRejectedKept: true,
-      reason: `${reviewedTrack.reason || record.track.reason || "Model-reviewed candidate"}; model flagged candidate but it was kept because review would undershoot the requested count`,
-      statusChecks: Array.from(new Set([
-        ...(Array.isArray(reviewedTrack.statusChecks) ? reviewedTrack.statusChecks : []),
-        `Model warning: ${item.reason}`,
-        "Kept to satisfy requested count after model review"
-      ])),
-      modelReview: {
-        action: "warning",
-        before: item.before,
-        after: item.after,
-        delta: item.delta,
-        modelScore: item.modelScore,
-        genreConfidence: item.genreConfidence,
-        reason: item.reason,
-        keptAfterReject: true
-      }
-    };
-  }
-
-  function discardRejectedCandidate(record = {}) {
-    rejected += 1;
-    recordModelReviewAudit(audit, record.item, "rejected");
-    discarded.push({
-      ...record.track,
-      llmReview: record.score,
-      reason: `Model rejected candidate: ${record.score.rejectionReason || "low-confidence catalogue result"}`
-    });
-  }
-
-  function applyList(list = [], source = "track") {
-    const next = [];
-    for (const [index, track] of list.entries()) {
-      const key = llmScoreKey(track);
-      const score = scoreMap.get(key);
-      if (!score) {
-        next.push(track);
-        continue;
-      }
-      const beforeScore = Number(track.score || track.scoreBreakdown?.total || 0) || Number(score.finalScore || 0) || 0;
-      if (hardModelReject(score)) {
-        const item = modelReviewAuditItem(track, score, beforeScore, null, "rejected");
-        rejectedCandidates.push({ track, score, beforeScore, item, source, index });
-        continue;
-      }
-      const reviewedTrack = applyModelReview(track, score);
-      const afterScore = Number(reviewedTrack.score || reviewedTrack.scoreBreakdown?.total || 0) || beforeScore;
-      const type = classifyModelReviewChange(score, beforeScore, afterScore, false);
-      const item = modelReviewAuditItem(reviewedTrack, score, beforeScore, afterScore, type);
-      recordModelReviewAudit(audit, item, type);
-      next.push({
-        ...reviewedTrack,
-        modelReview: {
-          action: type,
-          before: item.before,
-          after: item.after,
-          delta: item.delta,
-          modelScore: item.modelScore,
-          genreConfidence: item.genreConfidence,
-          reason: item.reason
-        }
-      });
-    }
-    return next;
-  }
-
-  const reviewedTracks = applyList(discovered.tracks, "track");
-  const reviewedAlternates = applyList(discovered.alternates, "alternate");
-  const selectedKeys = new Set();
-  for (const track of reviewedTracks) markSeenCandidate(track, selectedKeys);
-
-  const remainingAlternates = [];
-  for (const alternate of reviewedAlternates) {
-    if (requestedCount && reviewedTracks.length < requestedCount && !hasSeenCandidate(alternate, selectedKeys)) {
-      reviewedTracks.push({
-        ...alternate,
-        modelReviewBackfill: true,
-        statusChecks: Array.from(new Set([
-          ...(Array.isArray(alternate.statusChecks) ? alternate.statusChecks : []),
-          "Backfilled after model review"
-        ]))
-      });
-      markSeenCandidate(alternate, selectedKeys);
-    } else {
-      remainingAlternates.push(alternate);
-    }
-  }
-
-  const rescuedRejectIds = new Set();
-  for (const record of rejectedCandidates.filter((item) => item.source === "track")) {
-    if (!requestedCount || reviewedTracks.length >= requestedCount) break;
-    if (hasSeenCandidate(record.track, selectedKeys)) continue;
-    const rescued = keepRejectedCandidate(record);
-    reviewedTracks.push(rescued);
-    markSeenCandidate(rescued, selectedKeys);
-    rescuedRejectIds.add(`${record.source}:${record.index}`);
-  }
-
-  for (const record of rejectedCandidates) {
-    const id = `${record.source}:${record.index}`;
-    if (!rescuedRejectIds.has(id)) discardRejectedCandidate(record);
-  }
-
-  return {
-    result: {
-      ...discovered,
-      tracks: reviewedTracks,
-      alternates: remainingAlternates,
-      discarded
-    },
-    review: {
-      enabled: true,
-      scored: scoreMap.size,
-      rejected,
-      rejectedKept,
-      rawCount: review.rawCount || 0,
-      audit,
-      error: ""
-    }
-  };
-}
-
-function baseTitleForMatch(value) {
-  return normalizeMatchText(String(value || "")
-    .replace(/\s*[\[(][^\])]*(?:mix|remix|edit|version|rework|dub|rerub|original|extended)[^\])]*[\])]/gi, " ")
-    .replace(/\s+/g, " "));
-}
-
-function splitArtistForMatch(value) {
-  return String(value || "")
-    .split(/\s+(?:and|feat\.?|featuring|with)\s+|[,/&+|]+/i)
-    .map(normalizeMatchText)
-    .filter((part) => part && part.length > 1);
-}
-
-const GENERIC_VERSION_WORDS = new Set([
-  "mix",
-  "remix",
-  "remixes",
-  "edit",
-  "version",
-  "extended",
-  "original",
-  "radio",
-  "club",
-  "dub",
-  "instrumental",
-  "vip"
-]);
-
-function versionDescriptorTokens(value = "") {
-  const descriptors = [];
-  for (const match of String(value || "").matchAll(/[\[(]([^\])]+)[\])]/g)) {
-    descriptors.push(match[1]);
-  }
-  const text = normalizeMatchText(descriptors.join(" "));
-  if (!text) return [];
-  return Array.from(new Set(text
-    .split(/\s+/)
-    .filter((token) => token.length > 1 && !GENERIC_VERSION_WORDS.has(token))));
-}
-
-function playlistTitleMatches(track = {}, verified = {}) {
-  const targetTitle = normalizeMatchText(track.title);
-  const actualTitle = normalizeMatchText(verified.title);
-  if (!targetTitle || !actualTitle) return false;
-  if (targetTitle === actualTitle) return true;
-
-  const targetBase = baseTitleForMatch(track.title);
-  const actualBase = baseTitleForMatch(verified.title);
-  if (!targetBase || targetBase !== actualBase) return false;
-
-  const targetDescriptors = versionDescriptorTokens(track.title);
-  if (!targetDescriptors.length) return false;
-  return targetDescriptors.every((token) => actualTitle.includes(token));
-}
-
-function durationLooksClose(track = {}, verified = {}) {
-  const target = Number(track.durationMs || 0);
-  const actual = Number(verified.durationMs || 0);
-  if (!target || !actual) return false;
-  const difference = Math.abs(target - actual);
-  return difference <= Math.max(15_000, Math.round(Math.min(target, actual) * 0.06));
-}
-
-function weakTidalArtistHint(value = "") {
-  const text = normalizeMatchText(value);
-  if (!text) return true;
-  return /\b(?:unknown artist|various artists?|collection|compilation|playlist|soundtrack|album|volume|vol|top tracks?|selected|selection)\b/.test(text);
-}
-
-function albumHintMatches(track = {}, verified = {}) {
-  const album = normalizeMatchText(track.album);
-  const verifiedAlbum = normalizeMatchText(verified.album);
-  if (!album || !verifiedAlbum) return false;
-  return album === verifiedAlbum || album.includes(verifiedAlbum) || verifiedAlbum.includes(album);
-}
-
-function tidalEnrichmentMatches(track = {}, verified = {}) {
-  const targetTitle = normalizeMatchText(track.title);
-  const actualTitle = normalizeMatchText(verified.title);
-  const targetBase = baseTitleForMatch(track.title);
-  const actualBase = baseTitleForMatch(verified.title);
-  const titleOk = Boolean(
-    targetTitle &&
-    actualTitle &&
-    (targetTitle === actualTitle || (targetBase && targetBase === actualBase))
-  );
-  const targetArtists = splitArtistForMatch(track.artist);
-  const actualArtists = splitArtistForMatch(verified.artist);
-  const artistOk = Boolean(
-    targetArtists.length &&
-    actualArtists.length &&
-    targetArtists.some((target) => actualArtists.some((actual) => artistNameLooksClose(target, actual)))
-  );
-  return titleOk && artistOk;
-}
-
-function tidalPlaylistFallbackMatches(track = {}, verified = {}) {
-  if (!playlistTitleMatches(track, verified)) return false;
-  if (tidalEnrichmentMatches(track, verified)) return true;
-  return weakTidalArtistHint(track.artist) || albumHintMatches(track, verified) || durationLooksClose(track, verified);
-}
-
-async function findTidalPlaylistFallback(track = {}) {
-  const title = String(track.title || "").trim();
-  if (!title) return null;
-  const artist = String(track.artist || "").trim();
-  const titleBase = String(baseTitleForMatch(title) || "").trim();
-  const weakArtist = weakTidalArtistHint(artist);
-  const queries = Array.from(new Set([
-    !weakArtist && artist ? `${artist} ${title}` : "",
-    !weakArtist && artist ? `${title} ${artist}` : "",
-    title,
-    titleBase && normalizeMatchText(titleBase) !== normalizeMatchText(title) ? titleBase : ""
-  ].filter(Boolean)));
-
-  for (const query of queries.slice(0, 4)) {
-    const results = await tidal.searchTracks(query, { limit: 8, detailLimit: 8 });
-    const match = results.find((result) => tidalPlaylistFallbackMatches(track, result));
-    if (match) return match;
-  }
-
-  return null;
-}
-
-function scoreWithRoonFloor(breakdown = {}, track = {}) {
-  const floor = 70;
-  if (Number(breakdown.total || 0) >= floor) return breakdown;
-
-  const max = breakdown.max || {};
-  const boosted = { ...breakdown };
-  let remaining = floor - Number(boosted.total || 0);
-  function addTo(field) {
-    const current = Number(boosted[field] || 0);
-    const cap = Number(max[field] || current);
-    const add = Math.max(0, Math.min(remaining, cap - current));
-    boosted[field] = current + add;
-    remaining -= add;
-  }
-
-  addTo("genreMatch");
-  addTo("artistMatch");
-  addTo("labelMatch");
-  boosted.total = Math.min(100, Number(boosted.freshness || 0) + Number(boosted.labelMatch || 0) + Number(boosted.artistMatch || 0) + Number(boosted.lengthPreference || 0) + Number(boosted.genreMatch || 0) + Number(boosted.tasteAdjustment || 0));
-  if (boosted.total < floor) boosted.total = floor;
-  return boosted;
-}
-
-async function enrichRoonTrackWithTidal(track, options = {}) {
-  if (!tidal.isConfigured()) return track;
-  const timeoutMs = Math.max(150, Math.min(2000, Number(options.timeoutMs || 750)));
-  try {
-    const verified = await Promise.race([
-      tidal.verify(track, { strict: false }).catch(() => null),
-      wait(timeoutMs).then(() => null)
-    ]);
-    if (!verified) return track;
-    if (!tidalEnrichmentMatches(track, verified)) {
-      return {
-        ...track,
-        tidalError: `TIDAL enrichment did not exactly match ${track.artist} - ${track.title}.`
-      };
-    }
-    return {
-      ...track,
-      artist: verified.artist || track.artist,
-      title: verified.title || track.title,
-      album: verified.album || track.album || "",
-      label: verified.label || track.label || "",
-      year: verified.year || track.year || null,
-      releaseDate: verified.releaseDate || track.releaseDate || "",
-      durationMs: verified.durationMs || track.durationMs || null,
-      tidal: verified,
-      verificationSource: "roon+tidal"
-    };
-  } catch (error) {
-    return {
-      ...track,
-      tidalError: error.message
-    };
-  }
-}
-
-function trackHasTidalId(track = {}) {
-  const direct = String(track.tidal?.id || track.tidalId || track.id || "").trim();
-  if (direct && !/^https?:\/\//i.test(direct)) return true;
-  const url = String(track.tidal?.tidalUrl || track.tidalUrl || track.url || "").trim();
-  return /\/track\/[^/?#]+/i.test(url);
-}
-
-function extractTidalTrackId(track = {}) {
-  const direct = String(track.tidal?.id || track.tidalId || track.id || track.trackId || "").trim();
-  if (direct && !/^https?:\/\//i.test(direct)) return direct;
-  const url = String(track.tidal?.tidalUrl || track.tidalUrl || track.url || "").trim();
-  const match = url.match(/\/track\/([^/?#]+)/i);
-  return match ? decodeURIComponent(match[1]) : "";
-}
-
-function currentTrackQualityPayload(track = {}, resolved = null, resolvedBy = "", playbackSource = null) {
-  const tidalMetadata = track.tidal && typeof track.tidal === "object" ? track.tidal : {};
-  const merged = {
-    ...tidalMetadata,
-    ...track,
-    ...(resolved || {}),
-    mediaTags: (resolved?.mediaTags && resolved.mediaTags.length) ? resolved.mediaTags : (tidalMetadata.mediaTags || track.mediaTags || []),
-    audioQuality: resolved?.audioQuality || tidalMetadata.audioQuality || track.audioQuality || "",
-    sampleRateKhz: resolved?.sampleRateKhz || tidalMetadata.sampleRateKhz || track.sampleRateKhz || playbackSource?.sampleRateKhz || null,
-    bitDepth: resolved?.bitDepth || tidalMetadata.bitDepth || track.bitDepth || playbackSource?.bitDepth || null,
-    channels: resolved?.channels || tidalMetadata.channels || track.channels || playbackSource?.channels || null
-  };
-  const quality = trackSourceQualityFromMetadata(merged, { source: "TIDAL" });
-  return {
-    connected: true,
-    resolvedBy,
-    ...quality,
-    playbackSource: playbackSource ? {
-      source: playbackSource.sourceName || "",
-      sampleRateKhz: playbackSource.sampleRateKhz || null,
-      bitDepth: playbackSource.bitDepth || null,
-      channels: playbackSource.channels || null,
-      display: playbackSource.display || ""
-    } : null,
-    track: {
-      id: resolved?.id || extractTidalTrackId(track),
-      title: resolved?.title || track.title || tidalMetadata.title || "",
-      artist: resolved?.artist || track.artist || tidalMetadata.artist || "",
-      album: resolved?.album || track.album || tidalMetadata.album || "",
-      tidalUrl: resolved?.tidalUrl || track.tidalUrl || tidalMetadata.tidalUrl || ""
-    }
-  };
-}
-
-function currentTrackPayload(track = {}, resolved = null) {
-  const tidalMetadata = track.tidal && typeof track.tidal === "object" ? track.tidal : {};
-  return {
-    id: resolved?.id || extractTidalTrackId(track),
-    title: resolved?.title || track.title || tidalMetadata.title || "",
-    artist: resolved?.artist || track.artist || tidalMetadata.artist || "",
-    album: resolved?.album || track.album || tidalMetadata.album || "",
-    tidalUrl: resolved?.tidalUrl || track.tidalUrl || tidalMetadata.tidalUrl || ""
-  };
-}
-
-function isRadioPlaybackTrack(track = {}) {
-  const text = [
-    track.sourceType,
-    track.discoverySource,
-    track.tidal?.source,
-    track.playbackSource?.sourceName
-  ].filter(Boolean).join(" ");
-  return Boolean(track.isLiveRadio || track.isRadio || track.radio || /\bradio\b/i.test(text));
-}
-
-function hasProvidedTidalQuality(track = {}) {
-  const tidalMetadata = track.tidal && typeof track.tidal === "object" ? track.tidal : {};
-  const mediaTags = Array.isArray(tidalMetadata.mediaTags) ? tidalMetadata.mediaTags : (Array.isArray(track.mediaTags) ? track.mediaTags : []);
-  return Boolean(
-    trackHasTidalId(track) ||
-    tidalMetadata.tidalUrl ||
-    track.tidalUrl ||
-    mediaTags.length ||
-    tidalMetadata.audioQuality ||
-    track.audioQuality ||
-    tidalMetadata.sampleRateKhz ||
-    track.sampleRateKhz ||
-    tidalMetadata.bitDepth ||
-    track.bitDepth
-  );
-}
-
-function fallbackQualityPayload(track = {}, playbackSource = null, resolvedBy = "") {
-  if (hasProvidedTidalQuality(track)) {
-    return currentTrackQualityPayload(track, null, resolvedBy || (trackHasTidalId(track) ? "provided-tidal-id" : "provided-metadata"), playbackSource);
-  }
-  return playbackSourceQualityPayload(track, playbackSource, resolvedBy || (playbackSource?.display ? "live-playback-source" : "provided-metadata"));
-}
-
-function playbackSourceQualityPayload(track = {}, playbackSource = null, resolvedBy = "playback-source") {
-  const source = playbackSource || {};
-  const display = String(source.display || "").trim();
-  const sampleRateKhz = Number(source.sampleRateKhz || 0) || null;
-  const bitDepth = Number(source.bitDepth || 0) || null;
-  const channels = Number(source.channels || 0) || null;
-  const bitrate = Number(source.bitrate || 0) || null;
-  const codec = String(source.codec || "").trim().toUpperCase();
-  const sourceName = String(source.sourceName || "").trim();
-  return {
-    connected: true,
-    resolvedBy,
-    source: codec || sourceName.toUpperCase() || "ROON",
-    codec,
-    quality: "",
-    mediaTags: [],
-    audioQuality: "",
-    sampleRateKhz,
-    bitDepth,
-    channels,
-    bitrate,
-    exact: Boolean(sampleRateKhz || display),
-    display: display || "",
-    playbackSource: source ? {
-      source: sourceName,
-      codec,
-      sampleRateKhz,
-      bitDepth,
-      channels,
-      bitrate,
-      display
-    } : null,
-    track: currentTrackPayload(track)
-  };
-}
-
-async function currentPlaybackSourceQuality() {
-  try {
-    const status = typeof hqplayerStatus.refreshNow === "function"
-      ? await hqplayerStatus.refreshNow()
-      : hqplayerStatus.getStatus();
-    const source = status?.source || null;
-    return source?.sampleRateKhz ? source : null;
-  } catch {
-    return hqplayerStatus.getStatus()?.source || null;
-  }
-}
-
-async function resolveCurrentTrackQuality(track = {}) {
-  const candidate = {
-    ...track,
-    artist: String(track.artist || track.tidal?.artist || "").trim(),
-    title: String(track.title || track.tidal?.title || "").trim()
-  };
-  const playbackSource = await currentPlaybackSourceQuality();
-  if (isRadioPlaybackTrack(candidate)) {
-    return {
-      ...playbackSourceQualityPayload(candidate, playbackSource, playbackSource?.display ? "live-playback-source" : "live-radio"),
-      configured: tidal.isConfigured(),
-      connected: true,
-      reason: playbackSource?.display
-        ? "Live radio quality comes from the active Roon/HQPlayer playback source."
-        : "Waiting for live Roon/HQPlayer source format."
-    };
-  }
-
-  const fallback = fallbackQualityPayload(candidate, playbackSource);
-  const tidalId = extractTidalTrackId(candidate);
-
-  if (!tidal.isConfigured()) {
-    return {
-      ...fallback,
-      connected: false,
-      configured: false,
-      reason: fallback.display ? "" : "TIDAL catalogue verification is not configured."
-    };
-  }
-
-  let resolved = null;
-  let resolvedBy = "";
-  let lookupError = "";
-  try {
-    if (tidalId) {
-      resolved = await withTimeout(
-        tidal.getTrack(tidalId, `${candidate.artist || ""} ${candidate.title || ""}`),
-        TIDAL_QUALITY_LOOKUP_TIMEOUT_MS,
-        "TIDAL catalogue detail lookup took too long."
-      );
-      resolvedBy = "tidal-detail";
-    } else if (candidate.title && candidate.artist) {
-      const verified = await withTimeout(
-        tidal.verify(candidate, { strict: false }),
-        TIDAL_QUALITY_LOOKUP_TIMEOUT_MS,
-        "TIDAL catalogue verification took too long."
-      );
-      if (verified && tidalEnrichmentMatches(candidate, verified)) {
-        resolved = verified;
-        resolvedBy = "tidal-catalogue";
-      }
-    }
-  } catch (error) {
-    lookupError = error.message || "TIDAL catalogue lookup failed.";
-  }
-
-  if (!resolved) {
-    return {
-      ...fallback,
-      configured: true,
-      connected: true,
-      reason: lookupError || (fallback.display ? "" : "No exact TIDAL catalogue match for the current track.")
-    };
-  }
-
-  return {
-    ...currentTrackQualityPayload(candidate, resolved, resolvedBy, playbackSource),
-    configured: true
-  };
-}
-
-async function resolveTidalTrackForPlaylist(track = {}) {
-  const candidate = {
-    ...track,
-    artist: String(track.artist || track.tidal?.artist || "").trim(),
-    title: String(track.title || track.tidal?.title || "").trim()
-  };
-  if (!candidate.title || !candidate.artist) {
-    const error = new Error("The current track needs both artist and title before it can be added to a TIDAL playlist.");
-    error.statusCode = 400;
-    throw error;
-  }
-  if (trackHasTidalId(candidate)) {
-    return { track: candidate, resolvedBy: "provided-tidal-id" };
-  }
-  if (!tidal.isConfigured()) {
-    const error = new Error("The current track does not have a TIDAL ID, and TIDAL catalogue verification is not configured.");
-    error.statusCode = 400;
-    throw error;
-  }
-
-  let verified = null;
-  let verifyError = null;
-  try {
-    verified = await withTimeout(
-      tidal.verify(candidate, { strict: false }),
-      TIDAL_PLAYLIST_VERIFY_TIMEOUT_MS,
-      `TIDAL catalogue verification took too long after ${Math.round(TIDAL_PLAYLIST_VERIFY_TIMEOUT_MS / 1000)}s.`
-    );
-  } catch (error) {
-    verifyError = error;
-  }
-
-  if (!verified || !tidalEnrichmentMatches(candidate, verified)) {
-    try {
-      const fallback = await withTimeout(
-        findTidalPlaylistFallback(candidate),
-        TIDAL_PLAYLIST_FALLBACK_TIMEOUT_MS,
-        `TIDAL title fallback lookup took too long after ${Math.round(TIDAL_PLAYLIST_FALLBACK_TIMEOUT_MS / 1000)}s.`
-      );
-      if (fallback) verified = fallback;
-    } catch (error) {
-      if (!verifyError) verifyError = error;
-    }
-  }
-
-  if (!verified) {
-    const error = new Error(verifyError?.message || `Could not find a TIDAL catalogue match for ${candidate.artist} - ${candidate.title}.`);
-    error.statusCode = 400;
-    throw error;
-  }
-  if (!tidalPlaylistFallbackMatches(candidate, verified)) {
-    const error = new Error(`TIDAL found ${verified.artist || "unknown artist"} - ${verified.title || "unknown title"}, which does not exactly match the current track.`);
-    error.statusCode = 400;
-    throw error;
-  }
-
-  return {
-    track: {
-      ...candidate,
-      artist: verified.artist || candidate.artist,
-      title: verified.title || candidate.title,
-      album: verified.album || candidate.album || "",
-      tidal: verified,
-      tidalUrl: verified.tidalUrl || candidate.tidalUrl || ""
-    },
-    resolvedBy: "tidal-catalogue"
-  };
-}
-
-async function enrichRoonTracksOpportunistically(tracks = [], options = {}) {
-  const startedAt = Date.now();
-  const circuitState = tidal.status?.()?.circuit?.state || "";
-  if (!tidal.isConfigured()) {
-    return {
-      tracks,
-      stats: {
-        enabled: false,
-        skipped: true,
-        reason: "TIDAL is not configured.",
-        attempted: 0,
-        enriched: 0,
-        elapsedMs: 0
-      }
-    };
-  }
-  if (["open", "half-open"].includes(circuitState)) {
-    return {
-      tracks,
-      stats: {
-        enabled: true,
-        skipped: true,
-        reason: `TIDAL circuit is ${circuitState}.`,
-        attempted: 0,
-        enriched: 0,
-        elapsedMs: 0
-      }
-    };
-  }
-
-  const requestedCount = Math.max(1, Number(options.requestedCount || 8));
-  const deep = Boolean(options.deep);
-  const strict = Boolean(options.strict);
-  const limit = Math.min(
-    tracks.length,
-    Number(options.limit || (strict
-      ? Math.min(deep ? 30 : 22, Math.max(requestedCount * 2, requestedCount + 8))
-      : Math.min(deep ? 24 : 16, Math.max(requestedCount + 4, 10))))
-  );
-  const budgetMs = Math.max(800, Math.min(5000, Number(options.budgetMs || (deep ? 3200 : 2200))));
-  const perTrackTimeoutMs = Math.max(150, Math.min(1200, Number(options.perTrackTimeoutMs || 650)));
-  const concurrency = Math.max(1, Math.min(8, Number(options.concurrency || 5)));
-  const result = tracks.slice();
-  let nextIndex = 0;
-  let attempted = 0;
-  let enriched = 0;
-  let timedOut = false;
-
-  async function worker() {
-    while (nextIndex < limit) {
-      const elapsed = Date.now() - startedAt;
-      const remaining = budgetMs - elapsed;
-      if (remaining <= 120) {
-        timedOut = true;
-        return;
-      }
-      const index = nextIndex;
-      nextIndex += 1;
-      attempted += 1;
-      const candidate = await enrichRoonTrackWithTidal(tracks[index], {
-        timeoutMs: Math.min(perTrackTimeoutMs, remaining)
-      });
-      result[index] = candidate;
-      if (candidate?.tidal?.tidalUrl) enriched += 1;
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(concurrency, limit) }, worker));
-  const elapsedMs = Date.now() - startedAt;
-  return {
-    tracks: result,
-    stats: {
-      enabled: true,
-      skipped: false,
-      attempted,
-      enriched,
-      limit,
-      candidateCount: tracks.length,
-      budgetMs,
-      perTrackTimeoutMs,
-      concurrency,
-      timedOut,
-      elapsedMs
-    }
-  };
-}
-
-function roonRescueSceneAnchor(track = {}) {
-  const query = String(track.query || "");
-  const match = query.match(/^(.+?)\s+(?:progressive house|progressive trance|melodic progressive|deep progressive|organic progressive|trance|20\d{2}|hypnotic|driving|late night|tribal|funky|dark|deep)\b/i);
-  const anchor = match ? match[1].trim() : "";
-  const key = normalizeMatchText(anchor);
-  if (!key || (key.length < 6 && !key.includes(" "))) return "";
-  if (/^(?:various artists?|unknown artist|house music|techno music|trance music|progressive house|progressive trance|deep house|melodic house|organic house)$/i.test(anchor)) return "";
-  const artistParts = String(track.artist || "")
-    .split(/\s*(?:,|\/|&|\+|\band\b)\s*/i)
-    .map((part) => normalizeMatchText(part))
-    .filter(Boolean);
-  const album = normalizeMatchText(track.album || "");
-  const artistMatches = key.includes(" ")
-    ? artistParts.some((part) => part === key || part.includes(key))
-    : artistParts.some((part) => part === key);
-  if (artistMatches) return anchor;
-  return key.includes(" ") && album.includes(key) ? anchor : "";
-}
-
-function requestAllowsPreviousSuggestions(options = {}) {
-  const text = `${options.request || ""} ${options.reference || ""} ${options.genres || ""} ${options.mood || ""}`;
-  return /\b(?:allow repeats|include repeats|show repeats|reuse previous suggestions|include previous suggestions|include previously suggested|show previous suggestions|same tracks again|same songs again|rerun previous)\b/i.test(text);
-}
-
-function requestAllowsArtistCluster(options = {}) {
-  const text = `${options.request || ""} ${options.reference || ""} ${options.genres || ""} ${options.mood || ""}`;
-  return /\b(?:same artist|single artist|one artist|artist deep dive|deep dive on|discography|catalogue|catalog|all .* by|only .* by|more from)\b/i.test(text);
-}
-
-function artistDiversityKey(track = {}) {
-  return splitArtistForMatch(track.artist || track.tidal?.artist || "")[0] || normalizeMatchText(track.artist || track.tidal?.artist || "");
-}
-
-function albumDiversityKey(track = {}) {
-  return normalizeMatchText(track.album || track.tidal?.album || "");
-}
-
-function trackDiversityKey(track = {}) {
-  const keys = candidateIdentityKeys(track);
-  return keys[0] || `${artistDiversityKey(track)}|${normalizeMatchText(track.title || track.tidal?.title || "")}`;
-}
-
-function diversifyCandidates(candidates = [], requestedCount = 10, options = {}) {
-  const allowCluster = requestAllowsArtistCluster(options);
-  const selected = [];
-  const selectedKeys = new Set();
-  const artistCounts = new Map();
-  const albumCounts = new Map();
-  const stages = allowCluster
-    ? [{ artist: Math.max(4, requestedCount), album: Math.max(3, Math.ceil(requestedCount / 2)) }]
-    : [
-      { artist: requestedCount <= 12 ? 1 : 2, album: 1 },
-      { artist: requestedCount <= 12 ? 2 : 3, album: 2 },
-      { artist: requestedCount <= 12 ? 3 : 4, album: 3 }
-    ];
-
-  function addCandidate(candidate, caps) {
-    if (selected.length >= requestedCount) return false;
-    const key = trackDiversityKey(candidate);
-    if (!key || selectedKeys.has(key)) return false;
-    const artistKey = artistDiversityKey(candidate);
-    const albumKey = albumDiversityKey(candidate);
-    const artistCount = artistCounts.get(artistKey) || 0;
-    const albumCount = albumKey ? (albumCounts.get(albumKey) || 0) : 0;
-    if (artistKey && artistCount >= caps.artist) return false;
-    if (albumKey && albumCount >= caps.album) return false;
-    selected.push(candidate);
-    selectedKeys.add(key);
-    if (artistKey) artistCounts.set(artistKey, artistCount + 1);
-    if (albumKey) albumCounts.set(albumKey, albumCount + 1);
-    return true;
-  }
-
-  for (const caps of stages) {
-    for (const candidate of candidates) addCandidate(candidate, caps);
-    if (selected.length >= requestedCount) break;
-  }
-
-  for (const candidate of candidates) {
-    if (selected.length >= requestedCount) break;
-    addCandidate(candidate, { artist: Number.MAX_SAFE_INTEGER, album: Number.MAX_SAFE_INTEGER });
-  }
-
-  return {
-    tracks: selected,
-    alternates: candidates.filter((candidate) => !selectedKeys.has(trackDiversityKey(candidate))),
-    artistSpread: artistCounts.size,
-    albumSpread: albumCounts.size,
-    relaxed: selected.length < Math.min(requestedCount, candidates.length)
-  };
-}
-
 async function decorateRoonFirstResult(roonResult, options = {}) {
-  const yearRange = yearRangeUtil.parseYearRange(options);
-  const scoringOptions = yearRange ? { ...options, years: yearRange.label } : options;
-  const discoveryProfile = buildDiscoveryProfile(scoringOptions);
-  const verifiedReleaseRequired = releaseFilterRequiresVerification(scoringOptions, yearRange);
-  const allowRoonYearUnverified = !verifiedReleaseRequired &&
-    /^(1|true|yes)$/i.test(String(options.allowRoonYearUnverifiedFallback || ""));
-  const deepRoonSearch = /^(1|true|yes)$/i.test(String(options.deepRoonSearch || ""));
-  const requestedCount = parseRequestedCount(options);
-  const originalRequestedCount = Number(options.originalRequestedCount || 0) || requestedCount;
-  const minScore = minimumScoreFor(scoringOptions);
-  const strictFilteredRequest = Boolean(yearRange || minScore);
-  const sourcePoolLimit = strictFilteredRequest
-    ? (deepRoonSearch
-      ? Math.min(650, Math.max(requestedCount + 180, requestedCount * 55))
-      : (requestedCount <= 5 ? 14 : Math.min(180, Math.max(requestedCount + 60, requestedCount * 12))))
-    : (deepRoonSearch
-      ? Math.min(650, Math.max(requestedCount + 160, requestedCount * 50))
-      : (requestedCount <= 5 ? 12 : Math.min(120, Math.max(requestedCount + 35, requestedCount * 8))));
-  const scoringPoolLimit = strictFilteredRequest
-    ? (deepRoonSearch
-      ? Math.min(120, Math.max(requestedCount + 60, requestedCount * 12))
-      : (requestedCount <= 5 ? 10 : Math.min(110, Math.max(requestedCount + 45, requestedCount * 9))))
-    : (deepRoonSearch
-      ? Math.min(160, Math.max(requestedCount + 70, requestedCount * 18))
-      : (requestedCount <= 5 ? 8 : Math.min(80, Math.max(requestedCount + 25, requestedCount * 6))));
-  const minScoreLabel = minimumScoreLabel(minScore);
-  const discarded = [...(roonResult.discarded || [])];
-  const allowPreviousSuggestions = requestAllowsPreviousSuggestions(scoringOptions) ||
-    /^(1|true|yes)$/i.test(String(options.allowPreviousRoonRescueFallback || ""));
-  const sourcePool = mergeTrackLists(roonResult.tracks, roonResult.alternates)
-    .slice(0, sourcePoolLimit);
-  const freshPool = [];
-  const previousPool = [];
-  for (const track of sourcePool) {
-    if (discoveryHistory.entryFor(track)) previousPool.push(track);
-    else freshPool.push(track);
-  }
-
-  const poolForScoring = allowPreviousSuggestions
-    ? [...freshPool, ...previousPool].slice(0, scoringPoolLimit)
-    : freshPool.slice(0, scoringPoolLimit);
-  if (!allowPreviousSuggestions && previousPool.length) {
-    for (const track of previousPool.slice(0, Math.min(previousPool.length, 120))) {
-      discarded.push({
-        ...track,
-        reason: "Previously suggested; held back for discovery variety."
-      });
-    }
-  }
-  const enrichment = await enrichRoonTracksOpportunistically(poolForScoring, {
-    requestedCount,
-    deep: deepRoonSearch,
-    strict: strictFilteredRequest
-  });
-  const enriched = enrichment.tracks;
-  const freshDecorated = [];
-  const previousDecorated = [];
-  const scoreFiltered = [];
-  let previouslySuggestedHeldBack = allowPreviousSuggestions ? 0 : previousPool.length;
-  const relaxedYearOptions = nearYearFallbackOptions(scoringOptions, yearRange);
-  const relaxedYearProfile = relaxedYearOptions ? buildDiscoveryProfile(relaxedYearOptions) : null;
-  let nearYearFallbackUsed = false;
-  let roonYearUnverifiedFallbackUsed = 0;
-
-  for (const track of enriched) {
-    let candidateTrack = track;
-    let scoringTrack = {
-      ...track,
-      ...(track.tidal || {}),
-      query: track.query || track.roon?.sourceQuery || "",
-      roon: track.roon
-    };
-    let scoringOptionsForTrack = scoringOptions;
-    let profileForTrack = discoveryProfile;
-    const historyEntry = discoveryHistory.entryFor(scoringTrack);
-    let rejection = (yearRange || track.tidal?.tidalUrl) ? rejectReason(scoringTrack, scoringOptionsForTrack, profileForTrack) : "";
-
-    if (rejection && relaxedYearOptions) {
-      const relaxedTrack = {
-        ...scoringTrack,
-        discoveryLane: "recent",
-        discoverySource: "Roon recent-year fallback"
-      };
-      const relaxedRejection = rejectReason(relaxedTrack, relaxedYearOptions, relaxedYearProfile);
-      if (!relaxedRejection) {
-        candidateTrack = {
-          ...track,
-          discoveryLane: "recent",
-          discoverySource: "Roon recent-year fallback"
-        };
-        scoringTrack = relaxedTrack;
-        scoringOptionsForTrack = relaxedYearOptions;
-        profileForTrack = relaxedYearProfile;
-        rejection = "";
-        nearYearFallbackUsed = true;
-      }
-    }
-
-    if (rejection && allowRoonYearUnverified && track.roon?.verified && /^(?:No TIDAL release|No canonical TIDAL)/i.test(rejection)) {
-      const noYearOptions = { ...scoringOptions, years: "" };
-      const noYearProfile = buildDiscoveryProfile(noYearOptions);
-      const fallbackTrack = {
-        ...scoringTrack,
-        discoveryLane: "roon-rescue",
-        discoverySource: "Roon-first rescue"
-      };
-      const sceneAnchor = roonRescueSceneAnchor(fallbackTrack);
-      const fallbackRejection = rejectReason(fallbackTrack, noYearOptions, noYearProfile);
-      if (!fallbackRejection || sceneAnchor) {
-        candidateTrack = {
-          ...track,
-          discoveryLane: "roon-rescue",
-          discoverySource: "Roon-first rescue",
-          releaseDateUnverified: true,
-          roonRescueSceneAnchor: sceneAnchor || ""
-        };
-        scoringTrack = fallbackTrack;
-        scoringOptionsForTrack = noYearOptions;
-        profileForTrack = noYearProfile;
-        rejection = "";
-        roonYearUnverifiedFallbackUsed += 1;
-      }
-    }
-
-    if (rejection) {
-      discarded.push({
-        ...candidateTrack,
-        reason: rejection
-      });
-      continue;
-    }
-
-    const artistNoveltyReason = previouslyRecommendedArtistReason(scoringTrack, discoveryHistory, profileForTrack, scoringOptionsForTrack);
-    if (artistNoveltyReason) {
-      discarded.push({
-        ...candidateTrack,
-        reason: artistNoveltyReason
-      });
-      continue;
-    }
-
-    const rawBreakdown = scoreBreakdownFor(scoringTrack, scoringOptionsForTrack, tasteProfile, profileForTrack);
-    const scoreBreakdown = scoreWithRoonFloor(rawBreakdown, candidateTrack);
-    let belowMinimumReason = "";
-    if (minScore && scoreBreakdown.total < minScore) {
-      belowMinimumReason = `Discovery score ${scoreBreakdown.total} is below minimum ${minScoreLabel}.`;
-      const filtered = {
-        ...candidateTrack,
-        score: scoreBreakdown.total,
-        scoreBreakdown,
-        belowMinimum: true,
-        minimumScore: minScore,
-        minimumScoreLabel: minScoreLabel,
-        reason: belowMinimumReason
-      };
-      const softRejectReason = belowMinimumSoftRejectReason(filtered, profileForTrack);
-      if (softRejectReason) {
-        scoreFiltered.push({
-          ...filtered,
-          reason: softRejectReason
-        });
-        discarded.push({
-          ...filtered,
-          reason: softRejectReason
-        });
-        continue;
-      }
-      scoreFiltered.push(filtered);
-      candidateTrack = {
-        ...candidateTrack,
-        belowMinimum: true,
-        minimumScore: minScore,
-        minimumScoreLabel: minScoreLabel
-      };
-    }
-
-    const candidate = {
-      ...candidateTrack,
-      reason: `${reasonFor(scoringTrack, scoringOptionsForTrack, scoreBreakdown, profileForTrack)}${belowMinimumReason ? `; below ${minScoreLabel} floor` : ""}`,
-      why: whyBulletsFor(scoringTrack, scoringOptionsForTrack, scoreBreakdown, historyEntry, profileForTrack),
-      discoverySource: candidateTrack.discoverySource || "Roon search",
-      score: scoreBreakdown.total,
-      scoreBreakdown,
-      statusChecks: queueableStatusChecks({
-        ...candidateTrack,
-        statusChecks: discoveryStatusFor(scoringTrack, historyEntry, discoveryHistory.isRecent(scoringTrack))
-      }).concat([
-        belowMinimumReason,
-        candidateTrack.roonRescueSceneAnchor ? `Roon scene anchor: ${candidateTrack.roonRescueSceneAnchor}` : "",
-        candidateTrack.releaseDateUnverified ? "Release date not verified by TIDAL" : ""
-      ].filter(Boolean)),
-      verificationSource: candidateTrack.verificationSource || "roon"
-    };
-    candidate.feedback = tasteProfile.getFeedbackFor(candidate);
-    if (historyEntry && !allowPreviousSuggestions) {
-      previousDecorated.push(candidate);
-      previouslySuggestedHeldBack += 1;
-      discarded.push({
-        ...candidate,
-        reason: "Previously suggested; held back for discovery variety."
-      });
-    } else {
-      freshDecorated.push(candidate);
-    }
-  }
-
-  const sortCandidates = (left, right) => (
-    Number(right.score || 0) - Number(left.score || 0) ||
-    Number(right.durationMs || 0) - Number(left.durationMs || 0)
-  );
-  freshDecorated.sort(sortCandidates);
-  previousDecorated.sort(sortCandidates);
-  const candidateOrder = allowPreviousSuggestions
-    ? mergeTrackLists(freshDecorated, previousDecorated)
-    : freshDecorated;
-  const diversity = diversifyCandidates(candidateOrder, requestedCount, scoringOptions);
-  const selected = diversity.tracks;
-  const alternates = allowPreviousSuggestions
-    ? diversity.alternates
-    : mergeTrackLists(diversity.alternates, previousDecorated);
-  const belowMinimumKept = selected.filter((track) => track.belowMinimum).length;
-  const belowMinimumAlternates = alternates.filter((track) => track.belowMinimum).length;
-  const aboveMinimumKept = minScore ? Math.max(0, selected.length - belowMinimumKept) : selected.length;
-
-  return {
-    requestedCount,
-    tracks: selected,
-    alternates,
-    discarded,
-    verification: {
-      ...(roonResult.verification || {}),
-      requested: requestedCount,
-      originalRequested: originalRequestedCount,
-      countExpanded: requestedCount !== originalRequestedCount,
-      kept: selected.length,
-      discarded: discarded.length,
-      minScore,
-      minScoreLabel,
-      yearRange: yearRange?.label || "",
-      scoreFiltered: scoreFiltered.length,
-      belowMinimumKept,
-      belowMinimumAlternates,
-      aboveMinimumKept,
-      minScoreSoftFallback: Boolean(minScore && belowMinimumKept),
-      strategy: "roon-search-first",
-      nearYearFallback: nearYearFallbackUsed,
-      nearYearFallbackRange: nearYearFallbackUsed ? relaxedYearOptions?.years || "" : "",
-      verifiedReleaseRequired,
-      roonYearUnverifiedFallback: Boolean(roonYearUnverifiedFallbackUsed),
-      roonYearUnverifiedFallbackCount: roonYearUnverifiedFallbackUsed,
-      tidalEnriched: [...freshDecorated, ...previousDecorated].filter((track) => track.tidal?.tidalUrl).length,
-      novelty: !allowPreviousSuggestions,
-      previouslySuggestedAllowed: allowPreviousSuggestions,
-      previouslySuggestedHeldBack,
-      freshRoonCandidates: freshPool.length,
-      previousRoonCandidates: previousPool.length,
-      deepRoonSearch,
-      sourcePoolLimit,
-      scoringPoolLimit,
-      tidalEnrichment: enrichment.stats,
-      diversity: {
-        enabled: true,
-        artistSpread: diversity.artistSpread,
-        albumSpread: diversity.albumSpread,
-        artistClusterAllowed: requestAllowsArtistCluster(scoringOptions)
-      },
-      intent: discoveryProfile.intent,
-      scoringMode: discoveryProfile.scoringMode
-    }
-  };
+  return roonFirstDecorator.decorateRoonFirstResult(roonResult, options);
 }
 
 function decorateRoonFirstTimeoutFallback(roonResult = {}, options = {}, error = null) {
-  const yearRange = yearRangeUtil.parseYearRange(options);
-  const scoringOptions = yearRange ? { ...options, years: yearRange.label } : options;
-  const discoveryProfile = buildDiscoveryProfile(scoringOptions);
-  const verifiedReleaseRequired = releaseFilterRequiresVerification(scoringOptions, yearRange);
-  const allowRoonYearUnverified = !verifiedReleaseRequired &&
-    /^(1|true|yes)$/i.test(String(options.allowRoonYearUnverifiedFallback || ""));
-  const deepRoonSearch = /^(1|true|yes)$/i.test(String(options.deepRoonSearch || ""));
-  const requestedCount = parseRequestedCount(options);
-  const originalRequestedCount = Number(options.originalRequestedCount || 0) || requestedCount;
-  const minScore = minimumScoreFor(scoringOptions);
-  const minScoreLabel = minimumScoreLabel(minScore);
-  const allowPreviousSuggestions = requestAllowsPreviousSuggestions(scoringOptions) ||
-    /^(1|true|yes)$/i.test(String(options.allowPreviousRoonRescueFallback || ""));
-  const sourcePoolLimit = deepRoonSearch
-    ? Math.min(220, Math.max(requestedCount + 90, requestedCount * 16))
-    : Math.min(120, Math.max(requestedCount + 40, requestedCount * 8));
-  const sourcePool = mergeTrackLists(roonResult.tracks, roonResult.alternates)
-    .slice(0, sourcePoolLimit);
-  const discarded = [...(roonResult.discarded || [])];
-  const candidates = [];
-  const scoreFiltered = [];
-  let previouslySuggestedHeldBack = 0;
-  let roonYearUnverifiedFallbackUsed = 0;
-
-  for (const track of sourcePool) {
-    const historyEntry = discoveryHistory.entryFor(track);
-    if (historyEntry && !allowPreviousSuggestions) {
-      previouslySuggestedHeldBack += 1;
-      discarded.push({
-        ...track,
-        reason: "Previously suggested; held back for discovery variety."
-      });
-      continue;
-    }
-
-    let candidateTrack = {
-      ...track,
-      discoveryLane: track.discoveryLane || "roon-rescue",
-      discoverySource: track.discoverySource || "Roon-first rescue"
-    };
-    let scoringTrack = {
-      ...candidateTrack,
-      ...(candidateTrack.tidal || {}),
-      query: candidateTrack.query || candidateTrack.roon?.sourceQuery || "",
-      roon: candidateTrack.roon
-    };
-    let scoringOptionsForTrack = scoringOptions;
-    let profileForTrack = discoveryProfile;
-    let rejection = rejectReason(scoringTrack, scoringOptionsForTrack, profileForTrack);
-
-    if (rejection && allowRoonYearUnverified && candidateTrack.roon?.verified && /^(?:No TIDAL release|No canonical TIDAL)/i.test(rejection)) {
-      const noYearOptions = { ...scoringOptions, years: "" };
-      const noYearProfile = buildDiscoveryProfile(noYearOptions);
-      const fallbackTrack = {
-        ...scoringTrack,
-        discoveryLane: "roon-rescue",
-        discoverySource: "Roon-first rescue"
-      };
-      const sceneAnchor = roonRescueSceneAnchor(fallbackTrack);
-      const fallbackRejection = rejectReason(fallbackTrack, noYearOptions, noYearProfile);
-      if (!fallbackRejection || sceneAnchor) {
-        candidateTrack = {
-          ...candidateTrack,
-          discoveryLane: "roon-rescue",
-          discoverySource: "Roon-first rescue",
-          releaseDateUnverified: true,
-          roonRescueSceneAnchor: sceneAnchor || ""
-        };
-        scoringTrack = fallbackTrack;
-        scoringOptionsForTrack = noYearOptions;
-        profileForTrack = noYearProfile;
-        rejection = "";
-        roonYearUnverifiedFallbackUsed += 1;
-      }
-    }
-
-    if (rejection) {
-      discarded.push({
-        ...candidateTrack,
-        reason: rejection
-      });
-      continue;
-    }
-
-    const artistNoveltyReason = previouslyRecommendedArtistReason(scoringTrack, discoveryHistory, profileForTrack, scoringOptionsForTrack);
-    if (artistNoveltyReason) {
-      discarded.push({
-        ...candidateTrack,
-        reason: artistNoveltyReason
-      });
-      continue;
-    }
-
-    const rawBreakdown = scoreBreakdownFor(scoringTrack, scoringOptionsForTrack, tasteProfile, profileForTrack);
-    const scoreBreakdown = scoreWithRoonFloor(rawBreakdown, candidateTrack);
-    let belowMinimumReason = "";
-    if (minScore && scoreBreakdown.total < minScore) {
-      belowMinimumReason = `Discovery score ${scoreBreakdown.total} is below minimum ${minScoreLabel}.`;
-      const filtered = {
-        ...candidateTrack,
-        score: scoreBreakdown.total,
-        scoreBreakdown,
-        belowMinimum: true,
-        minimumScore: minScore,
-        minimumScoreLabel: minScoreLabel,
-        reason: belowMinimumReason
-      };
-      const softRejectReason = belowMinimumSoftRejectReason(filtered, profileForTrack);
-      if (softRejectReason) {
-        scoreFiltered.push({
-          ...filtered,
-          reason: softRejectReason
-        });
-        discarded.push({
-          ...filtered,
-          reason: softRejectReason
-        });
-        continue;
-      }
-      scoreFiltered.push(filtered);
-      candidateTrack = {
-        ...candidateTrack,
-        belowMinimum: true,
-        minimumScore: minScore,
-        minimumScoreLabel: minScoreLabel
-      };
-    }
-
-    const candidate = {
-      ...candidateTrack,
-      reason: `${reasonFor(scoringTrack, scoringOptionsForTrack, scoreBreakdown, profileForTrack)}; returned from Roon partial scoring fallback${belowMinimumReason ? `; below ${minScoreLabel} floor` : ""}`,
-      why: whyBulletsFor(scoringTrack, scoringOptionsForTrack, scoreBreakdown, historyEntry, profileForTrack),
-      score: scoreBreakdown.total,
-      scoreBreakdown,
-      statusChecks: queueableStatusChecks({
-        ...candidateTrack,
-        statusChecks: discoveryStatusFor(scoringTrack, historyEntry, discoveryHistory.isRecent(scoringTrack))
-      }).concat([
-        "Roon partial scoring fallback",
-        belowMinimumReason,
-        candidateTrack.roonRescueSceneAnchor ? `Roon scene anchor: ${candidateTrack.roonRescueSceneAnchor}` : "",
-        candidateTrack.releaseDateUnverified ? "Release date not verified by TIDAL" : ""
-      ].filter(Boolean)),
-      verificationSource: candidateTrack.verificationSource || "roon"
-    };
-    candidate.feedback = tasteProfile.getFeedbackFor(candidate);
-    candidates.push(candidate);
-  }
-
-  const sorted = candidates.sort((left, right) => (
-    Number(right.score || 0) - Number(left.score || 0) ||
-    Number(right.durationMs || 0) - Number(left.durationMs || 0)
-  ));
-  const diversity = diversifyCandidates(sorted, requestedCount, scoringOptions);
-  const selected = diversity.tracks;
-  const belowMinimumKept = selected.filter((track) => track.belowMinimum).length;
-  const belowMinimumAlternates = diversity.alternates.filter((track) => track.belowMinimum).length;
-  const aboveMinimumKept = minScore ? Math.max(0, selected.length - belowMinimumKept) : selected.length;
-
-  return {
-    requestedCount,
-    tracks: selected,
-    alternates: diversity.alternates,
-    discarded,
-    verification: {
-      ...(roonResult.verification || {}),
-      requested: requestedCount,
-      originalRequested: originalRequestedCount,
-      countExpanded: requestedCount !== originalRequestedCount,
-      kept: selected.length,
-      discarded: discarded.length,
-      minScore,
-      minScoreLabel,
-      yearRange: yearRange?.label || "",
-      scoreFiltered: scoreFiltered.length,
-      belowMinimumKept,
-      belowMinimumAlternates,
-      aboveMinimumKept,
-      minScoreSoftFallback: Boolean(minScore && belowMinimumKept),
-      strategy: "roon-search-first",
-      roonFirstScoringFallback: true,
-      roonFirstScoringError: error?.message || "Roon-first scoring took too long.",
-      roonFirstScoringPartial: true,
-      roonFirstScoringSourcePool: sourcePool.length,
-      roonFirstScoringCandidates: candidates.length,
-      nearYearFallback: false,
-      verifiedReleaseRequired,
-      roonYearUnverifiedFallback: Boolean(roonYearUnverifiedFallbackUsed),
-      roonYearUnverifiedFallbackCount: roonYearUnverifiedFallbackUsed,
-      tidalEnriched: 0,
-      novelty: !allowPreviousSuggestions,
-      previouslySuggestedAllowed: allowPreviousSuggestions,
-      previouslySuggestedHeldBack,
-      freshRoonCandidates: Math.max(0, sourcePool.length - previouslySuggestedHeldBack),
-      previousRoonCandidates: previouslySuggestedHeldBack,
-      deepRoonSearch,
-      sourcePoolLimit,
-      scoringPoolLimit: 0,
-      diversity: {
-        enabled: true,
-        artistSpread: diversity.artistSpread,
-        albumSpread: diversity.albumSpread,
-        artistClusterAllowed: requestAllowsArtistCluster(scoringOptions)
-      },
-      intent: discoveryProfile.intent,
-      scoringMode: discoveryProfile.scoringMode
-    }
-  };
+  return roonFirstDecorator.decorateRoonFirstTimeoutFallback(roonResult, options, error);
 }
 
 function appSnapshot() {
-  const taste = tasteProfile.read();
-  const session = sessionSnapshot();
-  return {
-    updatedAt: new Date().toISOString(),
-    session,
-    taste: tasteProfile.summary(taste),
-    feedback: taste.feedback || {},
-    genreProfiles: genreProfileStore.summary(),
-    memory: trackMemory.summary(),
-    standby: standbyStore.summary(),
-    queryYield: queryYieldTracker.summary(),
-    lastfm: lastfm.status(),
-    tidal: tidal.status(),
-    tidalProfileMixes: tidalProfileMixes.status(),
-    radioMetadata: radioMetadataResolver.status(),
-    llm: llmSnapshot()
-  };
+  return buildAppSnapshot({
+    latestResultSource,
+    latestBridgeSyncAlert,
+    sessionStore,
+    syncFinalResultVerification,
+    parseRequestedCount,
+    tasteProfile,
+    genreProfileStore,
+    trackMemory,
+    standbyFreshSummary,
+    queryYieldTracker,
+    lastfm,
+    tidal,
+    tidalProfileMixes,
+    radioMetadataResolver,
+    metadataEnrichment,
+    llmSnapshot,
+    modelRouter
+  });
+}
+
+function recordBridgeSyncAlert(result = {}) {
+  const alert = bridgeSyncAlertFromResult(result, {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    createdAt: new Date().toISOString()
+  });
+  if (!alert) return null;
+  latestBridgeSyncAlert = alert;
+  return latestBridgeSyncAlert;
 }
 
 function sessionSnapshot() {
-  const session = sessionStore.read();
-  if (!session.result) return session;
-  return {
-    ...session,
-    result: syncFinalResultVerification(
-      session.result,
-      Number(session.result?.verification?.requested || 0) || parseRequestedCount(session.options || {})
-    )
-  };
-}
-
-function sessionTrackFor(track = {}) {
-  const key = trackKey(track);
-  if (!key) return null;
-  const session = sessionStore.read();
-  const pools = [
-    ...(session.result?.tracks || []),
-    ...(session.result?.alternates || []),
-    ...(session.result?.discarded || [])
-  ];
-  return pools.find((candidate) => trackKey(candidate) === key) || null;
+  return buildSessionSnapshot({ sessionStore, syncFinalResultVerification, parseRequestedCount });
 }
 
 function feedbackTrackWithSessionContext(track = {}, rating = "") {
-  const sessionTrack = sessionTrackFor(track) || {};
-  const merged = {
-    ...sessionTrack,
-    ...track,
-    scoreBreakdown: track.scoreBreakdown || sessionTrack.scoreBreakdown || null,
-    llmReview: track.llmReview || sessionTrack.llmReview || null,
-    modelReview: track.modelReview || sessionTrack.modelReview || null,
-    discoverySource: track.discoverySource || sessionTrack.discoverySource || "",
-    discoveryLane: track.discoveryLane || sessionTrack.discoveryLane || "",
-    tasteScore: ratingDelta(rating)
-  };
-  if (!isRadioPlaybackTrack(merged)) return merged;
-
-  const source = cleanRadioText(merged.discoverySource);
-  const lane = cleanRadioText(merged.discoveryLane);
-  const statusChecks = Array.isArray(merged.statusChecks) ? merged.statusChecks : [];
-  return {
-    ...merged,
-    sourceType: "radio",
-    isRadio: true,
-    isLiveRadio: merged.isLiveRadio !== false,
-    discoverySource: !source || /^now playing$/i.test(source) ? "Live radio" : source,
-    discoveryLane: lane || "radio",
-    statusChecks: Array.from(new Set([...statusChecks, "Live radio feedback"]))
-  };
+  return buildFeedbackTrackWithSessionContext(track, rating, { sessionStore, trackKey, ratingDelta });
 }
 
 function feedbackCalibrationContext(track = {}, request = {}) {
-  const modelReview = track.modelReview || {};
-  const llmReview = track.scoreBreakdown?.llmReview || track.llmReview || {};
-  return {
-    modelReview,
-    modelAction: modelReview.action || "",
-    beforeScore: modelReview.before,
-    afterScore: modelReview.after,
-    delta: modelReview.delta,
-    score: track.score ?? track.scoreBreakdown?.total,
-    modelScore: modelReview.modelScore ?? llmReview.finalScore,
-    genreConfidence: modelReview.genreConfidence ?? llmReview.genreConfidence,
-    promptMatch: track.promptMatch ?? track.scoreBreakdown?.promptMatch,
-    tasteMatch: track.tasteMatch ?? track.scoreBreakdown?.tasteMatch,
-    reason: request.reason || modelReview.reason || llmReview.rejectionReason || "",
-    discoverySource: track.discoverySource || "",
-    discoveryLane: track.discoveryLane || ""
-  };
+  return buildFeedbackCalibrationContext(track, request);
 }
 
 function eventPayload() {
   const baseState = withTrackMemory(withHqplayerStatus(roon.getState()));
   scheduleRadioEnrichment(baseState);
-  const state = attachRadioEnrichment(baseState);
+  const stateWithRadio = attachRadioEnrichment(baseState);
+  scheduleMetadataEnrichment(stateWithRadio);
+  const state = attachMetadataEnrichment(stateWithRadio);
   listeningHistory.recordState(state);
   return {
     ...state,
@@ -3030,889 +912,6 @@ function serveStatic(req, res, pathname) {
     }));
     res.end(data);
   });
-}
-
-function yearFitsRange(year, range) {
-  if (!range) return true;
-  return Number(year) >= range.min && Number(year) <= range.max;
-}
-
-function isReissueLike(result = {}) {
-  const text = `${result.title || ""} ${result.album || ""}`.toLowerCase();
-  return /\b(?:remaster(?:ed)?|re-?master(?:ed)?|reissue|anniversary|deluxe|expanded|restored|archive|classics?|retouch|alternative\s+version|alt(?:ernative)?\s+mix)\b/.test(text);
-}
-
-function embeddedYears(value) {
-  return Array.from(String(value || "").matchAll(/\b(19\d{2}|20\d{2})\b/g), (match) => Number(match[1]));
-}
-
-function hasOutOfRangeEmbeddedYear(result = {}, range) {
-  if (!range) return false;
-  const years = embeddedYears(`${result.title || ""} ${result.album || ""}`);
-  return years.some((year) => year < range.min || year > range.max);
-}
-
-function genreLooksWrong(track = {}, options = {}) {
-  const genre = String(options.genres || options.request || "").toLowerCase();
-  if (!genre.includes("progressive house")) return false;
-
-  const text = `${track.artist || ""} ${track.title || ""} ${track.album || ""}`.toLowerCase();
-  return /\b(?:trance|uplifting|psytrance|goa|techno|ambient|chillout|downtempo|breakbeat|drum\s*and\s*bass|dubstep)\b/.test(text);
-}
-
-async function verifyPlaylistWithRoon(playlist, zoneId, options = {}) {
-  if (!zoneId) return playlist;
-
-  const verified = [];
-  const discarded = [];
-  const targetCount = Number(playlist.requestedCount || options.count || playlist.tracks.length);
-  const useTidal = tidal.isConfigured();
-  const tidalErrors = [];
-  const yearRange = yearRangeUtil.parseYearRange(options);
-
-  for (const track of playlist.tracks) {
-    if (verified.length >= targetCount) break;
-
-    try {
-      let tidalResult = null;
-      if (useTidal) {
-        try {
-          tidalResult = await tidal.verify(track, { strict: Boolean(yearRange) });
-        } catch (error) {
-          tidalErrors.push(error.message);
-        }
-      }
-
-      if (tidalResult) {
-        if (genreLooksWrong({ ...track, ...tidalResult }, options)) {
-          discarded.push({
-            ...track,
-            reason: "TIDAL match appears outside progressive house.",
-            tidal: tidalResult
-          });
-          continue;
-        }
-
-        if (yearRange && isReissueLike(tidalResult)) {
-          discarded.push({
-            ...track,
-            reason: `TIDAL match looks like a remaster/reissue, not a current release in ${yearRange.label}.`,
-            tidal: tidalResult
-          });
-          continue;
-        }
-
-        if (yearRange && hasOutOfRangeEmbeddedYear(tidalResult, yearRange)) {
-          discarded.push({
-            ...track,
-            reason: `TIDAL title/album references an older year outside ${yearRange.label}.`,
-            tidal: tidalResult
-          });
-          continue;
-        }
-
-        if (yearRange?.dateSpecific && !tidalResult.releaseDate) {
-          discarded.push({
-            ...track,
-            reason: `TIDAL verified the track but did not expose a release date for ${yearRange.label}.`,
-            tidal: tidalResult
-          });
-          continue;
-        }
-
-        if (yearRange && !yearRange.dateSpecific && !tidalResult.year) {
-          discarded.push({
-            ...track,
-            reason: `TIDAL verified the track but did not expose a release year for ${yearRange.label}.`,
-            tidal: tidalResult
-          });
-          continue;
-        }
-
-        if (yearRange && !yearRangeUtil.yearFits(tidalResult.year, yearRange, tidalResult.releaseDate)) {
-          discarded.push({
-            ...track,
-            reason: `TIDAL release ${tidalResult.releaseDate || tidalResult.year || "unknown"} is outside ${yearRange.label}.`,
-            tidal: tidalResult
-          });
-          continue;
-        }
-
-        verified.push({
-          ...track,
-          artist: tidalResult.artist || track.artist,
-          title: tidalResult.title || track.title,
-          year: tidalResult.year || null,
-          releaseDate: tidalResult.releaseDate || "",
-          tidal: tidalResult,
-          verificationSource: "tidal"
-        });
-        continue;
-      }
-
-      if (useTidal && yearRange) {
-        discarded.push({
-          ...track,
-          reason: `Not verified in TIDAL with a release year inside ${yearRange.label}.`,
-          tidal: { verified: false }
-        });
-        continue;
-      }
-
-      const search = await roon.search(track, zoneId);
-      if (search.verified) {
-        verified.push({
-          ...track,
-          roon: {
-            verified: true,
-            match: {
-              title: search.match?.title,
-              subtitle: search.match?.subtitle
-            }
-          },
-          verificationSource: "roon"
-        });
-      } else {
-        discarded.push({
-          ...track,
-          reason: useTidal ? "Not verified in TIDAL or Roon search" : "Not verified in Roon search",
-          roon: {
-            verified: false,
-            match: search.match ? {
-              title: search.match.title,
-              subtitle: search.match.subtitle
-            } : null
-          }
-        });
-      }
-    } catch (error) {
-      discarded.push({
-        ...track,
-        reason: error.message,
-        roon: { verified: false }
-      });
-    }
-  }
-
-  return {
-    ...playlist,
-    tracks: verified.slice(0, targetCount),
-    discarded,
-    verification: {
-      enabled: true,
-      tidal: useTidal,
-      tidalError: tidalErrors[0] || "",
-      yearRange: yearRange?.label || "",
-      requested: targetCount,
-      generated: playlist.tracks.length,
-      kept: Math.min(verified.length, targetCount),
-      discarded: discarded.length
-    }
-  };
-}
-
-function queueableStatusChecks(track = {}) {
-  const checks = Array.isArray(track.statusChecks) ? track.statusChecks : [];
-  const artistCreditStatus = track.roon?.artistCreditConfirmed
-    ? `Exact artist credit confirmed: ${track.roon.artistCreditConfirmed}`
-    : (track.roon?.verified ? "Broader Roon search match" : "");
-  return Array.from(new Set([
-    "Roon verified",
-    track.roon?.queueActionPresumed ? "Queue action resolved when queued" : "Roon queue action ready",
-    artistCreditStatus,
-    ...checks.filter((status) => (
-      !/^Roon\b/i.test(String(status || "")) &&
-      !/^Exact artist credit/i.test(String(status || "")) &&
-      !/^Broader Roon search match/i.test(String(status || ""))
-    ))
-  ].filter(Boolean)));
-}
-
-function roonVerificationTimeoutFallback(discovered = {}, requestedCount = 8, error = null) {
-  const fallbackTracks = mergeTrackLists(discovered.tracks, discovered.alternates)
-    .slice(0, Math.max(1, requestedCount))
-    .map((track) => ({
-      ...track,
-      roon: {
-        ...(track.roon || {}),
-        verified: false
-      },
-      statusChecks: [
-        "Roon verification timed out",
-        "Queue action will be checked when queued",
-        ...(Array.isArray(track.statusChecks) ? track.statusChecks.filter((status) => !/^Roon\b/i.test(String(status || ""))) : [])
-      ]
-    }));
-  const discarded = discovered.discarded || [];
-  return {
-    ...discovered,
-    tracks: fallbackTracks,
-    alternates: mergeTrackLists(discovered.tracks, discovered.alternates)
-      .filter((track) => !fallbackTracks.some((fallback) => candidateIdentityKeys(fallback).some((key) => candidateIdentityKeys(track).includes(key))))
-      .slice(0, Math.max(80, requestedCount * 8)),
-    discarded,
-    verification: {
-      ...(discovered.verification || {}),
-      roonQueueable: false,
-      roonStrict: true,
-      roonVerificationError: error?.message || "Roon queue verification took too long.",
-      roonVerificationFallback: true,
-      kept: fallbackTracks.length,
-      generated: fallbackTracks.length + discarded.length,
-      discarded: discarded.length
-    }
-  };
-}
-
-function withNormalizedYearFilter(options = {}) {
-  const parsed = yearRangeUtil.parseYearRange(options);
-  if (!parsed) return options;
-  return {
-    ...options,
-    years: parsed.label
-  };
-}
-
-function shouldSkipModelForCatalogSearch(options = {}) {
-  const parsed = yearRangeUtil.parseYearRange(options);
-  if (!parsed) return false;
-  const profile = buildDiscoveryProfile(options);
-  if (profile.targetGenres?.length) return true;
-  const text = normalizeMatchText(`${options.request || ""} ${options.genres || ""} ${options.mood || ""}`);
-  return /\b(?:progressive|house|trance|melodic|deep|organic|techno|ambient|disco|synth|new wave|rock|jazz|metal|country|pop|funk|soul|r b|hip hop)\b/.test(text);
-}
-
-function isStrictRoonQueueMode(options = {}) {
-  const explicitMode = normalizeMatchText([
-    options.queueMode,
-    options.verificationMode,
-    options.searchMode,
-    options.requireRoonQueueable
-  ].filter(Boolean).join(" "));
-  if (/\b(?:strict roon|roon strict|strict queue|queueable roon|roon queueable|roon-verified|strict-roon|roon-strict)\b/.test(explicitMode)) {
-    return true;
-  }
-  return /^(1|true|yes)$/i.test(String(options.strictRoonQueueable || options.roonStrict || ""));
-}
-
-function booleanFlag(value) {
-  return /^(1|true|yes)$/i.test(String(value || ""));
-}
-
-function strictSearchBudgets(options = {}, requestedCount = 8) {
-  const yearRange = yearRangeUtil.parseYearRange(options);
-  const minScore = minimumScoreFor(options);
-  const strict = Boolean(yearRange || minScore);
-  if (!strict) {
-    return {
-      roonFirstTimeoutMs: 10_000,
-      modelTimeoutMs: 30_000,
-      discoveryTimeoutMs: 12_000,
-      roonQueueTimeoutMs: 10_000
-    };
-  }
-
-  const catalogMode = shouldSkipModelForCatalogSearch(options);
-  const strictRoonMode = isStrictRoonQueueMode(options);
-  return {
-    roonFirstTimeoutMs: Math.min(35_000, Math.max(16_000, requestedCount * 1_600)),
-    modelTimeoutMs: Math.min(45_000, Math.max(catalogMode ? 30_000 : 25_000, requestedCount * 1_500)),
-    discoveryTimeoutMs: catalogMode
-      ? (strictRoonMode
-        ? Math.min(180_000, Math.max(90_000, requestedCount * 9_000))
-        : Math.min(105_000, Math.max(55_000, requestedCount * 5_000)))
-      : Math.min(120_000, Math.max(60_000, requestedCount * 5_000)),
-    roonQueueTimeoutMs: Math.min(75_000, Math.max(24_000, requestedCount * 2_400))
-  };
-}
-
-function roonMatchSummary(match = null) {
-  if (!match) return null;
-  return {
-    title: match.title || "",
-    subtitle: match.subtitle || "",
-    imageKey: match.image_key || "",
-    key: match.item_key || "",
-    hint: match.hint || ""
-  };
-}
-
-async function filterForRoonQueueable(result, zoneId, options = {}) {
-  if (!zoneId) {
-    throw new Error("Select a Roon output zone first. Strict mode requires every TIDAL result to be verified and queueable in Roon.");
-  }
-
-  if (!result?.tracks?.length && !result?.alternates?.length) {
-    const discarded = result?.discarded || [];
-    if (result) delete result.alternates;
-    return {
-      ...(result || {}),
-      tracks: result?.tracks || [],
-      discarded,
-      verification: {
-        ...(result?.verification || {}),
-        roonQueueable: true,
-        roonStrict: true,
-        roonChecked: 0,
-        roonRejected: 0,
-        roonCheckLimit: 0,
-        kept: 0,
-        generated: Number(result?.verification?.generated ?? discarded.length) || discarded.length,
-        discarded: Number(result?.verification?.discarded ?? discarded.length) || discarded.length
-      }
-    };
-  }
-
-  const yearRange = yearRangeUtil.parseYearRange({ ...options, years: options.years || result.verification?.yearRange || "" });
-  const scoringOptions = yearRange ? { ...options, years: yearRange.label } : options;
-  const targetCount = Number(result.requestedCount || result.verification?.requested || result.tracks.length);
-  const minScore = minimumScoreFor(scoringOptions);
-  const strictFilteredRequest = Boolean(yearRange || minScore);
-  const pool = [];
-  const seen = new Set();
-  for (const track of [...(result.tracks || []), ...(result.alternates || [])]) {
-    const keys = candidateIdentityKeys(track);
-    const key = keys[0] || `${normalizeMatchText(track.artist || "")}|${normalizeMatchText(track.title || "")}`;
-    if (!key || seen.has(key) || keys.some((candidateKey) => seen.has(candidateKey))) continue;
-    for (const candidateKey of keys) seen.add(candidateKey);
-    seen.add(key);
-    pool.push(track);
-  }
-
-  const accepted = [];
-  const rejected = [];
-  const roonSearchOptions = {
-    preferExtendedMixes: requestPrefersExtendedMixes(options)
-  };
-  const maxChecks = Math.min(
-    pool.length,
-    strictFilteredRequest
-      ? Math.min(180, Math.max(targetCount + 70, targetCount * 8))
-      : Math.min(90, Math.max(targetCount + 36, targetCount * 5))
-  );
-  let checked = 0;
-
-  for (const track of pool) {
-    if (accepted.length >= targetCount) break;
-    if (checked >= maxChecks) break;
-
-    if (yearRange) {
-      const candidateRange = track.discoveryLane === "recent" && result.verification?.nearYearFallbackRange
-        ? yearRangeUtil.parseYearRange({ ...options, years: result.verification.nearYearFallbackRange })
-        : yearRange;
-      const candidateScoringOptions = candidateRange
-        ? { ...options, years: candidateRange.label }
-        : scoringOptions;
-      const scoringTrack = {
-        ...track,
-        ...(track.tidal || {}),
-        query: track.query || track.roon?.sourceQuery || "",
-        roon: track.roon
-      };
-      const rejection = rejectReason(scoringTrack, candidateScoringOptions);
-      if (rejection) {
-        rejected.push({
-          ...track,
-          reason: rejection
-        });
-        continue;
-      }
-    }
-
-    if (track.roon?.verified && track.roon?.queueAction) {
-      accepted.push({
-        ...track,
-        statusChecks: queueableStatusChecks(track)
-      });
-      continue;
-    }
-
-    checked += 1;
-    try {
-      const search = await roon.canQueueTrack(track, zoneId, roonSearchOptions);
-      if (search.success) {
-        accepted.push({
-          ...track,
-          roon: {
-            verified: true,
-            match: roonMatchSummary(search.match),
-            queueAction: search.action || ""
-          },
-          statusChecks: queueableStatusChecks(track)
-        });
-      } else {
-        rejected.push({
-          ...track,
-          reason: search.reason || `Roon did not find an exact queueable match. Best result was ${search.match?.title || "none"}${search.match?.subtitle ? ` - ${search.match.subtitle}` : ""}.`,
-          roon: {
-            verified: false,
-            match: roonMatchSummary(search.match)
-          }
-        });
-      }
-    } catch (error) {
-      rejected.push({
-        ...track,
-        reason: error.message,
-        roon: { verified: false }
-      });
-    }
-  }
-
-  const discarded = [...(result.discarded || []), ...rejected];
-  const belowMinimumKept = accepted.filter((track) => track.belowMinimum).length;
-  const aboveMinimumKept = minScore ? Math.max(0, accepted.length - belowMinimumKept) : accepted.length;
-  delete result.alternates;
-  return {
-    ...result,
-    tracks: accepted,
-    discarded,
-    verification: {
-      ...(result.verification || {}),
-      roonQueueable: true,
-      roonStrict: true,
-      yearRange: yearRange?.label || result.verification?.yearRange || "",
-      roonChecked: checked,
-      roonRejected: rejected.length,
-      roonCheckLimit: maxChecks,
-      generated: accepted.length + discarded.length,
-      kept: accepted.length,
-      discarded: discarded.length,
-      belowMinimumKept,
-      aboveMinimumKept,
-      minScoreSoftFallback: Boolean(minScore && belowMinimumKept)
-    }
-  };
-}
-
-function shouldRunRoonFirstRescue(result = {}) {
-  const tracks = Array.isArray(result.tracks) ? result.tracks : [];
-  if (tracks.length) return false;
-  const verification = result.verification || {};
-  if (verification.roonFirstRescue?.attempted) return false;
-  return Boolean(
-    verification.discoveryError ||
-    verification.roonRejected ||
-    verification.queryYield?.errorCount ||
-    verification.autoBroaden?.attempted ||
-    (Array.isArray(result.discarded) && result.discarded.length)
-  );
-}
-
-function tidalPlaylistBridgeResult(result = {}, requestedCount = 8) {
-  const tracks = mergeTrackLists(result.tracks || [], result.alternates || []);
-  const discarded = result.discarded || [];
-  const sourceStrategy = String(result.verification?.strategy || "");
-  const strategy = /roon-verified/i.test(sourceStrategy)
-    ? "tidal-catalog-playlist-bridge"
-    : (sourceStrategy || "tidal-catalog-playlist-bridge");
-  return {
-    ...result,
-    tracks,
-    alternates: [],
-    verification: {
-      ...(result.verification || {}),
-      strategy,
-      roonQueueable: false,
-      roonStrict: false,
-      queueBridge: "tidal-playlist",
-      queueBridgeReason: "Strict Roon verification skipped; use Send to TIDAL to create a playable TIDAL playlist.",
-      queueBridgeReady: tracks.some((track) => track?.tidal?.id || track?.tidalId || track?.tidal?.tidalUrl || track?.tidalUrl),
-      requested: Number(result.verification?.requested || result.requestedCount || requestedCount),
-      kept: tracks.length,
-      generated: Number(result.verification?.generated || (tracks.length + discarded.length)),
-      discarded: Number(result.verification?.discarded || discarded.length)
-    }
-  };
-}
-
-function compactDiagnosticText(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-
-function upsertDiagnosticBucket(buckets = [], label = "", count = 0, examples = []) {
-  const safeLabel = compactDiagnosticText(label) || "Other discarded";
-  const safeCount = Math.max(0, Number(count || 0));
-  if (!safeCount) return Array.isArray(buckets) ? buckets : [];
-
-  const next = Array.isArray(buckets) ? buckets.map((bucket) => ({ ...bucket })) : [];
-  const key = normalizeMatchText(safeLabel);
-  const index = next.findIndex((bucket) => normalizeMatchText(bucket.label) === key);
-  const normalizedExamples = (examples || [])
-    .map((item) => ({
-      label: compactDiagnosticText(item.label || [item.artist, item.title].filter(Boolean).join(" - ")) || "Unknown candidate",
-      reason: compactDiagnosticText(item.reason || "No reason provided")
-    }))
-    .filter((item) => item.label || item.reason)
-    .slice(0, 3);
-
-  if (index >= 0) {
-    const existing = next[index];
-    next[index] = {
-      ...existing,
-      count: Number(existing.count || 0) + safeCount,
-      examples: [...(Array.isArray(existing.examples) ? existing.examples : []), ...normalizedExamples].slice(0, 3)
-    };
-  } else {
-    next.push({
-      label: safeLabel,
-      count: safeCount,
-      examples: normalizedExamples
-    });
-  }
-
-  return next
-    .sort((left, right) => Number(right.count || 0) - Number(left.count || 0) || String(left.label || "").localeCompare(String(right.label || "")))
-    .slice(0, 8);
-}
-
-function syncFinalResultVerification(result = {}, requestedCount = 0) {
-  const tracks = Array.isArray(result.tracks) ? result.tracks : [];
-  const alternates = Array.isArray(result.alternates) ? result.alternates : [];
-  const discarded = Array.isArray(result.discarded) ? result.discarded : [];
-  const verification = result.verification || {};
-  const requested = Number(verification.requested || result.requestedCount || requestedCount || tracks.length || 0);
-  const minScore = Number(verification.minScore || 0);
-  const generated = Math.max(
-    Number(verification.generated || 0),
-    tracks.length + alternates.length + discarded.length
-  );
-  const belowMinimumKept = tracks.filter((track) => track.belowMinimum).length;
-  const belowMinimumAlternates = alternates.filter((track) => track.belowMinimum).length;
-  const aboveMinimumKept = minScore ? Math.max(0, tracks.length - belowMinimumKept) : tracks.length;
-  const review = verification.modelCandidateReview || {};
-  const audit = review.audit || {};
-  const rejected = Number(review.rejected || 0);
-  const rejectedKept = Number(review.rejectedKept || 0);
-  let poolDiagnostics = verification.poolDiagnostics;
-
-  if (poolDiagnostics && typeof poolDiagnostics === "object") {
-    const notes = Array.isArray(poolDiagnostics.notes) ? [...poolDiagnostics.notes] : [];
-    if (rejected) notes.push(`${rejected} candidate${rejected === 1 ? "" : "s"} removed by model review after initial pool scoring.`);
-    if (rejectedKept) notes.push(`${rejectedKept} model-flagged candidate${rejectedKept === 1 ? "" : "s"} kept because the run would otherwise undershoot the requested count.`);
-
-    poolDiagnostics = {
-      ...poolDiagnostics,
-      requested,
-      generated,
-      kept: tracks.length,
-      alternates: alternates.length,
-      discarded: discarded.length,
-      retainedPool: tracks.length + alternates.length,
-      buckets: rejected
-        ? upsertDiagnosticBucket(poolDiagnostics.buckets, "Model rejected", rejected, audit.rejected || [])
-        : (Array.isArray(poolDiagnostics.buckets) ? poolDiagnostics.buckets : []),
-      notes: Array.from(new Set(notes.filter(Boolean)))
-    };
-  }
-
-  return {
-    ...result,
-    tracks,
-    alternates,
-    discarded,
-    verification: {
-      ...verification,
-      requested,
-      generated,
-      kept: tracks.length,
-      discarded: discarded.length,
-      belowMinimumKept,
-      belowMinimumAlternates,
-      aboveMinimumKept,
-      minScoreSoftFallback: Boolean(minScore && belowMinimumKept),
-      ...(poolDiagnostics ? { poolDiagnostics } : {})
-    }
-  };
-}
-
-function roonFirstResultIsEnough(result = {}, requestedCount = 8) {
-  const kept = Array.isArray(result.tracks) ? result.tracks.length : 0;
-  const requested = Math.max(1, Math.min(40, Number(requestedCount || 8)));
-  const threshold = Math.min(requested, Math.max(6, Math.ceil(requested * 0.65)));
-  return kept >= threshold;
-}
-
-function roonFirstSearchSettings(targetCount = 8, deepRoonSearch = false) {
-  const target = Math.max(1, Math.min(40, Number(targetCount || 8)));
-  if (deepRoonSearch) {
-    return {
-      candidateLimit: Math.min(1200, Math.max(target * 90, 750)),
-      candidateLimitMax: 1500,
-      maxQueries: Math.min(64, Math.max(36, target * 4)),
-      searchLimit: 120,
-      searchSummaryLimit: 48,
-      enableArtistCrawl: true,
-      artistCrawlSeedLimit: 4,
-      artistCrawlCandidateLimit: Math.min(220, Math.max(target * 16, 120)),
-      artistCrawlMaxMs: 10_000,
-      artistCrawlTrackContainers: 2,
-      artistCrawlAlbumContainers: 2,
-      artistCrawlAlbumsPerArtist: 2,
-      artistCrawlSimilarSeeds: 4,
-      artistCrawlSimilarPerSeed: 2,
-      artistCrawlTrackLoadCount: 60,
-      artistCrawlAlbumLoadCount: 24,
-      artistCrawlSimilarLoadCount: 20,
-      artistFallbackSearchLimit: 70,
-      verifyQueueActions: "",
-      modelQueryLimit: 0
-    };
-  }
-
-  return {
-    candidateLimit: Math.min(180, Math.max(target * 10, target + 70)),
-    candidateLimitMax: 240,
-    maxQueries: Math.min(20, Math.max(12, target + 8)),
-    searchLimit: 70,
-    searchSummaryLimit: 24,
-    enableArtistCrawl: true,
-    artistCrawlSeedLimit: 2,
-    artistCrawlCandidateLimit: Math.min(120, Math.max(target * 10, 60)),
-    artistCrawlMaxMs: 5_000,
-    artistCrawlTrackContainers: 1,
-    artistCrawlAlbumContainers: 1,
-    artistCrawlAlbumsPerArtist: 2,
-    artistCrawlSimilarSeeds: 3,
-    artistCrawlSimilarPerSeed: 2,
-    artistCrawlTrackLoadCount: 50,
-    artistCrawlAlbumLoadCount: 24,
-    artistCrawlSimilarLoadCount: 20,
-    artistFallbackSearchLimit: 50,
-    verifyQueueActions: "",
-    modelQueryLimit: 0
-  };
-}
-
-async function runRoonFirstRescue(baseResult = {}, options = {}, requestedCount = 8, budgets = {}, reason = "") {
-  if (!options.zoneId) return baseResult;
-
-  const deepRoonSearch = /^(1|true|yes)$/i.test(String(options.deepRoonSearch || ""));
-  const rescueBudgetMs = deepRoonSearch
-    ? Math.max(30_000, Math.min(38_000, Number(budgets.roonFirstTimeoutMs || 35_000)))
-    : Math.max(14_000, Math.min(20_000, Number(budgets.roonFirstTimeoutMs || 16_000)));
-  const rescueScoringBudgetMs = deepRoonSearch
-    ? Math.max(10_000, Math.min(16_000, Math.floor(rescueBudgetMs / 2)))
-    : Math.max(6_000, Math.min(10_000, Math.floor(rescueBudgetMs / 2)));
-  const targetCount = Math.max(1, Math.min(40, Number(requestedCount || parseRequestedCount(options) || 8)));
-  const searchSettings = roonFirstSearchSettings(targetCount, deepRoonSearch);
-  const verifiedReleaseRequired = releaseFilterRequiresVerification(options, yearRangeUtil.parseYearRange(options));
-  const rescueOptions = {
-    ...options,
-    reference: "",
-    llmSearchPlan: null,
-    llmCandidates: [],
-    disableRoonLabelQueries: "true",
-    allowRoonYearUnverifiedFallback: verifiedReleaseRequired ? "false" : "true"
-  };
-  let roonFirst = null;
-  let decorated = null;
-
-  try {
-    roonFirst = await withTimeout(
-      roon.discoverQueueableTracks(rescueOptions, options.zoneId, {
-        targetCount,
-        ...searchSettings
-      }),
-      rescueBudgetMs,
-      deepRoonSearch ? "Deep Roon-first rescue took too long." : "Roon-first rescue took too long."
-    );
-
-    decorated = await withTimeout(
-      decorateRoonFirstResult(roonFirst, rescueOptions),
-      rescueScoringBudgetMs,
-      deepRoonSearch ? "Deep Roon-first rescue scoring took too long." : "Roon-first rescue scoring took too long."
-    );
-
-    if (!decorated.tracks?.length) {
-      return {
-        ...baseResult,
-        discarded: [...(baseResult.discarded || []), ...(decorated.discarded || [])],
-        verification: {
-          ...(baseResult.verification || {}),
-          ...(decorated.verification?.artistCrawl ? { artistCrawl: decorated.verification.artistCrawl } : {}),
-          ...(!decorated.verification?.artistCrawl && roonFirst.verification?.artistCrawl ? { artistCrawl: roonFirst.verification.artistCrawl } : {}),
-          roonFirstRescue: {
-            attempted: true,
-            reason,
-            phase: deepRoonSearch ? "deep" : "quick",
-            deep: deepRoonSearch,
-            kept: 0,
-            candidates: decorated.verification?.freshRoonCandidates || roonFirst.verification?.candidates || 0,
-            searches: roonFirst.verification?.searches || 0,
-            candidateLimit: searchSettings.candidateLimit,
-            searchLimit: searchSettings.searchLimit,
-            maxQueries: searchSettings.maxQueries,
-            previousHeldBack: decorated.verification?.previouslySuggestedHeldBack || 0,
-            error: ""
-          }
-        }
-      };
-    }
-
-    const discarded = [...(baseResult.discarded || []), ...(decorated.discarded || [])];
-    return {
-      ...decorated,
-      discarded,
-      verification: {
-        ...(baseResult.verification || {}),
-        ...(decorated.verification || {}),
-        strategy: "roon-first-rescue-after-tidal",
-        roonQueueable: true,
-        roonStrict: true,
-        generated: decorated.tracks.length + discarded.length,
-        kept: decorated.tracks.length,
-        discarded: discarded.length,
-        originalTidalStrategy: baseResult.verification?.strategy || "",
-        originalTidalDiscoveryError: baseResult.verification?.discoveryError || "",
-        queryYield: baseResult.verification?.queryYield || decorated.verification?.queryYield,
-        autoBroaden: baseResult.verification?.autoBroaden || decorated.verification?.autoBroaden,
-        modelCandidateReview: baseResult.verification?.modelCandidateReview || decorated.verification?.modelCandidateReview,
-        roonFirstRescue: {
-          attempted: true,
-          reason,
-          phase: deepRoonSearch ? "deep" : "quick",
-          deep: deepRoonSearch,
-          kept: decorated.tracks.length,
-          candidates: decorated.verification?.freshRoonCandidates || roonFirst.verification?.candidates || 0,
-          searches: roonFirst.verification?.searches || 0,
-          candidateLimit: searchSettings.candidateLimit,
-          searchLimit: searchSettings.searchLimit,
-          maxQueries: searchSettings.maxQueries,
-          previousHeldBack: decorated.verification?.previouslySuggestedHeldBack || 0,
-          queueActionPresumed: Boolean(roonFirst.verification?.roonQueueActionPresumed),
-          yearUnverifiedFallback: Boolean(decorated.verification?.roonYearUnverifiedFallback),
-          yearUnverifiedFallbackCount: Number(decorated.verification?.roonYearUnverifiedFallbackCount || 0),
-          error: ""
-        }
-      }
-    };
-  } catch (error) {
-    if (roonFirst && mergeTrackLists(roonFirst.tracks, roonFirst.alternates).length) {
-      decorated = decorateRoonFirstTimeoutFallback(roonFirst, rescueOptions, error);
-      const discarded = [...(baseResult.discarded || []), ...(decorated.discarded || [])];
-      if (decorated.tracks?.length) {
-        return {
-          ...decorated,
-          discarded,
-          verification: {
-            ...(baseResult.verification || {}),
-            ...(decorated.verification || {}),
-            strategy: "roon-first-rescue-after-tidal",
-            roonQueueable: true,
-            roonStrict: true,
-            generated: decorated.tracks.length + discarded.length,
-            kept: decorated.tracks.length,
-            discarded: discarded.length,
-            originalTidalStrategy: baseResult.verification?.strategy || "",
-            originalTidalDiscoveryError: baseResult.verification?.discoveryError || "",
-            queryYield: baseResult.verification?.queryYield || decorated.verification?.queryYield,
-            autoBroaden: baseResult.verification?.autoBroaden || decorated.verification?.autoBroaden,
-            modelCandidateReview: baseResult.verification?.modelCandidateReview || decorated.verification?.modelCandidateReview,
-            roonFirstRescue: {
-              attempted: true,
-              reason,
-              phase: deepRoonSearch ? "deep" : "quick",
-              deep: deepRoonSearch,
-              kept: decorated.tracks.length,
-              candidates: decorated.verification?.freshRoonCandidates || roonFirst.verification?.candidates || 0,
-              searches: roonFirst.verification?.searches || 0,
-              candidateLimit: searchSettings.candidateLimit,
-              searchLimit: searchSettings.searchLimit,
-              maxQueries: searchSettings.maxQueries,
-              previousHeldBack: decorated.verification?.previouslySuggestedHeldBack || 0,
-              queueActionPresumed: Boolean(roonFirst.verification?.roonQueueActionPresumed),
-              yearUnverifiedFallback: Boolean(decorated.verification?.roonYearUnverifiedFallback),
-              yearUnverifiedFallbackCount: Number(decorated.verification?.roonYearUnverifiedFallbackCount || 0),
-              scoringFallback: true,
-              error: error.message
-            }
-          }
-        };
-      }
-
-      return {
-        ...baseResult,
-        discarded,
-        verification: {
-          ...(baseResult.verification || {}),
-          ...(decorated.verification?.artistCrawl ? { artistCrawl: decorated.verification.artistCrawl } : {}),
-          ...(!decorated.verification?.artistCrawl && roonFirst.verification?.artistCrawl ? { artistCrawl: roonFirst.verification.artistCrawl } : {}),
-          roonFirstScoringFallback: true,
-          roonFirstScoringError: error.message,
-          roonFirstRescue: {
-            attempted: true,
-            reason,
-            phase: deepRoonSearch ? "deep" : "quick",
-            deep: deepRoonSearch,
-            kept: 0,
-            candidates: decorated.verification?.freshRoonCandidates || roonFirst.verification?.candidates || 0,
-            searches: roonFirst.verification?.searches || 0,
-            candidateLimit: searchSettings.candidateLimit,
-            searchLimit: searchSettings.searchLimit,
-            maxQueries: searchSettings.maxQueries,
-            previousHeldBack: decorated.verification?.previouslySuggestedHeldBack || 0,
-            scoringFallback: true,
-            error: error.message
-          }
-        }
-      };
-    }
-
-    return {
-      ...baseResult,
-      verification: {
-        ...(baseResult.verification || {}),
-        roonFirstRescue: {
-          attempted: true,
-          reason,
-          phase: deepRoonSearch ? "deep" : "quick",
-          deep: deepRoonSearch,
-          kept: 0,
-          candidates: 0,
-          searches: 0,
-          candidateLimit: searchSettings.candidateLimit,
-          searchLimit: searchSettings.searchLimit,
-          maxQueries: searchSettings.maxQueries,
-          error: error.message
-        }
-      }
-    };
-  }
-}
-
-async function runFreshRoonRescue(baseResult = {}, options = {}, requestedCount = 8, budgets = {}, reason = "") {
-  const quick = await runRoonFirstRescue(baseResult, options, requestedCount, budgets, reason);
-  if (roonFirstResultIsEnough(quick, requestedCount)) return quick;
-
-  const quickKept = Array.isArray(quick.tracks) ? quick.tracks.length : 0;
-  const quickRescue = quick.verification?.roonFirstRescue || {};
-  const deepReason = `${reason} Deep fresh Roon search after quick pass kept ${quickKept}.`;
-  const deep = await runRoonFirstRescue(
-    quick,
-    {
-      ...options,
-      deepRoonSearch: "true"
-    },
-    requestedCount,
-    {
-      ...budgets,
-      roonFirstTimeoutMs: Math.max(45_000, Number(budgets.roonFirstTimeoutMs || 0))
-    },
-    deepReason
-  );
-  const deepKept = Array.isArray(deep.tracks) ? deep.tracks.length : 0;
-  const selected = deepKept >= quickKept ? deep : quick;
-  selected.verification = {
-    ...(selected.verification || {}),
-    roonFirstRescue: {
-      ...(selected.verification?.roonFirstRescue || {}),
-      quickKept,
-      quickSearches: quickRescue.searches || 0,
-      deepAttempted: true
-    }
-  };
-  return selected;
 }
 
 async function tidalMixesResponse({ force = false } = {}) {
@@ -3995,7 +994,18 @@ async function handleApi(req, res, url) {
     }));
     clients.add(res);
     res.write(`data: ${JSON.stringify(eventPayload())}\n\n`);
-    req.on("close", () => clients.delete(res));
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(`: heartbeat ${Date.now()}\n\n`);
+      } catch {
+        clearInterval(heartbeat);
+        clients.delete(res);
+      }
+    }, EVENT_STREAM_HEARTBEAT_MS);
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      clients.delete(res);
+    });
     return;
   }
 
@@ -4034,9 +1044,30 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, await llmHealth());
   }
 
+  if (req.method === "GET" && pathname === "/api/model/status") {
+    if (url.searchParams.get("refresh") && modelRouter) {
+      await modelRouter.refreshSynapseStatus({ timeoutMs: config.ai.openai.healthTimeoutMs });
+    }
+    return sendJson(res, 200, {
+      local: await llmHealth(),
+      ai: modelRouter ? modelRouter.status() : null
+    });
+  }
+
+  if (req.method === "GET" && pathname === "/api/model/synapse/status") {
+    return sendJson(res, 200, modelRouter
+      ? await modelRouter.refreshSynapseStatus({ timeoutMs: config.ai.openai.healthTimeoutMs })
+      : { connected: false, state: "not_configured", lastError: "Model router is not initialized." });
+  }
+
+  if (req.method === "GET" && pathname === "/api/pc-monitor") {
+    return sendJson(res, 200, await pcMonitorSnapshot());
+  }
+
   if (req.method === "GET" && pathname === "/api/tidal/oauth/start") {
     try {
-      const authorizeUrl = tidalProfileMixes.auth.createAuthorizationUrl();
+      const redirectUri = tidalOAuthRedirectUriForRequest(req);
+      const authorizeUrl = tidalProfileMixes.auth.createAuthorizationUrl({ redirectUri });
       res.writeHead(302, { location: authorizeUrl });
       res.end();
       return;
@@ -4067,7 +1098,7 @@ async function handleApi(req, res, url) {
       return sendHtml(res, 200, oauthPage({
         title: "Connect TIDAL Profile",
         message: "Open the authorization start URL below. After you approve Rabbit Hole in TIDAL, this callback will save a refreshable profile token locally.",
-        details: `${getNetworkUrls()[0]}/api/tidal/oauth/start`
+        details: `${requestOrigin(req) || getNetworkUrls()[0]}/api/tidal/oauth/start`
       }));
     }
 
@@ -4146,7 +1177,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && pathname === "/api/standby") {
-    return sendJson(res, 200, standbyStore.summary());
+    return sendJson(res, 200, standbyFreshSummary());
   }
 
   if (req.method === "GET" && pathname === "/api/lastfm/status") {
@@ -4184,10 +1215,101 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, await tidalMixesResponse({ force: true }));
   }
 
+  if (req.method === "DELETE" && pathname === "/api/tidal/playlist") {
+    const body = await readJson(req);
+    return sendJson(res, 200, await tidalProfileMixes.deletePlaylist(body.playlistId || body.playlist_id || body.id || "", {
+      title: body.title || body.name || ""
+    }));
+  }
+
+  if (req.method === "DELETE" && pathname === "/api/roon/playlist") {
+    const body = await readJson(req);
+    const result = await roon.deletePlaylist(body.itemKey || body.item_key || body.id || "", body.title || body.name || "", {
+      zoneId: body.zoneId || body.zone_id || ""
+    });
+    if (result.deleted) scheduleBroadcast();
+    return sendJson(res, 200, result);
+  }
+
   if (req.method !== "POST") return sendJson(res, 405, { error: "Method not allowed" });
 
   let body = await readJson(req);
+  if (pathname === "/api/model/mode") {
+    if (!modelRouter) return sendJson(res, 503, { error: "Model router is not initialized." });
+    if (body.mode) modelRouter.setMode(body.mode);
+    if (body.tier) modelRouter.setSynapseTier(body.tier);
+    if (body.model) modelRouter.setOpenAiModel(body.model, body.tier || body.mode || "");
+    if (body.refreshSynapse) await modelRouter.refreshSynapseStatus({ timeoutMs: config.ai.openai.healthTimeoutMs });
+    scheduleBroadcast();
+    return sendJson(res, 200, {
+      local: await llmHealth(),
+      ai: modelRouter.status()
+    });
+  }
+  if (pathname === "/api/memory/synapse") return sendJson(res,200,{...memory.stats(),...memory.read()});
+  if (pathname === "/api/memory/synapse/save") return sendJson(res,200,memory.upsert(body));
+  if (pathname === "/api/memory/synapse/forget") return sendJson(res,200,memory.forget(body.id));
+  if (pathname === "/api/memory/synapse/import") return sendJson(res,200,{imported:memory.import(body.content).length});
+  if (pathname === "/api/memory/synapse/context") return sendJson(res,200,{entries:memory.retrieve(body.query||""),context:memory.context(body.query||"")});
+  if (pathname === "/api/model/chat") {
+    if (!modelRouter) return sendJson(res, 503, { error: "Model router is not initialized." });
+    const message = String(body.message || body.prompt || "").trim();
+    if (!message) return sendJson(res, 400, { error: "Message is required." });
+    const result = await modelRouter.respond({
+      message,
+      mode: body.mode || "",
+      tier: body.tier || "",
+      model: body.model || ""
+    });
+    scheduleBroadcast();
+    return sendJson(res, 200, result);
+  }
+  if (pathname === "/api/tracks/verify" || pathname === "/api/tracks/verify-exact") {
+    return sendJson(res, 200, await runExactVerification(body));
+  }
+  if (pathname === "/api/tracks/verified") {
+    return sendJson(res, 200, lastExactVerification || { mode: "exact_track_verification", tracks: [], usable: [] });
+  }
+  if (pathname === "/api/tracks/verified/resolve-roon") {
+    const result = await resolveVerifiedTracksForRoon(lastExactVerification, body, {
+      roon, logger: entry => console.log("[exact-roon]", JSON.stringify(entry)),
+      bridge: exactRoonBridge,
+      save: result => { if (lastExactVerification === result) exactVerificationStore.save(result); }
+    });
+    recordBridgeSyncAlert(result);
+    latestResultSource = "exact_verification";
+    scheduleBroadcast();
+    return sendJson(res, 200, result);
+  }
+  if (pathname === "/api/roon/exact-bridge/pending") {
+    return sendJson(res, 200, exactRoonBridge.listPending());
+  }
+  if (pathname === "/api/roon/exact-bridge/pending/retry") {
+    if (!body.zoneId) {
+      body.zoneId = defaultRoonZoneId();
+    }
+    const result = await exactRoonBridge.retryPending(body);
+    recordBridgeSyncAlert(result);
+    scheduleBroadcast();
+    return sendJson(res, 200, result);
+  }
+  if (pathname === "/api/tracks/verified/queue" || pathname === "/api/tracks/verified/playlist") {
+    const tracks = (lastExactVerification?.usable || []).slice(0, Math.max(1, Math.min(40, Number(body.count || 40))));
+    if (!tracks.length) return sendJson(res, 400, { error: "No exact verified tracks. Run verify_tracks first." });
+    if (pathname.endsWith("/queue")) {
+      const result = await queueExactTracks(lastExactVerification, body, roon, {
+        bridge: exactRoonBridge,
+        save: result => { if (lastExactVerification === result) exactVerificationStore.save(result); }
+      });
+      recordBridgeSyncAlert(result);
+      latestResultSource = "exact_verification";
+      scheduleBroadcast();
+      return sendJson(res, 200, result);
+    }
+    return sendJson(res, 200, await tidalProfileMixes.createQueuePlaylist(tracks, { title: body.title || "Rabbit Hole Verified Tracks", description: body.description || "Exact verified tracks" }));
+  }
   if (pathname === "/api/standby/refresh") {
+    latestResultSource = "standby";
     return sendJson(res, 200, await refreshStandbyPool({
       force: true,
       reason: standbyCleanText(body.reason || "manual") || "manual",
@@ -4235,6 +1357,8 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, await roon.changeVolume(body.outputId, body.how || "relative_step", Number(body.value || 0)));
   }
   if (pathname === "/api/ai/playlist") {
+    const intent = exactIntent(body);
+    if (intent) return sendJson(res, 200, await runExactVerification({ ...body, tracks: intent.tracks }));
     body = withNormalizedYearFilter(body);
     body.scoringMode = normalizeScoringMode(body);
     body = genreProfileStore.augmentOptions(body);
@@ -4265,7 +1389,13 @@ async function handleApi(req, res, url) {
     } else {
       try {
         modelResult = await withTimeout(
-          generateSearchPlan(config, effectiveBody),
+          modelRouter
+            ? modelRouter.generateSearchPlan(
+              effectiveBody,
+              (planOptions, planTimeoutMs) => generateSearchPlan(config, planOptions, planTimeoutMs),
+              budgets.modelTimeoutMs
+            )
+            : generateSearchPlan(config, effectiveBody, budgets.modelTimeoutMs),
           budgets.modelTimeoutMs,
           "The local model took too long to answer."
         );
@@ -4336,11 +1466,17 @@ async function handleApi(req, res, url) {
         similarArtistExpansion: searchBody.similarArtistExpansion || null
       };
       if (enough || tidalUnhealthy) {
-        discoveryHistory.record(roonPreflight.tracks || []);
-        trackMemory.record([...(roonPreflight.tracks || []), ...(roonPreflight.alternates || [])]);
-        sessionStore.save(body, roonPreflight);
+        const guardedPreflight = syncFinalResultVerification(
+          suppressPreviouslySuggestedResultTracks(roonPreflight, searchBody),
+          requestedCount
+        );
+        voiceExecution.check();
+        discoveryHistory.record(guardedPreflight.tracks || []);
+        trackMemory.record([...(guardedPreflight.tracks || []), ...(guardedPreflight.alternates || [])]);
+        sessionStore.save(body, guardedPreflight);
+        latestResultSource = "discovery";
         scheduleBroadcast();
-        return sendJson(res, 200, roonPreflight);
+        return sendJson(res, 200, guardedPreflight);
       }
       roonFirst = roonPreflight;
       roonFirstError = `Roon-first preflight kept ${preflightTracks}; continuing to TIDAL catalogue expansion.`;
@@ -4427,12 +1563,13 @@ async function handleApi(req, res, url) {
       modelPlanQueryCount: modelResult?.plan?.searchQueries?.length || 0,
       modelPlan: modelResult?.plan || null,
       modelError,
-      modelProvider: config.llmProvider,
-      modelName: config.llmProvider === "openrouter"
+      modelProvider: modelResult?.routing?.provider || config.llmProvider,
+      modelName: modelResult?.routing?.model || (config.llmProvider === "openrouter"
         ? config.openRouterModel
         : (OPENAI_COMPATIBLE_PROVIDERS.has(config.llmProvider)
           ? config.openAiCompatibleModel
-          : config.ollamaModel),
+          : config.ollamaModel)),
+      modelRouting: modelResult?.routing || null,
       modelSkipped,
       roonFirstKept: roonFirst.tracks.length,
       roonFirstError,
@@ -4473,6 +1610,7 @@ async function handleApi(req, res, url) {
       ...(discovered.verification || {}),
       modelCandidateReview
     };
+    discovered = rebalanceDiscoveryResult(discovered, searchBody, searchProfile, requestedCount);
     discovered = syncFinalResultVerification(discovered, requestedCount);
     let result = null;
     if (strictRoonMode) {
@@ -4499,9 +1637,16 @@ async function handleApi(req, res, url) {
       );
       result = syncFinalResultVerification(result, requestedCount);
     }
+    result = syncFinalResultVerification(
+      suppressPreviouslySuggestedResultTracks(result, searchBody),
+      requestedCount
+    );
+    voiceExecution.check();
     discoveryHistory.record(result.tracks || []);
     trackMemory.record([...(result.tracks || []), ...(result.alternates || [])]);
     sessionStore.save(body, result);
+    latestResultSource = "discovery";
+    recordBridgeSyncAlert(result);
     scheduleBroadcast();
     return sendJson(res, 200, result);
   }
@@ -4521,13 +1666,17 @@ async function handleApi(req, res, url) {
   if (pathname === "/api/feedback") {
     const rating = normalizeRating(body.rating);
     const feedbackTrack = feedbackTrackWithSessionContext(body.track || {}, rating);
-    const result = tasteProfile.record(feedbackTrack, rating, feedbackCalibrationContext(feedbackTrack, body));
-    const session = sessionStore.read();
-    const genreProfiles = genreProfileStore.recordFeedback(session.options || {}, feedbackTrack, rating);
-    sessionStore.updateFeedback(feedbackTrack, rating);
-    trackMemory.updateFeedback(feedbackTrack, rating);
+    const result = recordFeedbackAcrossStores({
+      rating,
+      track: feedbackTrack,
+      calibrationContext: feedbackCalibrationContext(feedbackTrack, body),
+      tasteProfile,
+      genreProfileStore,
+      sessionStore,
+      trackMemory
+    });
     scheduleBroadcast();
-    return sendJson(res, 200, { ...result, genreProfiles });
+    return sendJson(res, 200, result);
   }
   if (pathname === "/api/roon/playlist-tracks") {
     return sendJson(res, 200, await roon.loadPlaylistTracks(body.itemKey, body.title));
@@ -4573,7 +1722,11 @@ async function handleApi(req, res, url) {
   if (pathname === "/api/tidal/playlist-track") {
     const resolved = await resolveTidalTrackForPlaylist(body.track || {});
     const result = await tidalProfileMixes.addTrackToPlaylist(body.playlistId || body.playlist_id || "", resolved.track, {
-      playlistTitle: body.playlistTitle || body.playlist_title || ""
+      playlistTitle: body.playlistTitle || body.playlist_title || "",
+      allowDuplicate: booleanFlag(body.allowDuplicate || body.allow_duplicate),
+      checkDuplicate: body.checkDuplicate === undefined && body.check_duplicate === undefined
+        ? true
+        : booleanFlag(body.checkDuplicate || body.check_duplicate)
     });
     return sendJson(res, 200, {
       ...result,
@@ -4614,7 +1767,8 @@ async function handleApi(req, res, url) {
             track,
             isAlternate,
             action: result.action || "",
-            match: roonMatchSummary(result.match)
+            match: roonMatchSummary(result.match),
+            resolutionMethod: result.resolutionMethod || '', albumFallback: result.albumFallback || null
           });
         } else {
           failed.push({
@@ -4622,6 +1776,7 @@ async function handleApi(req, res, url) {
             track,
             isAlternate,
             reason: result.reason || "No usable queue action.",
+            resolutionMethod: result.resolutionMethod || '', albumFallback: result.albumFallback || null,
             match: roonMatchSummary(result.match),
             actions: result.actions || []
           });
@@ -4642,13 +1797,44 @@ async function handleApi(req, res, url) {
       failed
     });
   }
+  if (pathname === "/api/tracks/supplied/queue") {
+    const result = await externalTrackQueue.queue(body);
+    scheduleBroadcast();
+    return sendJson(res, 200, result);
+  }
+  if (pathname === "/api/roon/direct/queue" || pathname === "/api/roon/direct/search") {
+    if (!body.zoneId) {
+      body.zoneId = defaultRoonZoneId();
+    }
+    const result = pathname.endsWith('/search') ? await directRoonQueue.search(body) : await directRoonQueue.queue(body);
+    recordBridgeSyncAlert(result);
+    scheduleBroadcast();
+    return sendJson(res, 200, result);
+  }
   if (pathname === "/api/roon/queue-tracks") {
     const result = await roon.queueTracks(body.tracks || [], body.zoneId, {
       mode: body.mode || "append",
       alternates: body.alternates || [],
       targetCount: body.targetCount,
-      preferExtendedMixes: booleanFlag(body.preferExtendedMixes || body.prefer_extended_mixes)
+      preferExtendedMixes: booleanFlag(body.preferExtendedMixes || body.prefer_extended_mixes),
+      matchPolicy: body.matchPolicy || (booleanFlag(body.allowBridge) ? "strict" : ""),
+      allowBridge: booleanFlag(body.allowBridge),
+      bridgeSyncDelaysMs: body.bridgeSyncDelaysMs,
+      bridgeLookupTimeoutMs: body.bridgeLookupTimeoutMs
     });
+    try {
+      queueAttemptStore.record({ request: body, result, source: req.headers["x-rabbit-hole-caller"] || "" });
+    } catch (error) {
+      console.error("[queue-attempts] Persistence failed:", error.message);
+    }
+    if (Array.isArray(result.failed) && result.failed.length) {
+      try {
+        standbyStore.retainQueueFailures(result.failed, { source: body.source || req.headers["x-rabbit-hole-caller"] || "queue-tracks" });
+      } catch (error) {
+        console.error("[standby-queue-failures] Persistence failed:", error.message);
+      }
+    }
+    recordBridgeSyncAlert(result);
     scheduleBroadcast();
     return sendJson(res, 200, result);
   }
@@ -4661,11 +1847,48 @@ async function handleApi(req, res, url) {
   sendJson(res, 404, { error: "Unknown API route" });
 }
 
+const rabbitHoleMcpBaseUrl = process.env.RABBIT_HOLE_MCP_BASE_URL || `http://${formatInternalHttpHost(config.host)}:${config.port}`;
+const rabbitHoleMcpTools = createRabbitHoleMcpTools({
+  baseUrl: rabbitHoleMcpBaseUrl,
+  timeoutMs: process.env.RABBIT_HOLE_MCP_TIMEOUT_MS || 120_000
+});
+
+memory.refreshSources = () => {
+  const profile=tasteProfile.read();
+  const signals=Object.values(profile.artists||{}).sort((a,b)=>Math.abs(b.score)-Math.abs(a.score)).slice(0,20);
+  const labels=Object.values(profile.labels||{}).sort((a,b)=>Math.abs(b.score)-Math.abs(a.score)).slice(0,10);
+  if(signals.length||labels.length) memory.sync("rabbit_hole_taste", "Learned music taste (positive score = liked, negative = disliked): artists "+signals.map(e=>`${e.name}: ${e.score}`).join(", ")+". Labels: "+labels.map(e=>`${e.name}: ${e.score}`).join(", "),"user_preferences");
+  const history=standbyStore.read().standbyHistory||[];
+  if(history.length) memory.sync("rabbit_hole_standby", "Recent standby music exposure: "+history.slice(-3).flatMap(h=>h.tracks.slice(0,8).map(t=>`${t.artist} — ${t.title} (rank ${t.rank})`)).join("; ").slice(0,3500));
+};
+memory.refreshSources();
+modelRouter = createModelRouter({
+  memory,
+  config,
+  tools: rabbitHoleMcpTools,
+  logger: console
+});
+
+const handleMcpHttp = createRabbitHoleMcpHttpHandler({
+  baseUrl: rabbitHoleMcpBaseUrl,
+  token: process.env.RABBIT_HOLE_MCP_TOKEN || "",
+  serverVersion: require("../package.json").version,
+  tools: rabbitHoleMcpTools
+});
+
+const handleVoice = createVoiceApi({ tools: rabbitHoleMcpTools, router: modelRouter,
+  availability: () => ({ synapseAvailable: Boolean(config.ai.openai.enabled && config.ai.openai.apiKey), localAvailable: Boolean(config.openAiCompatibleBaseUrl || config.ollamaBaseUrl) }) });
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
-    if (url.pathname.startsWith("/api/")) {
-      await handleApi(req, res, url);
+    if (url.pathname.startsWith("/api/voice/")) {
+      await handleVoice(req, res, url);
+    } else if (["/mcp", "/mcp/", "/rabbitholemcp/mcp", "/rabbitholemcp/mcp/"].includes(url.pathname)) {
+      await handleMcpHttp(req, res, url);
+    } else if (url.pathname.startsWith("/api/")) {
+      const voiceContext = voiceExecution.fromHeader(req.headers["x-rabbit-hole-voice-execution"]);
+      await voiceExecution.run(voiceContext, async () => { voiceExecution.check(); await handleApi(req, res, url); });
     } else {
       serveStatic(req, res, url.pathname);
     }

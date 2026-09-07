@@ -1,6 +1,6 @@
 # The Rabbit Hole - Project Status
 
-Last updated: 2026-07-11
+Last updated: 2026-08-05
 
 This repo is the local Roon/TIDAL/LLM discovery app called **The Rabbit Hole**. It runs as a Node.js web app at `http://localhost:3777` and talks to:
 
@@ -50,6 +50,7 @@ For phone/tablet access, use the LAN/Tailscale URL shown in the app. The server 
 - Full-screen player mode, phone/tablet layout polish, larger artwork in landscape, and wake-lock support while in full-window player mode.
 - Roon queue actions: queue all, add all next, individual queue/add next/play, and title-first fallback search when an exact Roon match is hard to find.
 - TIDAL catalogue verification, metadata, artwork, release dates, and request timeout/circuit-breaker protection.
+- Asynchronous now-playing metadata enrichment for radio/local tracks. Roon metadata wins first; missing duration, release year, label, genre, album, and artwork can be filled from TIDAL and cached locally.
 - TIDAL profile OAuth with durable refresh token storage under ignored `data/tidal-profile-token.json`.
 - TIDAL profile Mixes & Radio page for official profile mixes exposed by the current OAuth API.
 - Pinned TIDAL items for hidden/mobile-only mix or radio URLs that the public OAuth API does not expose.
@@ -58,12 +59,13 @@ For phone/tablet access, use the LAN/Tailscale URL shown in the app. The server 
 - Artist radio refresh logic that avoids re-adding the exact same queued/recent tracks where possible.
 - Roon Radio page lists live radio stations, plays available stations, and supports local drag/tap reordering per radio folder.
 - Last.fm public history/taste connection.
-- Standby Discovery maintains a small background pool of ready-to-queue discoveries without clearing a full cache.
+- Standby Discovery maintains a small background pool of ready-to-queue discoveries and now filters previously suggested tracks out of the visible standby pool.
 - Feedback controls: Love, Good, OK, Wrong Genre, Skip, Never Again.
 - Live radio tracks can be rated and remembered as taste signals.
 - Rabbit Hole graph for current tracks, with cached artist/label/related-entity exploration.
 - WebMCP bridge exposes Rabbit Hole status/search/queue/TIDAL/feedback tools when a browser tool runtime is available.
 - Roon Presence companion improvements: current track appears in Discord presence, local file art fallback is improved, and HQPlayer filter/rate is read conservatively.
+- PC temperature badges in full-window player mode when the local monitor endpoint is available.
 
 ## Discovery Pipeline
 
@@ -77,9 +79,10 @@ Current intended flow:
 4. TIDAL catalogue searches generate candidate pools.
 5. Metadata, SEO, collision, date, duplicate, and wrong-genre filters prune the pool.
 6. Genre inference combines weak official tags with labels, artist relationships, prompt intent, Last.fm/history, and feedback.
-7. Discovery lane quotas keep a blend of core, adjacent, label, taste, and branch-out candidates.
-8. Roon verifies that final results are actually playable/queueable in the selected zone.
-9. The UI shows verified results, rejected counts, pool diagnostics, and queue outcomes.
+7. Discovery history and track identity aliases suppress repeats across TIDAL id, TIDAL URL, and normalized artist/title forms.
+8. Discovery lane quotas keep a blend of core, adjacent, label, taste, and branch-out candidates.
+9. Roon verifies that final results are actually playable/queueable in the selected zone.
+10. The UI shows verified results, rejected counts, pool diagnostics, and queue outcomes.
 
 Scoring modes:
 
@@ -106,25 +109,34 @@ Scoring modes:
 - Added radio station browser/play controls with local per-folder ordering.
 - Added genre-profile feedback learning for niche child genres so weakly known requests can be promoted or pruned over time.
 - Added a generated syntax-check runner so `npm run check` automatically covers new JS files under `src`, `public`, and `test`.
+- Added shared artist identity handling for collision-sensitive artists and provider artist ids.
+- Added now-playing metadata enrichment with persistent cache and bridged artwork fallback.
+- Added stricter TIDAL playlist duplicate checks and playlist write safeguards.
+- Added repeat suppression that recognizes tracks by TIDAL id, TIDAL URL, and normalized artist/title aliases.
+- Added final freshness guard before manual generation results are shown.
+- Changed standby refresh to replace the old candidate pool with a fresh pool instead of merging old high-score candidates back in.
 
 ## Known Issues / Watch Points
 
 - Discovery can still return fewer tracks than requested when strict year/date, novelty, Roon queueability, and minimum-score filters all collide.
+- Standby can go empty when the existing standby pool is all repeats and a fresh refresh cannot find enough unseen candidates. This is preferable to replaying stale tracks, but the next tuning pass should broaden standby's fresh-candidate sources.
 - TIDAL/Roon matching remains difficult. Roon may find a track manually but not expose the same queueable action through Browse API search.
 - Some TIDAL mobile-only shelves, especially the full Mixes & Radio shelf, appear to require legacy/private scopes not granted by normal third-party OAuth. Use pinned TIDAL URLs as a practical workaround.
 - Genre inference is improving but still needs real-world tuning. Official genre tags are often just `Electronic`, so label/artist/radio/taste evidence must stay visible in diagnostics.
-- Search can still over-focus on familiar artists if the prompt, seed, and learned taste all point to the same cluster. Lane quotas help but need more tuning.
+- Search can still over-focus on familiar artists if the prompt, seed, and learned taste all point to the same cluster. Lane quotas and artist identity memory help but need more tuning.
 - Date filters rely on catalogue metadata, which may reflect album/compilation date rather than original track release date.
 - Roon queue count/time can disagree with Roon's own UI around current-track filtering and queue subscription timing.
 - TIDAL OAuth refresh and playlist write behavior should be monitored after long idle periods.
+- Artwork comes from Roon first, then the local bridge/enrichment cache. If bridge-backed artwork fails, check `ROONPRESENCE_NOW_STATE_URL`, TIDAL token status, and metadata enrichment cache state.
 
 ## Verification Status
 
-Before this handoff pass:
+Most recent verification in this chat:
 
-- `npm run check` passed.
-- `npm test` passed with 178 tests.
+- `npm run check` passed: 55 JavaScript files.
+- `npm test` passed.
 - `npm audit --audit-level=moderate` found 0 vulnerabilities.
+- `git diff --check` passed.
 
 Run these again after any next change:
 
@@ -136,7 +148,14 @@ npm audit --audit-level=moderate
 
 ## Git State
 
-This handoff is intended to be committed and pushed after the final cleanup/docs update. If a push fails, check the remote:
+Current worktree contains uncommitted app, test, and docs changes. New files that must be added before commit include:
+
+- `src/artistIdentity.js`
+- `src/metadataEnrichmentService.js`
+- `test/discoveryHistory.test.js`
+- `test/metadataEnrichmentService.test.js`
+
+This handoff is intended to be committed and pushed after final verification. If a push fails, check the remote:
 
 ```powershell
 git remote -v

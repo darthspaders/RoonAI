@@ -24,6 +24,7 @@ test("query templates preserve genre shape while normalizing volatile years", ()
 
 test("rejection bucket separates SEO sludge from genre mismatch", () => {
   assert.equal(rejectionBucketForReason("SEO genre/date catalogue filler"), "seo");
+  assert.equal(rejectionBucketForReason("Audiobook chapter result, not a music track."), "seo");
   assert.equal(rejectionBucketForReason("Requested genre appears only in the search query"), "genre");
 });
 

@@ -11,7 +11,7 @@ const {
 
 const TIDAL_AUTHORIZE_URL = "https://login.tidal.com/authorize";
 const TIDAL_TOKEN_URL = "https://auth.tidal.com/v1/oauth2/token";
-const DEFAULT_SCOPES = "user.read playlists.read playlists.write recommendations.read collection.read search.read";
+const DEFAULT_SCOPES = "user.read playlists.read playlists.write recommendations.read collection.read collection.write search.read";
 const REFRESH_SKEW_MS = 90_000;
 
 function cleanText(value) {
@@ -79,6 +79,7 @@ class TidalProfileTokenStore {
       oauthState: {
         state: cleanText(state.state),
         codeVerifier: cleanText(state.codeVerifier),
+        redirectUri: cleanText(state.redirectUri),
         createdAtMs: Date.now()
       }
     };
@@ -153,17 +154,18 @@ class TidalProfileAuth {
     };
   }
 
-  createAuthorizationUrl() {
+  createAuthorizationUrl(options = {}) {
     if (!this.clientId) throw new Error("TIDAL_CLIENT_ID is required for profile authorization.");
+    const redirectUri = cleanText(options.redirectUri) || this.redirectUri;
     const state = randomToken(24);
     const codeVerifier = randomToken(48);
     const codeChallenge = sha256Base64Url(codeVerifier);
-    this.store.saveOAuthState({ state, codeVerifier });
+    this.store.saveOAuthState({ state, codeVerifier, redirectUri });
 
     const url = new URL(this.authorizationUrl);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("client_id", this.clientId);
-    url.searchParams.set("redirect_uri", this.redirectUri);
+    url.searchParams.set("redirect_uri", redirectUri);
     url.searchParams.set("scope", this.scopes);
     url.searchParams.set("state", state);
     url.searchParams.set("code_challenge", codeChallenge);
@@ -206,10 +208,11 @@ class TidalProfileAuth {
     if (!cleanCode) throw new Error("TIDAL authorization callback did not include a code.");
     const savedState = this.store.consumeOAuthState(state);
     if (!savedState) throw new Error("TIDAL authorization state expired or did not match. Start authorization again.");
+    const redirectUri = cleanText(savedState.redirectUri) || this.redirectUri;
     return this.postToken({
       grant_type: "authorization_code",
       code: cleanCode,
-      redirect_uri: this.redirectUri,
+      redirect_uri: redirectUri,
       code_verifier: savedState.codeVerifier
     }, "TIDAL profile authorization");
   }

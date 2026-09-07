@@ -36,6 +36,9 @@ src/server.js
   |-- src/discoveryEngine.js
   |     Candidate crawl, filtering, lane quotas, scoring, diagnostics
   |
+  |-- src/artistIdentity.js
+  |     Collision-safe artist identities and provider artist id handling
+  |
   |-- src/musicOntology.js
   |     Controlled genre/vibe/characteristic vocabulary and aliases
   |
@@ -47,6 +50,12 @@ src/server.js
   |
   |-- src/discoveryHistory.js / src/trackMemory.js
   |     Suggestion memory, novelty checks, rejected/wrong-genre history
+  |
+  |-- src/standbyCandidateStore.js
+  |     Background discovery pool, standby TTL, fresh-pool replacement
+  |
+  |-- src/metadataEnrichmentService.js
+  |     Async now-playing metadata/artwork enrichment cache
   |
   |-- src/savedPlaylist.js
   |     Multiple named candidate lists
@@ -75,6 +84,7 @@ The browser UI shows:
 - Now Playing tab
 - History Report tab
 - TIDAL Mixes & Radio / pinned TIDAL items page
+- Standby Discovery status and ready-to-queue candidates
 - Roon Output Zone picker
 - Now Playing player, full-window player, wake-lock support
 - Rating controls and wrong-genre feedback
@@ -106,6 +116,10 @@ Important endpoints include:
 - `POST /api/roon/queue-check`
 - `GET /api/roon/image/:imageKey`
 - `POST /api/rabbit-hole`
+- `GET /api/standby`
+- `POST /api/standby/refresh`
+- `POST /api/standby/clear`
+- `POST /api/standby/remove`
 - `GET /api/tidal/oauth/start`
 - `GET /api/tidal/oauth/callback`
 - `GET /api/tidal/mixes`
@@ -113,6 +127,8 @@ Important endpoints include:
 - `POST /api/tidal/pinned`
 - `POST /api/tidal/pinned/remove`
 - `POST /api/tidal/queue-playlist`
+- `POST /api/tidal/playlist-track`
+- `GET /api/pc-monitor`
 
 ## Roon Module
 
@@ -142,6 +158,25 @@ Roon matching is not just "is this in TIDAL". The app needs a Roon Browse API it
 
 TIDAL catalogue metadata is usually better than Roon search for candidate discovery, but Roon remains the playback layer unless the user uses the TIDAL playlist bridge.
 
+## Metadata Enrichment
+
+`src/metadataEnrichmentService.js` enriches now-playing tracks without blocking playback UI.
+
+Priority order:
+
+1. Use valid Roon metadata/artwork already present in now-playing state.
+2. If missing, use cached enrichment keyed by normalized artist/title.
+3. If cache is stale or absent, look up TIDAL asynchronously.
+4. Store successful duration, release year, album, label, genre, and artwork.
+5. Retry stale misses conservatively without hammering external services.
+
+Rules:
+
+- Roon metadata wins. Do not overwrite valid Roon fields.
+- Audio quality tags such as `HIRES_LOSSLESS` are not genres.
+- Enrichment below confidence threshold is cached as a miss and not displayed.
+- Artwork should be exposed through the local bridge where possible so Rabbit Hole and Roon Presence can consume the same stable URL.
+
 ## TIDAL Profile / Mixes
 
 `src/tidalProfileAuth.js` handles OAuth:
@@ -156,6 +191,18 @@ TIDAL catalogue metadata is usually better than Roon search for candidate discov
 `src/tidalPinnedMixes.js` stores user-pinned TIDAL URLs. This is the workaround for mobile-only shelves such as some Artist Radio cards that are visible in the TIDAL app but not exposed through current third-party OAuth.
 
 The TIDAL queue bridge creates/updates a temporary TIDAL playlist from generated or saved candidates so the user can open/import/queue the list in TIDAL or Roon. It should be treated as a convenience bridge, not the source of truth for discovery quality.
+
+## Standby Discovery
+
+`src/standbyCandidateStore.js` stores a small background pool of discovery candidates so the user can queue something quickly.
+
+Important behavior:
+
+- Candidates have a TTL and are sorted by score/update time.
+- The visible standby summary filters out tracks already present in discovery history.
+- Successful refreshes replace the old standby pool instead of merging old high-score candidates back in.
+- If every stored standby candidate is already known, the visible pool can be empty until a fresh refresh finds new tracks.
+- Standby should broaden sources when it undershoots, but it should not silently recycle old suggestions unless the user explicitly asks for repeats.
 
 ## LLM Module
 
@@ -186,6 +233,8 @@ The model should not invent final tracks. It can suggest where and how to look; 
 - Uses `src/musicOntology.js` to keep genre, vibe, era, length, artist/label, and track characteristics separate.
 - Applies SEO sludge filters, exact artist collision checks, date/year filters, duplicate filters, prior-suggestion memory, and wrong-genre feedback.
 - Infers genre from multiple weak signals rather than trusting official `Electronic` tags.
+- Uses `src/artistIdentity.js` so collision-sensitive artists and provider artist ids do not collapse into the wrong artist.
+- Builds candidate identities from TIDAL id, TIDAL URL, exact normalized artist/title, and safe title-normalized variants.
 - Uses lane quotas to reserve room for core prompt, adjacent, label, taste, and branch-out candidates.
 - Uses query-yield memory to rank or skip query templates that have repeatedly produced poor results.
 - Produces Pool Diagnostics for the UI.
@@ -240,6 +289,19 @@ Score bands:
 Played history is context, not a like. The user often lets music run, so explicit feedback carries more weight than passive plays.
 
 Taste Guided should remain discovery-oriented: use taste as a compass, not a cage. Pure Search should follow the prompt even when it disagrees with learned taste.
+
+## Novelty / Repeat Memory
+
+`src/discoveryHistory.js` records tracks that have already been shown in generated results.
+
+Repeat suppression checks multiple aliases:
+
+- TIDAL numeric track id
+- TIDAL track URL
+- normalized artist/title
+- normalized artist/title with safe SEO-style genre descriptors stripped
+
+Manual generation has a final freshness guard before results are returned to the UI. This protects against any search path that accidentally reintroduces an already shown track late in the pipeline.
 
 ## Rabbit Hole Graph
 

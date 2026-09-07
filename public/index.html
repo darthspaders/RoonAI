@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>The Rabbit Hole</title>
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/styles.css?v=20260906-tablet-status">
   </head>
   <body>
     <main class="shell">
@@ -18,18 +18,42 @@
         <div class="statusStack">
           <p id="connection" class="statusPill">Waiting for Roon...</p>
           <p id="llmStatus" class="statusPill statusUnknown">Checking local model...</p>
+          <p id="mcpStatus" class="statusPill statusUnknown">MCP: checking...</p>
+          <p id="synapseStatus" class="statusPill statusUnknown">Synapse: checking...</p>
+          <p id="synapseUsageStatus" class="statusPill statusUnknown">Synapse usage: --</p>
+          <p id="activeProviderStatus" class="statusPill statusUnknown">AI: AUTO</p>
         </div>
       </section>
 
       <section class="topbar">
         <nav class="viewTabs" aria-label="App views">
+          <a href="/memory.html">Synapse Memory</a>
           <button type="button" class="active" data-view="player">Now Playing</button>
           <button type="button" data-view="history">History Report</button>
           <button type="button" data-view="radio">Radio</button>
+          <button type="button" data-view="playlists">Playlists</button>
           <button type="button" data-view="tidal">TIDAL Mixes</button>
         </nav>
         <div class="topControls">
           <p id="phoneAccess" class="phoneAccess"></p>
+          <div class="aiModeControls" aria-label="AI provider controls">
+            <label>
+              <span>AI Mode</span>
+              <select id="aiModeSelect" aria-label="AI mode">
+                <option value="auto">AUTO</option>
+                <option value="local">LOCAL</option>
+                <option value="synapse">SYNAPSE</option>
+                <option value="luna">LUNA</option>
+                <option value="terra">TERRA</option>
+                <option value="sol">SOL</option>
+              </select>
+            </label>
+            <label class="synapseModelField">
+              <span>Synapse Model</span>
+              <input id="synapseModelInput" type="text" autocomplete="off" spellcheck="false" aria-label="Synapse model">
+            </label>
+            <button type="button" id="synapseCheck">Check</button>
+          </div>
           <label class="zonePicker">
             <span>Roon Output Zone</span>
             <select id="zoneSelect" aria-label="Roon output zone"></select>
@@ -43,6 +67,27 @@
             <div class="playerViewControls">
               <button type="button" id="togglePlayerMax" class="playerMaxToggle" aria-pressed="false">Maximize Player</button>
               <button type="button" id="togglePlayerFull" class="playerFullToggle" aria-pressed="false">Full Window</button>
+            </div>
+            <div id="pcTempOverlay" class="pcTempOverlay" hidden aria-live="polite">
+              <span class="pcTempChip pcTempChipCpu">
+                <span>CPU</span>
+                <strong id="pcTempCpu">--</strong>
+              </span>
+              <span class="pcTempChip pcTempChipGpu">
+                <span>GPU</span>
+                <strong id="pcTempGpu">--</strong>
+              </span>
+              <div id="fullscreenConnectionStatus" class="fullscreenConnectionStatus" aria-label="Connections and AI routing"></div>
+            </div>
+            <div id="bridgeSyncPopup" class="bridgeSyncPopup" hidden role="status" aria-live="polite">
+              <div>
+                <strong id="bridgeSyncTitle">Roon playlist refresh needed</strong>
+                <p id="bridgeSyncMessage"></p>
+              </div>
+              <div class="bridgeSyncActions">
+                <button type="button" id="bridgeSyncConfirm">I refreshed Roon</button>
+                <button type="button" id="bridgeSyncDismiss" aria-label="Dismiss Roon playlist refresh message">Dismiss</button>
+              </div>
             </div>
             <div class="now">
               <div class="artStack">
@@ -63,9 +108,26 @@
                 <button type="button" id="openRabbitHole">Open Rabbit Hole</button>
               </div>
               <div class="nowTidalPlaylistGroup">
-                <select id="nowTidalPlaylistSelect" aria-label="TIDAL playlist">
-                  <option value="">Load TIDAL playlists...</option>
-                </select>
+                <div class="nowTidalPlaylistTargets">
+                  <label class="nowTidalPlaylistTarget">
+                    <input id="nowTidalPlaylistArm1" type="checkbox" aria-label="Arm first TIDAL playlist destination">
+                    <select id="nowTidalPlaylistSelect" aria-label="TIDAL playlist">
+                      <option value="">Load TIDAL playlists...</option>
+                    </select>
+                  </label>
+                  <label class="nowTidalPlaylistTarget extraTidalPlaylist">
+                    <input id="nowTidalPlaylistArm2" type="checkbox" aria-label="Arm second TIDAL playlist destination">
+                    <select id="nowTidalPlaylistSelect2" aria-label="Second TIDAL playlist (optional)">
+                      <option value="">None</option>
+                    </select>
+                  </label>
+                  <label class="nowTidalPlaylistTarget extraTidalPlaylist">
+                    <input id="nowTidalPlaylistArm3" type="checkbox" aria-label="Arm third TIDAL playlist destination">
+                    <select id="nowTidalPlaylistSelect3" aria-label="Third TIDAL playlist (optional)">
+                      <option value="">None</option>
+                    </select>
+                  </label>
+                </div>
                 <div class="nowTidalPlaylistCreate">
                   <input id="nowTidalPlaylistName" type="text" placeholder="New TIDAL playlist name" autocomplete="off">
                   <button type="button" id="createNowTidalPlaylist">Create playlist</button>
@@ -312,6 +374,22 @@
         <section id="radioStations" class="radioGrid"></section>
       </section>
 
+      <section id="playlistView" class="view">
+        <section class="panel playlistHero">
+          <div>
+            <p class="eyebrow">Playlist Playback</p>
+            <h2>Playlists</h2>
+            <p id="playlistBrowserStatus" class="tasteNarrative">Playlists have not been loaded yet.</p>
+          </div>
+          <div class="resultActions">
+            <a class="buttonLink" id="playlistAuthorizeTidal" href="/api/tidal/oauth/start">Connect TIDAL</a>
+            <button type="button" id="refreshPlaylistBrowser">Refresh playlists</button>
+          </div>
+        </section>
+
+        <section id="playlistBrowserGrid" class="playlistBrowserGrid"></section>
+      </section>
+
       <section id="tidalView" class="view">
         <section class="panel tidalMixHero">
           <div>
@@ -337,7 +415,7 @@
       </section>
     </main>
     <button type="button" id="jumpTop" class="jumpTop" hidden>Now Playing</button>
-    <script src="/app.js"></script>
+    <script src="/app.js?v=20260907-playlist-arm"></script>
     <script src="/webmcpTools.js"></script>
   </body>
 </html>

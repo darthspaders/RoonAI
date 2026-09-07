@@ -8,6 +8,10 @@ const {
   detectVibeTerms
 } = require("./musicOntology");
 const { normalizeRating, ratingDelta } = require("./tasteProfile");
+const {
+  calibrationIssueCount,
+  calibrationIssueLabel
+} = require("./calibrationSignals");
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -328,24 +332,24 @@ function buildTasteDna({ profile = {}, contributoryPlays = [], trackMemory = nul
   }
 
   for (const source of calibration.sources || []) {
-    const sourceMisses = Number(source.modelMisses || 0) + Number(source.promptMismatches || 0);
+    const sourceMisses = calibrationIssueCount(source);
     const sourceLongShots = Number(source.likedLongShots || 0);
     if (Number(source.likedLongShots || 0) > 0) {
       addSignal(sources, source.source || source.name, Number(source.likedLongShots) * 1.5, `${source.likedLongShots}/${source.total} liked long shots`);
     }
     if (sourceMisses > sourceLongShots) {
-      addSignal(avoid, `${source.source || source.name} source`, -sourceMisses, `${source.modelMisses || 0}/${source.total || 0} model misses`);
+      addSignal(avoid, `${source.source || source.name} source`, -sourceMisses, calibrationIssueLabel(source));
     }
   }
 
   for (const label of calibration.labels || []) {
-    const labelMisses = Number(label.modelMisses || 0) + Number(label.promptMismatches || 0);
+    const labelMisses = calibrationIssueCount(label);
     const labelLongShots = Number(label.likedLongShots || 0);
     if (Number(label.likedLongShots || 0) > 0) {
       addSignal(sources, `${label.label || label.name} label`, Number(label.likedLongShots) * 1.75, `${label.likedLongShots}/${label.total} liked long shots`);
     }
     if (labelMisses > labelLongShots) {
-      addSignal(avoid, `${label.label || label.name} label`, -labelMisses, `${label.modelMisses || 0}/${label.total || 0} model misses`);
+      addSignal(avoid, `${label.label || label.name} label`, -labelMisses, calibrationIssueLabel(label));
     }
   }
 
@@ -468,7 +472,7 @@ function tasteNarrative({ topArtists, topLabels, likedArtists, likedLabels, play
 class ListeningHistory {
   constructor(options = {}) {
     this.file = options.file || path.join(__dirname, "..", "data", "listening-history.json");
-    this.maxEntries = Number(options.maxEntries || 1500);
+    this.maxEntries = Number(options.maxEntries ?? 0);
     this.lastByZone = new Map();
     this.data = { plays: [] };
     this.load();
@@ -486,8 +490,12 @@ class ListeningHistory {
   save() {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     this.data.plays = this.data.plays
-      .sort((left, right) => Number(right.playedAt || 0) - Number(left.playedAt || 0))
-      .slice(0, this.maxEntries);
+      .sort((left, right) => Number(right.playedAt || 0) - Number(left.playedAt || 0));
+    if (Number.isFinite(this.maxEntries) && this.maxEntries > 0) {
+      this.data.plays = this.data.plays.slice(0, this.maxEntries);
+    }
+    this.data.maxEntries = this.maxEntries || null;
+    this.data.unlimited = !this.maxEntries;
     fs.writeFileSync(this.file, JSON.stringify(this.data, null, 2));
   }
 

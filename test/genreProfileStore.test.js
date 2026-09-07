@@ -67,3 +67,31 @@ test("genre profile feedback promotes and prunes niche genre seeds", () => {
   assert.ok(learned.excludeArtists.includes("Generic Club Artist"));
   assert.ok(learned.excludeLabels.includes("Club House Records"));
 });
+
+test("genre profile feedback replaces prior rating for the same track", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "genre-profile-"));
+  const store = new GenreProfileStore({ file: path.join(dir, "profiles.json") });
+  const options = {
+    request: "Find swamp house tracks",
+    genres: "swamp house"
+  };
+  const track = {
+    artist: "Bog Sequence",
+    title: "Mire Jack",
+    album: "Swamp Trax",
+    label: "Wetland Acid"
+  };
+
+  store.recordFeedback(options, track, "love");
+  store.recordFeedback(options, track, "wrong_genre");
+
+  const learned = store.augmentOptions(options).learnedGenreProfiles["swamp house"];
+
+  assert.equal(learned.positiveCount, 0);
+  assert.equal(learned.negativeCount, 1);
+  assert.equal(learned.feedbackCount, 1);
+  assert.equal(learned.artists.includes("Bog Sequence"), false);
+  assert.equal(learned.labels.includes("Wetland Acid"), false);
+  assert.ok(learned.excludeArtists.includes("Bog Sequence"));
+  assert.ok(learned.excludeLabels.includes("Wetland Acid"));
+});

@@ -2,6 +2,11 @@
 
 const fs = require("fs");
 const path = require("path");
+const {
+  isNegativeRating,
+  isPositiveRating,
+  normalizeRating
+} = require("./feedbackRatings");
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -55,6 +60,12 @@ function splitArtists(value = "") {
     .filter((part) => part && part.length <= 60);
 }
 
+function trackKey(track = {}) {
+  const tidalUrl = cleanText(track.tidal?.tidalUrl || track.tidalUrl);
+  if (tidalUrl) return tidalUrl.toLowerCase();
+  return `${normalize(track.artist)}|${normalize(track.title)}`;
+}
+
 function labelFor(track = {}) {
   return cleanText(track.label || track.tidal?.label || "");
 }
@@ -66,8 +77,26 @@ function bump(map = {}, name = "", amount = 1) {
   const entry = map[key] || { name: text, count: 0 };
   entry.name = entry.name || text;
   entry.count = Number(entry.count || 0) + amount;
+  if (entry.count <= 0) {
+    delete map[key];
+    return map;
+  }
   map[key] = entry;
   return map;
+}
+
+function applyFeedback(profile = {}, detail = {}, direction = 1) {
+  const positive = ["love", "good"].includes(detail.rating);
+  const negative = ["wrong_genre", "reject_similar", "skip", "never"].includes(detail.rating);
+  if (positive) {
+    profile.positiveCount = Math.max(0, Number(profile.positiveCount || 0) + direction);
+    for (const artist of splitArtists(detail.artist)) bump(profile.artists, artist, direction);
+    bump(profile.labels, detail.label, direction);
+  } else if (negative) {
+    profile.negativeCount = Math.max(0, Number(profile.negativeCount || 0) + direction);
+    for (const artist of splitArtists(detail.artist)) bump(profile.excludeArtists, artist, direction);
+    bump(profile.excludeLabels, detail.label, direction);
+  }
 }
 
 function topNames(map = {}, limit = 24) {
@@ -77,18 +106,6 @@ function topNames(map = {}, limit = 24) {
     .slice(0, limit)
     .map((entry) => entry.name)
     .filter(Boolean);
-}
-
-function normalizeRating(value = "") {
-  const rating = normalize(value);
-  if (rating === "love") return "love";
-  if (rating === "good" || rating === "up") return "good";
-  if (rating === "ok" || rating === "okay") return "ok";
-  if (rating === "wrong genre" || rating === "wrong_genre" || rating === "wrong") return "wrong_genre";
-  if (rating === "reject similar" || rating === "reject_similar") return "reject_similar";
-  if (rating === "skip" || rating === "down") return "skip";
-  if (rating === "never" || rating === "never again" || rating === "never_again") return "never";
-  return rating;
 }
 
 class GenreProfileStore {
@@ -126,7 +143,8 @@ class GenreProfileStore {
       excludeArtists: topNames(profile.excludeArtists, 24),
       excludeLabels: topNames(profile.excludeLabels, 24),
       positiveCount: Number(profile.positiveCount || 0),
-      negativeCount: Number(profile.negativeCount || 0)
+      negativeCount: Number(profile.negativeCount || 0),
+      feedbackCount: Object.keys(profile.feedback || {}).length
     };
   }
 
@@ -145,9 +163,9 @@ class GenreProfileStore {
   recordFeedback(options = {}, track = {}, ratingValue = "") {
     const key = explicitGenreKey(options);
     if (!key) return this.summary();
-    const rating = normalizeRating(ratingValue);
-    const positive = ["love", "good"].includes(rating);
-    const negative = ["wrong_genre", "reject_similar", "skip", "never"].includes(rating);
+    const rating = normalizeRating(ratingValue, { fallback: "" });
+    const positive = isPositiveRating(rating);
+    const negative = isNegativeRating(rating);
     if (!positive && !negative) return this.summary();
 
     const profile = this.profiles[key] || {
@@ -159,19 +177,32 @@ class GenreProfileStore {
       labels: {},
       excludeArtists: {},
       excludeLabels: {},
+      feedback: {},
       positiveCount: 0,
       negativeCount: 0
     };
 
-    if (positive) {
-      profile.positiveCount = Number(profile.positiveCount || 0) + 1;
-      for (const artist of splitArtists(track.artist)) bump(profile.artists, artist);
-      bump(profile.labels, labelFor(track));
-    } else {
-      profile.negativeCount = Number(profile.negativeCount || 0) + 1;
-      for (const artist of splitArtists(track.artist)) bump(profile.excludeArtists, artist);
-      bump(profile.excludeLabels, labelFor(track));
+    profile.artists ||= {};
+    profile.labels ||= {};
+    profile.excludeArtists ||= {};
+    profile.excludeLabels ||= {};
+    profile.feedback ||= {};
+
+    const feedbackKey = trackKey(track);
+    if (feedbackKey && profile.feedback[feedbackKey]) {
+      applyFeedback(profile, profile.feedback[feedbackKey], -1);
     }
+
+    const detail = {
+      rating,
+      artist: cleanText(track.artist),
+      title: cleanText(track.title),
+      label: labelFor(track),
+      tidalUrl: cleanText(track.tidal?.tidalUrl || track.tidalUrl),
+      updatedAt: new Date().toISOString()
+    };
+    applyFeedback(profile, detail, 1);
+    if (feedbackKey) profile.feedback[feedbackKey] = detail;
 
     profile.updatedAt = new Date().toISOString();
     this.profiles[key] = profile;

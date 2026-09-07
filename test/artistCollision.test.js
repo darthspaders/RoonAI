@@ -6,11 +6,15 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const {
+  artistKeysForCandidate,
   buildDiscoveryProfile,
+  matchingSceneArtist,
   rejectReason,
   releaseFilterRequiresVerification,
   scoreBreakdownFor
 } = require("../src/discoveryEngine");
+const { artistIdentityKey, artistNameCollisionRisk, artistNamesMatch } = require("../src/artistIdentity");
+const { DiscoveryHistory } = require("../src/discoveryHistory");
 const { TasteProfile } = require("../src/tasteProfile");
 
 function psyProfile() {
@@ -41,6 +45,61 @@ test("scene artist name collision is rejected without scene metadata", () => {
   }, options, profile);
 
   assert.match(reason, /artist name matches freedom fighters/i);
+});
+
+test("diacritic dotted acronym artists do not merge with progressive M.O.S.", () => {
+  assert.equal(matchingSceneArtist("M.O.S."), "M.O.S.");
+  assert.equal(matchingSceneArtist("M.O.S"), "M.O.S.");
+  assert.equal(matchingSceneArtist("M.O.S. feat Someone"), "M.O.S.");
+  assert.equal(matchingSceneArtist("M.Ö.S"), "");
+  assert.equal(matchingSceneArtist("M.Ö.S feat. Jeri"), "");
+  assert.equal(artistNamesMatch("M.Ö.S", "M.O.S."), false);
+  assert.equal(artistNameCollisionRisk("M.Ö.S", "M.O.S."), true);
+  assert.notEqual(artistIdentityKey("M.Ö.S"), artistIdentityKey("M.O.S."));
+});
+
+test("provider artist IDs override visually similar artist-name collisions", () => {
+  const progressiveMos = artistKeysForCandidate({
+    artist: "M.O.S.",
+    artistIds: ["tidal-progressive-mos"]
+  });
+  const otherMos = artistKeysForCandidate({
+    artist: "M.Ö.S",
+    artistIds: ["tidal-other-mos"]
+  });
+
+  assert.deepEqual(progressiveMos, ["provider:tidal-progressive-mos"]);
+  assert.deepEqual(otherMos, ["provider:tidal-other-mos"]);
+});
+
+test("taste profile keeps M.Ö.S feedback separate from M.O.S.", () => {
+  const taste = new TasteProfile(tempTasteFile());
+  const track = {
+    artist: "M.Ö.S",
+    title: "Vital (feat. Jeri)",
+    album: "IV SAISONS",
+    tidalUrl: "https://tidal.com/browse/track/other-mos-vital"
+  };
+
+  taste.record(track, "love");
+
+  assert.ok(taste.adjustmentFor(track).value > 0);
+  assert.equal(taste.adjustmentFor({ artist: "M.O.S.", title: "Another Track" }).value, 0);
+  assert.equal(taste.getFeedbackFor({ artist: track.artist, title: track.title }), "love");
+  assert.equal(taste.getFeedbackFor({ artist: "M.O.S.", title: "Vital (feat. Jeri)" }), "");
+});
+
+test("discovery history keeps M.Ö.S exposure separate from M.O.S.", () => {
+  const historyFile = tempTasteFile();
+  const history = new DiscoveryHistory({ file: historyFile });
+  history.record([{
+    artist: "M.Ö.S",
+    title: "Vital (feat. Jeri)",
+    tidalUrl: "https://tidal.com/browse/track/other-mos-vital"
+  }]);
+
+  assert.ok(history.artistExposureFor({ artist: "M.Ö.S", title: "Vital (feat. Jeri)" }));
+  assert.equal(history.artistExposureFor({ artist: "M.O.S.", title: "Different Track" }), null);
 });
 
 test("scene artist anchor is allowed with scene label corroboration", () => {
@@ -172,6 +231,28 @@ test("taste-guided artist queries can branch when scene metadata corroborates th
     releaseEvidence: { albumYear: 2026, albumDate: "2026-02-13" },
     durationMs: 470000,
     query: "Ruben Karapetyan 2026"
+  }, options, profile);
+
+  assert.equal(reason, "");
+});
+
+test("label-prefix searches are not mistaken for artist-anchor drift", () => {
+  const options = {
+    request: "Find underground progressive house from trusted labels",
+    genres: "progressive house",
+    scoringMode: "explore",
+    llmSearchPlan: {
+      candidateLabels: ["Mango Alley"]
+    }
+  };
+  const profile = buildDiscoveryProfile(options);
+  const reason = rejectReason({
+    artist: "Emi Galvan",
+    title: "Everlong",
+    album: "Everlong / Lies",
+    label: "Mango Alley",
+    durationMs: 470000,
+    query: "Mango Alley progressive house"
   }, options, profile);
 
   assert.equal(reason, "");

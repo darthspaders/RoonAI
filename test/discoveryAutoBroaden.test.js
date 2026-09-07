@@ -4,7 +4,8 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   autoBroadenSearchPasses,
-  buildDiscoveryProfile
+  buildDiscoveryProfile,
+  shouldContinueAutoBroadenAfterError
 } = require("../src/discoveryEngine");
 
 function fakeTracks(count) {
@@ -128,6 +129,26 @@ test("auto broaden adds a yield-aware retry when query yield is weak", () => {
   assert.equal(serialized.includes("progressive house"), false);
 });
 
+test("auto broaden includes a scene branch-out retry before relaxing the request", () => {
+  const options = {
+    request: "Find 10 underground progressive house discoveries from 2026",
+    genres: "progressive house",
+    mood: "underground",
+    count: "10",
+    years: "2026",
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const passes = autoBroadenSearchPasses(options, profile, { tracks: fakeTracks(1), alternates: [] }, 10);
+  const branch = passes.find((pass) => pass.lane === "branch-out");
+
+  assert.ok(branch);
+  assert.match(branch.stage, /branch-out/i);
+  assert.match(branch.reason, /artists and labels/i);
+  assert.equal(branch.options.adaptiveRetryStage, "scene-branch-out");
+  assert.ok((branch.options.llmSearchPlan.searchQueries || []).length > 0);
+});
+
 test("auto broaden treats discovery timeout as weak yield", () => {
   const options = {
     request: "Find 10 psytrance tracks from 2026",
@@ -154,4 +175,28 @@ test("auto broaden treats discovery timeout as weak yield", () => {
   assert.equal(passes[0].lane, "yield-retry");
   assert.equal(passes[0].queryYieldHealth.retryNeeded, true);
   assert.match(passes[0].queryYieldHealth.summary, /took too long/i);
+});
+
+test("auto broaden continues after a retry timeout when the pool still undershot", () => {
+  assert.equal(shouldContinueAutoBroadenAfterError(
+    new Error("Yield-aware retry took too long."),
+    {
+      initialTimedOut: false,
+      remainingPasses: 2,
+      currentPool: 2,
+      requestedCount: 8
+    }
+  ), true);
+});
+
+test("auto broaden stops timeout retry chaining once the requested count is met", () => {
+  assert.equal(shouldContinueAutoBroadenAfterError(
+    new Error("Yield-aware retry took too long."),
+    {
+      initialTimedOut: false,
+      remainingPasses: 2,
+      currentPool: 8,
+      requestedCount: 8
+    }
+  ), false);
 });

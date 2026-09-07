@@ -1,4 +1,13 @@
 "use strict";
+const voiceExecution = require("./voiceExecution");
+const {
+  calibrationIssueCount,
+  calibrationIssueDetail
+} = require("./calibrationSignals");
+const {
+  explicitTidalTrackId,
+  tidalTrackIdFromUrl
+} = require("./tidalIdentity");
 
 const {
   detectEraTerms: detectOntologyEraTerms,
@@ -13,6 +22,13 @@ const {
   summarizeRecords
 } = require("./queryYieldTracker");
 const { parseYearRange, yearFits, releaseDateFits } = require("./yearRange");
+const {
+  artistIdentityKey,
+  artistIdentityKeysForTrack,
+  artistNamesMatch,
+  isCollisionSensitiveArtist
+} = require("./artistIdentity");
+const { routePromptIntent } = require("./promptIntentRouter");
 
 const SCORE_MAX = {
   freshness: 19,
@@ -30,13 +46,17 @@ const SCORE_THRESHOLDS = {
   excellent: 90
 };
 
+const CALIBRATION_QUOTA_RISK = {
+  moderateMissRate: 0.34,
+  highMissRate: 0.5,
+  repeatIssueThreshold: 2,
+  maxBucketRisk: 4,
+  maxCandidateRisk: 8,
+  scorePenaltyPerRiskPoint: 4
+};
+
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
-}
-
-function tidalTrackIdFromUrl(value) {
-  const match = cleanText(value).match(/\/track\/(\d+)/i);
-  return match ? match[1] : "";
 }
 
 function normalize(value) {
@@ -56,6 +76,29 @@ function looksLikeGenreStyleDescriptor(value = "") {
   const hasDescriptor = /\b(?:emotional|melodic|progressive|deep|organic|uplifting|dark|cinematic|driving|hypnotic|vocal|instrumental|club|dance|edm)\b/.test(normalized);
   const hasGenreSeparator = /[\/&|]/.test(raw) || /\b(?:and|x)\b/.test(normalized);
   return hasGenre && hasDescriptor && (hasGenreSeparator || /\bedm\b/.test(normalized));
+}
+
+function looksLikeStandaloneGenreStylePhrase(value = "") {
+  const normalized = normalize(value);
+  if (!normalized) return false;
+  const hasGenre = /\b(?:edm|electronic dance music|deep house|tech house|progressive house|melodic house|organic house|house|melodic techno|progressive techno|techno|progressive trance|psytrance|psy trance|trance|ambient|downtempo|breaks|breakbeat|dubstep|drum and bass|dnb)\b/.test(normalized);
+  if (!hasGenre) return false;
+  return /\b(?:emotional|melodic|progressive|deep|organic|uplifting|dark|cinematic|driving|hypnotic|vocal|instrumental|club|dance|edm)\b/.test(normalized) ||
+    /\b(?:journal|journals|journey|journeys|session|sessions|playlist|collection|compilation|selection|essentials|mixes?|vibes?|grooves?|sounds?)\b/.test(normalized);
+}
+
+function looksLikeSlashSeparatedGenreStyleDescriptor(value = "") {
+  const raw = cleanText(value);
+  if (!/[\/|]/.test(raw)) return false;
+  const chunks = raw.split(/\/{1,2}|\|/).map(cleanText).filter(Boolean);
+  if (chunks.length < 2) return false;
+  const genreStyleChunkCount = chunks.filter(looksLikeStandaloneGenreStylePhrase).length;
+  const hasDoubleSlash = /\/\//.test(raw);
+  const hasCatalogueNoun = /\b(?:journal|journals|journey|journeys|session|sessions|playlist|collection|compilation|selection|essentials|mixes?|vibes?|grooves?|sounds?)\b/i.test(raw);
+  if (genreStyleChunkCount >= 2) return true;
+  if (hasDoubleSlash && genreStyleChunkCount >= 1) return true;
+  if (hasCatalogueNoun && genreStyleChunkCount >= 1) return true;
+  return looksLikeGenreStyleDescriptor(raw) && normalize(raw).split(/\s+/).length >= 5;
 }
 
 function normalizeIdentityTitle(value = "") {
@@ -82,7 +125,8 @@ function scoringModeLabel(mode) {
 
 function candidateIdentityKeys(track = {}) {
   const tidalUrl = cleanText(track.tidal?.tidalUrl || track.tidalUrl).toLowerCase();
-  const tidalId = tidalTrackIdFromUrl(tidalUrl);
+  const explicitTidalId = explicitTidalTrackId(track);
+  const tidalId = tidalTrackIdFromUrl(tidalUrl) || explicitTidalId;
   const artist = normalize(track.artist);
   const title = normalize(track.title);
   const identityTitle = normalizeIdentityTitle(track.title);
@@ -126,6 +170,72 @@ function hasHardCountLanguage(options = {}) {
   const request = cleanText(options.request);
   return /\b(?:exactly|only|just|no more than|not more than|max(?:imum)?|limit(?:ed)? to)\s+\d{1,2}\b/i.test(request) ||
     /\b\d{1,2}\s*(?:tracks?|songs?|cuts?|candidates?|recommendations?)\s*(?:only|exactly|max(?:imum)?)\b/i.test(request);
+}
+
+function shouldBuildWideDiscoveryPool(options = {}, profile = buildDiscoveryProfile(options)) {
+  if (profile.scoringMode === "pure" && (profile.requestedArtists || []).length) return false;
+  if (profile.scoringMode === "similar") return false;
+  if (hasExplicitArtistFocus(options, profile) && !requestRequiresFreshArtists(options)) return false;
+  if (profile.promptIntent?.allowOutsideTaste && !hasHardCountLanguage(options)) return true;
+  return Boolean(
+    profile.hasExplicitDiscoveryIntent &&
+    (profile.targetGenres?.length || profile.vibeTerms?.length || parseYearRange(options) || profile.promptIntent?.hasIntent) &&
+    !hasHardCountLanguage(options)
+  );
+}
+
+function defaultPerRunArtistCap(options = {}, profile = buildDiscoveryProfile(options), requestedCount = 8) {
+  const limit = Math.max(1, Math.min(40, Number(requestedCount || 8)));
+  if (profile.scoringMode === "pure" && (profile.requestedArtists || []).length) return Number.MAX_SAFE_INTEGER;
+  if (profile.scoringMode === "similar") return limit <= 8 ? 2 : 3;
+  if (hasExplicitArtistFocus(options, profile) && !requestRequiresFreshArtists(options)) return limit <= 8 ? 2 : 3;
+  return 1;
+}
+
+function defaultPerRunLabelCap(options = {}, profile = buildDiscoveryProfile(options), requestedCount = 8) {
+  const limit = Math.max(1, Math.min(40, Number(requestedCount || 8)));
+  if (profile.scoringMode === "pure" || (profile.requestedLabels || []).length) return Number.MAX_SAFE_INTEGER;
+  if (limit <= 3) return limit;
+  if (limit <= 6) return 2;
+  return Math.max(2, Math.ceil(limit * (profile.scoringMode === "explore" ? 0.25 : 0.3)));
+}
+
+function defaultPerRunSourceCap(options = {}, profile = buildDiscoveryProfile(options), requestedCount = 8) {
+  const limit = Math.max(1, Math.min(40, Number(requestedCount || 8)));
+  if (profile.scoringMode === "pure") return Number.MAX_SAFE_INTEGER;
+  if (limit <= 3) return limit;
+  if (profile.scoringMode === "similar") return Math.max(2, Math.ceil(limit * 0.45));
+  if (limit <= 6) return 2;
+  return Math.max(2, Math.ceil(limit * (profile.scoringMode === "explore" ? 0.25 : 0.3)));
+}
+
+function noveltyBudgetFor(options = {}, profile = buildDiscoveryProfile(options), requestedCount = 8) {
+  const count = Math.max(1, Math.min(40, Number(requestedCount || 8)));
+  const artistCap = defaultPerRunArtistCap(options, profile, count);
+  const pure = profile.scoringMode === "pure";
+  const similar = profile.scoringMode === "similar";
+  const discoveryFirst = !pure && !similar && Boolean(
+    profile.hasExplicitDiscoveryIntent ||
+    profile.promptIntent?.hasIntent ||
+    shouldBuildWideDiscoveryPool(options, profile)
+  );
+
+  return {
+    artistCap,
+    repeatFallbackAllowed: allowsArtistRepeatFallback(options, profile),
+    tasteTarget: pure ? 0 : (similar
+      ? Math.max(1, Math.floor(count * 0.3))
+      : (discoveryFirst ? (count >= 12 ? 1 : 0) : (count >= 8 ? 1 : 0))),
+    tasteMax: pure ? 0 : (similar
+      ? Math.max(2, Math.ceil(count * 0.6))
+      : (discoveryFirst ? Math.max(1, Math.ceil(count * 0.12)) : Math.max(1, Math.ceil(count * 0.22)))),
+    discoveryFirst
+  };
+}
+
+function allowsArtistRepeatFallback(options = {}, profile = buildDiscoveryProfile(options)) {
+  if (defaultPerRunArtistCap(options, profile, parseRequestedCount(options)) > 1) return true;
+  return /\b(?:allow|include|permit|ok(?:ay)? with)\b.{0,32}\b(?:repeat(?:ed)?|same)\s+artists?\b/i.test(requestText(options));
 }
 
 function hasExplicitCountRequest(options = {}) {
@@ -236,16 +346,39 @@ function requestUsesNowPlayingAsSeed(options = {}) {
 }
 
 function matchingSceneArtist(value) {
-  const artistText = normalize(value);
+  return PROGRESSIVE_ARTISTS.find((artist) => artistMatchesKnownName(value, artist, { contains: true })) || "";
+}
+
+function queryStartsWithKnownLabel(query = "", profile = {}) {
+  const normalizedQuery = normalize(query);
+  if (!normalizedQuery) return false;
+  const labels = uniqueTerms([
+    ...(profile.requestedLabels || []),
+    ...PROGRESSIVE_LABELS
+  ], 80)
+    .map((label) => normalize(label))
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+
+  return labels.some((label) => normalizedQuery === label || normalizedQuery.startsWith(`${label} `));
+}
+
+function queryTargetArtist(query, profile = {}) {
+  const normalizedQuery = normalize(query);
+  if (queryStartsWithKnownLabel(query, profile)) return "";
   return PROGRESSIVE_ARTISTS.find((artist) => {
     const normalizedArtist = normalize(artist);
-    return artistText === normalizedArtist || artistText.includes(normalizedArtist);
+    if (!normalizedQuery.startsWith(normalizedArtist)) return false;
+    if (!isCollisionSensitiveArtist(artist)) return true;
+    const rawPrefix = cleanText(query).split(/\s+/).slice(0, cleanText(artist).split(/\s+/).length).join(" ");
+    return artistNamesMatch(rawPrefix, artist);
   }) || "";
 }
 
-function queryTargetArtist(query) {
-  const normalizedQuery = normalize(query);
-  return PROGRESSIVE_ARTISTS.find((artist) => normalizedQuery.startsWith(normalize(artist))) || "";
+function artistMatchesKnownName(value = "", knownName = "", options = {}) {
+  const artists = splitArtists(value);
+  const candidates = artists.length ? artists : [value];
+  return candidates.some((artist) => artistNamesMatch(artist, knownName, options));
 }
 
 function wantsLongTracks(options = {}) {
@@ -326,6 +459,73 @@ function inferredGenreFor(track = {}, options = {}, profile = buildDiscoveryProf
   return "Open Genre Discovery";
 }
 
+function promptIntentEvidenceFor(track = {}, query = "", profile = {}) {
+  const promptIntent = profile.promptIntent || {};
+  const terms = uniqueTerms(promptIntent.matchTerms || [], 32);
+  if (!terms.length) {
+    return {
+      confidence: 0,
+      matchedTerms: [],
+      evidence: [],
+      summary: "",
+      queryOnly: false,
+      corroboratesRequested: !promptIntent.hasIntent
+    };
+  }
+
+  const title = normalize(track.title);
+  const album = normalize(track.album);
+  const label = normalize(labelText(track));
+  const artist = normalize(track.artist);
+  const metadataText = normalize(`${track.title} ${track.album} ${labelText(track)} ${track.artist}`);
+  const queryText = normalize(query || track.query);
+  const evidence = [];
+  const matchedTerms = new Set();
+
+  function add(source, term, weight, detail = {}) {
+    const cleanTerm = cleanText(term);
+    if (!cleanTerm || !weight) return;
+    evidence.push({
+      source,
+      label: `${cleanTerm} ${source}`,
+      term: cleanTerm,
+      weight: Number(weight),
+      queryOnly: Boolean(detail.queryOnly)
+    });
+    matchedTerms.add(cleanTerm);
+  }
+
+  for (const term of terms) {
+    if (containsNormalized(title, term)) add("title", term, 28);
+    else if (containsNormalized(album, term)) add("album", term, 18);
+    else if (containsNormalized(label, term)) add("label", term, 10);
+    else if (containsNormalized(artist, term)) add("artist", term, 8);
+    else if (containsNormalized(metadataText, term)) add("metadata", term, 8);
+    else if (containsNormalized(queryText, term)) add("search query", term, 4, { queryOnly: true });
+  }
+
+  const positive = evidence.filter((item) => item.weight > 0);
+  const nonQueryPositive = positive.some((item) => !item.queryOnly);
+  const coverage = terms.length ? matchedTerms.size / Math.min(terms.length, 8) : 0;
+  const rawTotal = positive.reduce((sum, item) => sum + item.weight, 0);
+  const confidence = clamp(Math.round(Math.max(rawTotal, coverage * 70 + Math.min(25, rawTotal * 0.3))), 0, 100);
+  const summary = evidence
+    .filter((item) => item.weight > 0 && !item.queryOnly)
+    .sort((left, right) => right.weight - left.weight)
+    .slice(0, 3)
+    .map((item) => item.label)
+    .join(", ");
+
+  return {
+    confidence,
+    matchedTerms: [...matchedTerms],
+    evidence: evidence.sort((left, right) => right.weight - left.weight).slice(0, 8),
+    summary,
+    queryOnly: positive.some((item) => item.queryOnly) && !nonQueryPositive,
+    corroboratesRequested: Boolean(nonQueryPositive || confidence >= 55)
+  };
+}
+
 function promptMatchFor(track = {}, options = {}, breakdown = {}, profile = buildDiscoveryProfile(options)) {
   const metadataText = normalize(`${track.artist} ${track.title} ${track.album} ${labelText(track)}`);
   const queryText = normalize(track.query);
@@ -334,6 +534,8 @@ function promptMatchFor(track = {}, options = {}, breakdown = {}, profile = buil
   const vibeTerms = profile.vibeTerms || [];
   const genreInference = breakdown.genreInference || {};
   const vibeInference = breakdown.vibeInference || {};
+  const promptIntent = profile.promptIntent || {};
+  const promptIntentEvidence = breakdown.promptIntentEvidence || promptIntentEvidenceFor(track, track.query, profile);
   const reasons = [];
 
   const genreScore = targetGenres.length
@@ -342,7 +544,12 @@ function promptMatchFor(track = {}, options = {}, breakdown = {}, profile = buil
       : (Number(genreInference.confidence || 0) >= 45
         ? Math.round(clamp(genreInference.confidence, 0, 100) * 0.38)
         : (hasAnyTerm(queryText, targetGenres) ? 24 : Math.round((Number(breakdown.genreMatch || 0) / SCORE_MAX.genreMatch) * 30))))
-    : 24;
+    : (promptIntent.matchTerms?.length ? 10 : 24);
+  const intentScore = promptIntent.matchTerms?.length
+    ? (promptIntentEvidence.corroboratesRequested
+      ? Math.round(clamp(promptIntentEvidence.confidence || 0, 0, 100) * 0.32)
+      : (promptIntentEvidence.queryOnly ? 6 : 0))
+    : 0;
   const vibeScore = vibeTerms.length
     ? (vibeInference.corroboratesRequested
       ? Math.round(clamp(vibeInference.confidence || 0, 0, 100) * 0.18)
@@ -352,8 +559,12 @@ function promptMatchFor(track = {}, options = {}, breakdown = {}, profile = buil
     ((Number(breakdown.labelMatch || 0) / SCORE_MAX.labelMatch) * 12));
   const releaseScore = Math.round((Number(breakdown.freshness || 0) / SCORE_MAX.freshness) * 12);
   const lengthScore = Math.round((Number(breakdown.lengthPreference || 0) / SCORE_MAX.lengthPreference) * 8);
-  const percent = clamp(Math.round(genreScore + vibeScore + entityScore + releaseScore + lengthScore), 0, 100);
+  const percent = clamp(Math.round(intentScore + genreScore + vibeScore + entityScore + releaseScore + lengthScore), 0, 100);
 
+  if (promptIntent.themeTerms?.length) reasons.push(`Theme-first search for ${promptIntent.themeTerms.slice(0, 3).join(", ")}.`);
+  if (promptIntent.activityTerms?.length) reasons.push(`Activity/context search for ${promptIntent.activityTerms.slice(0, 3).join(", ")}.`);
+  if (promptIntentEvidence.summary) reasons.push(`Prompt evidence from ${promptIntentEvidence.summary}.`);
+  else if (promptIntentEvidence.queryOnly) reasons.push("Prompt terms only appeared in the search query.");
   if (targetGenres.length) reasons.push(`User requested ${targetGenres[0]}.`);
   if (genreInference.summary && Number(genreInference.confidence || 0) >= 35) {
     reasons.push(`Genre inferred from ${genreInference.summary}.`);
@@ -407,6 +618,7 @@ function matchExplanationFor(track = {}, options = {}, breakdown = {}, profile =
   if (prompt.percent >= 55 && taste.percent >= 70) why.push("Result selected from the prompt/taste overlap region.");
   if (track.discoveryLane === "adjacent") why.push("Adjacent-lane result kept for discovery range.");
   if (track.discoveryLane === "branch") why.push("Branch-source result kept from a similar artist, label, radio, or remixer seed.");
+  if (track.discoveryLane === "omnivore") why.push("Cross-genre taste-bridge result kept for open discovery.");
 
   const seen = new Set();
   return {
@@ -631,6 +843,95 @@ const PROGRESSIVE_LABELS = [
   "Warung Recordings",
   "TRYBESof"
 ];
+
+const OMNIVORE_DISCOVERY_LANES = [
+  {
+    id: "leftfield-electronic",
+    targets: ["leftfield electronic", "electronica", "IDM"],
+    anchors: ["Ninja Tune", "Warp", "Ghostly International", "Brainfeeder", "!K7", "Planet Mu", "Four Tet", "Jon Hopkins", "Bonobo", "Bicep"]
+  },
+  {
+    id: "downtempo",
+    targets: ["downtempo", "organic downtempo", "chillout"],
+    anchors: ["Music From Memory", "International Feel", "Ultimae", "Night Time Stories", "Kiasmos", "Tycho", "Maribou State", "Emancipator"]
+  },
+  {
+    id: "ambient",
+    targets: ["ambient", "deep ambient", "cinematic ambient"],
+    anchors: ["Erased Tapes", "Kranky", "12k", "ECM", "Biosphere", "Loscil", "Nils Frahm", "A Winged Victory for the Sullen"]
+  },
+  {
+    id: "indie-dance",
+    targets: ["dark disco", "cosmic disco", "leftfield disco"],
+    anchors: ["Permanent Vacation", "Running Back", "Kompakt", "Correspondant", "DFA", "Red Axes", "Pional", "Mano Le Tough"]
+  },
+  {
+    id: "nu-disco",
+    targets: ["nu disco", "balearic", "cosmic disco"],
+    anchors: ["Glitterbox", "Salsoul", "West End Records", "Toy Tonics", "Razor-N-Tape", "Folamour", "Todd Terje", "Dimitri From Paris"]
+  },
+  {
+    id: "breaks",
+    targets: ["progressive breaks", "breakbeat", "electro breaks"],
+    anchors: ["Marine Parade", "Distinctive Records", "Botchit & Scarper", "Hybrid", "BT", "Bicep", "Overmono", "Plump DJs"]
+  },
+  {
+    id: "psychedelic-electronic",
+    targets: ["psybient", "psybreaks", "progressive psytrance"],
+    anchors: ["Iboga Records", "JOOF Recordings", "Ultimae", "Shpongle", "Carbon Based Lifeforms", "Ott", "Younger Brother", "Desert Dwellers"]
+  },
+  {
+    id: "jazz-fusion",
+    targets: ["jazz fusion", "nu jazz", "spiritual jazz"],
+    anchors: ["Blue Note", "Impulse!", "Brownswood", "International Anthem", "ECM", "Yussef Dayes", "Nubya Garcia", "Makaya McCraven"]
+  },
+  {
+    id: "modern-soul",
+    targets: ["neo soul", "alt R&B", "modern soul"],
+    anchors: ["Daptone", "Stones Throw", "Brainfeeder", "SAULT", "Michael Kiwanuka", "Kelela", "The Internet", "Anderson .Paak"]
+  },
+  {
+    id: "dream-pop",
+    defaultEnabled: false,
+    enableWhen: /\b(?:dream pop|indie|indie electronic|synth pop|4ad|domino|m83|beach house|chromatics|the xx|roosevelt|vocal|song|songs|band|bands)\b/i,
+    targets: ["dream pop", "indie electronic", "synth pop"],
+    anchors: ["4AD", "Domino", "Ghostly International", "M83", "Beach House", "Chromatics", "The xx", "Roosevelt"]
+  },
+  {
+    id: "cinematic-rock",
+    defaultEnabled: false,
+    enableWhen: /\b(?:post rock|cinematic rock|krautrock|rock|mogwai|explosions in the sky|tortoise|neu|can|godspeed)\b/i,
+    targets: ["post rock", "cinematic rock", "krautrock"],
+    anchors: ["Constellation", "Temporary Residence", "Mogwai", "Explosions in the Sky", "Tortoise", "Neu!", "Can", "Godspeed You! Black Emperor"]
+  },
+  {
+    id: "deep-bass",
+    targets: ["deep dubstep", "UK bass", "wave"],
+    anchors: ["Hyperdub", "Tempa", "Deep Medi Musik", "Ilian Tape", "Burial", "Skee Mask", "Floating Points", "Mount Kimbie"]
+  }
+];
+
+const OMNIVORE_DEFAULT_TRAITS = [
+  "melodic",
+  "hypnotic",
+  "deep",
+  "atmospheric",
+  "driving",
+  "emotional",
+  "cinematic",
+  "groove"
+];
+
+function omnivoreLaneEnabled(lane = {}, options = {}) {
+  if (lane.defaultEnabled !== false) return true;
+  const text = requestText(options);
+  if (lane.enableWhen?.test?.(text)) return true;
+  return [...(lane.targets || []), ...(lane.anchors || [])].some((term) => containsEntityTerm(text, term));
+}
+
+function activeOmnivoreDiscoveryLanes(options = {}) {
+  return OMNIVORE_DISCOVERY_LANES.filter((lane) => omnivoreLaneEnabled(lane, options));
+}
 
 const SEED_ARTIST_VIBES = [
   ["Depeche Mode", ["80s", "dark synth", "new wave", "analog synth"]],
@@ -1401,6 +1702,18 @@ function detectTargetGenres(options = {}) {
   return uniqueTerms(pruneBroadGenreTerms(terms), 12);
 }
 
+function requestAsksForOmnivoreDiscovery(options = {}, targetGenres = []) {
+  const text = normalize(requestText(options));
+  if (!text) return false;
+  const explicitGenre = cleanText(options.genres) || (targetGenres || []).length ||
+    /\b(?:electronic|dance|house|techno|trance|psytrance|ambient|downtempo|breaks|breakbeat|bass|disco|electro|jazz|soul|r\s?b|hip hop|rap|rock|metal|country|folk|pop|indie)\b/.test(text);
+  const anyGenreLanguage = /\b(?:any|all|whatever|no matter|regardless of|regardless)\b.{0,24}\bgenres?\b/.test(text) ||
+    /\bgenres?\b.{0,24}\b(?:do not matter|doesn t matter|does not matter|irrelevant|open|wide open)\b/.test(text);
+  if (anyGenreLanguage) return true;
+  if (explicitGenre) return false;
+  return /\b(?:surprise me|anything good|good music|great music|best music|best tracks|hidden gems|wide net|open discovery|omnivore|adventurous|branch out|branching out|outside my usual|outside known taste)\b/.test(text);
+}
+
 function detectSeedVibes(options = {}, seedArtists = []) {
   const promptVibes = detectOntologyVibeTerms(`${options.request || ""} ${options.reference || ""}`, { limit: 16 }).terms;
   const moodVibes = detectOntologyVibeTerms(options.mood || "", { limit: 16 }).terms;
@@ -1408,7 +1721,7 @@ function detectSeedVibes(options = {}, seedArtists = []) {
   const inferred = [];
 
   for (const artist of seedArtists) {
-    const match = SEED_ARTIST_VIBES.find(([knownArtist]) => normalize(knownArtist) === normalize(artist));
+    const match = SEED_ARTIST_VIBES.find(([knownArtist]) => artistNamesMatch(knownArtist, artist));
     if (match) inferred.push(...match[1]);
   }
 
@@ -1445,6 +1758,7 @@ function tasteApplicationFor(profile = {}) {
   if (profile.scoringMode === "pure") return "not at all";
   if (profile.scoringMode === "explore") return "lightly";
   if (profile.scoringMode === "similar") return "strongly";
+  if (profile.promptIntent?.tasteInfluence) return profile.promptIntent.tasteInfluence;
   if (profile.isGenreDiscoveryTarget) return "lightly";
   return "strongly";
 }
@@ -1452,10 +1766,22 @@ function tasteApplicationFor(profile = {}) {
 function intentDebugFor(profile = {}, options = {}) {
   const yearRange = parseYearRange(options);
   const eraTerms = detectEraTerms(options);
+  const promptIntent = profile.promptIntent || {};
   const requestedGenre = profile.targetGenres.length
     ? profile.targetGenres.slice(0, 8).join(", ")
-    : (cleanText(options.genres) || (profile.seedArtists.length ? "open-ended" : (profile.primaryTarget || "open-ended")));
+    : (cleanText(options.genres) ||
+      (["theme", "activity"].includes(promptIntent.route) ? "open-ended" : (profile.seedArtists.length ? "open-ended" : (profile.primaryTarget || "open-ended"))));
   return {
+    searchRoute: promptIntent.routeLabel || "Open Discovery",
+    promptStrictness: promptIntent.strictness || "open-discovery",
+    theme: promptIntent.themeTerms || [],
+    themeSource: promptIntent.themeSource || "not specified",
+    activityContext: promptIntent.activityTerms || [],
+    activitySource: promptIntent.activitySource || "not specified",
+    outsideTaste: promptIntent.allowOutsideTaste ? "allowed when prompt evidence matches" : "limited",
+    tasteInfluence: promptIntent.tasteInfluence || tasteApplicationFor(profile),
+    genreConstraint: promptIntent.genreConstraint || (profile.targetGenres.length ? "hard" : "none"),
+    verificationMethods: promptIntent.verificationMethods || [],
     requestedGenre,
     requestedVibe: profile.vibeTerms.length ? profile.vibeTerms.slice(0, 8).join(", ") : (cleanText(options.mood) || "not specified"),
     requestedVibeSource: profile.vibeSource || "not specified",
@@ -1464,6 +1790,7 @@ function intentDebugFor(profile = {}, options = {}) {
     requestedCharacteristics: (profile.trackCharacteristics || []).slice(0, 8),
     requestedArtists: (profile.requestedArtists || profile.seedArtists || []).slice(0, 8),
     requestedLabels: profile.requestedLabels.slice(0, 8),
+    omnivoreDiscovery: profile.isOmnivoreDiscovery ? "enabled" : "off",
     genreProfile: profile.genreProfile?.strict ? {
       name: profile.genreProfile.name,
       parentGenres: profile.genreProfile.parentGenres,
@@ -1502,6 +1829,7 @@ function genreArtistAnchors(profile = {}) {
 
 function buildDiscoveryProfile(options = {}) {
   const scoringMode = normalizeScoringMode(options);
+  const promptIntent = routePromptIntent({ ...options, scoringMode });
   const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
   const planArtists = uniqueTerms([
     ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
@@ -1513,18 +1841,22 @@ function buildDiscoveryProfile(options = {}) {
     ...extractSeedArtists(options)
   ], 12);
   const pureRequestedArtistSearch = scoringMode === "pure" && requestedArtists.length;
+  const targetGenres = detectTargetGenres(options);
+  const isOmnivoreDiscovery = requestAsksForOmnivoreDiscovery(options, targetGenres);
   const seedArtists = uniqueTerms([
     ...requestedArtists,
-    ...(pureRequestedArtistSearch ? [] : planArtists.slice(0, 8))
+    ...(pureRequestedArtistSearch || isOmnivoreDiscovery ? [] : planArtists.slice(0, 8))
   ], 12);
   const requestedLabels = uniqueTerms([
     ...extractPromptLabels(options),
-    ...planLabels
+    ...(isOmnivoreDiscovery ? [] : planLabels)
   ], 12);
-  const targetGenres = detectTargetGenres(options);
   const genreProfile = dynamicGenreProfileFor(options, targetGenres);
   const vibeResult = detectSeedVibes(options, seedArtists);
-  const vibeTerms = vibeResult.terms;
+  const inferredPromptVibes = cleanText(options.mood) || vibeResult.explicit.length
+    ? []
+    : (promptIntent.inferredVibes || []);
+  const vibeTerms = uniqueTerms([...vibeResult.terms, ...inferredPromptVibes], 16);
   const trackCharacteristics = detectTrackCharacteristics(options);
   const releaseRange = parseYearRange(options);
   const explicitTarget = cleanText(options.genres || options.request || "");
@@ -1533,12 +1865,16 @@ function buildDiscoveryProfile(options = {}) {
     targetGenres.some((term) => /\bprogressive house\b|\bmelodic progressive\b|\bdeep progressive\b|\borganic progressive\b/.test(normalize(term)));
   const isGenreOnlyTarget = Boolean(targetGenres.length && !isProgressiveTarget && !seedArtists.length);
   const isGenreDiscoveryTarget = Boolean(targetGenres.length && !isProgressiveTarget);
-  const primaryTarget = targetGenres[0] || cleanText(options.genres) || cleanText(options.request).replace(/\b(?:make|create|find|give me|recommend|playlist|tracks?|songs?|like|similar|based on|seeded)\b/gi, " ").trim();
+  const primaryTarget = targetGenres[0] ||
+    cleanText(options.genres) ||
+    (promptIntent.primarySearchTerm && ["theme", "activity", "open"].includes(promptIntent.route) ? promptIntent.primarySearchTerm : "") ||
+    (isOmnivoreDiscovery ? "" : cleanText(options.request).replace(/\b(?:make|create|find|give me|recommend|playlist|tracks?|songs?|like|similar|based on|seeded)\b/gi, " ").trim());
   const hasExplicitDiscoveryIntent = Boolean(
     requestedArtists.length ||
     requestedLabels.length ||
     targetGenres.length ||
     vibeResult.explicit.length ||
+    promptIntent.hasIntent ||
     trackCharacteristics.length ||
     releaseFilterRequiresVerification(options, releaseRange)
   );
@@ -1552,12 +1888,18 @@ function buildDiscoveryProfile(options = {}) {
     genreProfile,
     vibeTerms,
     explicitVibeTerms: vibeResult.explicit,
-    inferredVibeTerms: vibeResult.inferred,
-    vibeSource: vibeResult.source,
+    inferredVibeTerms: uniqueTerms([...vibeResult.inferred, ...inferredPromptVibes], 12),
+    vibeSource: vibeResult.explicit.length
+      ? "explicit"
+      : (inferredPromptVibes.length
+        ? `inferred from ${promptIntent.route}`
+        : vibeResult.source),
     trackCharacteristics,
+    promptIntent,
     primaryTarget,
     explicitTarget,
     hasExplicitDiscoveryIntent,
+    isOmnivoreDiscovery,
     isProgressiveTarget,
     isGenreOnlyTarget,
     isGenreDiscoveryTarget,
@@ -1581,8 +1923,7 @@ function matchingSceneLabel(value) {
 }
 
 function isTranceForwardArtist(value) {
-  const artistKeys = splitArtists(value).map(normalize);
-  return TRANCE_FORWARD_ARTISTS.some((artist) => artistKeys.includes(normalize(artist)));
+  return TRANCE_FORWARD_ARTISTS.some((artist) => artistMatchesKnownName(value, artist));
 }
 
 function wantsProgressiveHouseOnly(options = {}) {
@@ -1591,17 +1932,11 @@ function wantsProgressiveHouseOnly(options = {}) {
 }
 
 function primaryArtistKey(track = {}) {
-  return normalize(splitArtists(track.artist)[0] || track.artist);
+  return artistIdentityKey(splitArtists(track.artist)[0] || track.artist);
 }
 
 function artistKeysForCandidate(track = {}) {
-  const artists = splitArtists(track.artist);
-  const keys = artists.map(normalize).filter(Boolean);
-  if (!keys.length) {
-    const fallback = normalize(track.artist);
-    if (fallback) keys.push(fallback);
-  }
-  return [...new Set(keys)];
+  return artistIdentityKeysForTrack(track, splitArtists);
 }
 
 function uniqueValues(values) {
@@ -1705,9 +2040,9 @@ function branchArtistSeeds(options = {}, profile = buildDiscoveryProfile(options
     options.nowPlaying?.title,
     options.nowPlaying?.album
   ].map(cleanText).join(" "));
-  const requestedKeys = new Set([...(profile.requestedArtists || []), ...(profile.seedArtists || [])].map(normalize));
+  const requestedKeys = new Set([...(profile.requestedArtists || []), ...(profile.seedArtists || [])].map(artistIdentityKey));
   return uniqueTerms([...optionSeeds, ...planSeeds, ...remixerSeeds].flatMap(splitArtists), limit)
-    .filter((artist) => !isGenericSeedArtist(artist) && !requestedKeys.has(normalize(artist)));
+    .filter((artist) => !isGenericSeedArtist(artist) && !requestedKeys.has(artistIdentityKey(artist)));
 }
 
 function branchLabelSeeds(options = {}, profile = buildDiscoveryProfile(options), limit = 24) {
@@ -1721,12 +2056,13 @@ function branchLabelSeeds(options = {}, profile = buildDiscoveryProfile(options)
 }
 
 function artistMatchesSeedList(artist = "", seeds = []) {
-  return seeds.some((seed) => hasArtistMatch(artist, seed));
+  return seeds.some((seed) => artistMatchesKnownName(artist, seed));
 }
 
 function textMentionsSeed(text = "", seeds = []) {
   const normalized = normalize(text);
   return Boolean(normalized) && seeds.some((seed) => {
+    if (isCollisionSensitiveArtist(seed)) return false;
     const key = normalize(seed);
     return key && normalized.includes(key);
   });
@@ -1740,6 +2076,194 @@ function isGenericSeedArtist(value = "") {
   const parts = splitArtists(value);
   if (parts.length >= 3 && /\b(?:house|techno|trance|psytrance|ambient|edm|music)\b/.test(text)) return true;
   return false;
+}
+
+function promptIntentSearchQueries(options = {}, profile = buildDiscoveryProfile(options), limit = 42) {
+  const promptIntent = profile.promptIntent || {};
+  const expansions = Array.isArray(promptIntent.queryExpansions) ? promptIntent.queryExpansions : [];
+  if (!expansions.length) return [];
+
+  const yearRange = parseYearRange(options);
+  const yearTerms = yearRange
+    ? Array.from({ length: yearRange.max - yearRange.min + 1 }, (_, index) => String(yearRange.min + index)).slice(-3)
+    : [];
+  const genres = profile.targetGenres?.length ? profile.targetGenres.slice(0, 4) : [];
+  const vibes = profile.vibeTerms?.length ? profile.vibeTerms.slice(0, 4) : [];
+  const queries = [];
+
+  for (const expansion of expansions.slice(0, 18)) {
+    queries.push(cleanText(expansion));
+    for (const genre of genres) queries.push(cleanText(`${expansion} ${genre}`));
+    for (const vibe of vibes.slice(0, genres.length ? 2 : 4)) queries.push(cleanText(`${expansion} ${vibe}`));
+    for (const year of yearTerms) {
+      queries.push(cleanText(`${expansion} ${year}`));
+      for (const genre of genres.slice(0, 2)) queries.push(cleanText(`${expansion} ${genre} ${year}`));
+    }
+  }
+
+  return uniqueTerms(queries, limit);
+}
+
+function topTasteLabels(tasteProfile = null, limit = 8) {
+  if (!tasteProfile || typeof tasteProfile.read !== "function") return [];
+  const labels = tasteProfile.read()?.labels || {};
+  return Object.values(labels)
+    .filter((entry) => Number(entry.score || 0) > 0 && cleanText(entry.name))
+    .sort((left, right) => Number(right.score || 0) - Number(left.score || 0) || Number(right.up || 0) - Number(left.up || 0))
+    .slice(0, limit)
+    .map((entry) => cleanText(entry.name));
+}
+
+function omnivoreBridgeTraits(options = {}, profile = buildDiscoveryProfile(options)) {
+  return uniqueTerms([
+    ...(profile.vibeTerms || []),
+    ...(profile.trackCharacteristics || []),
+    ...OMNIVORE_DEFAULT_TRAITS
+  ], 10);
+}
+
+function interleaveQueryBuckets(buckets = [], limit = 80) {
+  const result = [];
+  const normalized = buckets.map((bucket) => uniqueTerms(bucket, 80));
+  const maxLength = Math.max(0, ...normalized.map((bucket) => bucket.length));
+  for (let index = 0; index < maxLength; index += 1) {
+    for (const bucket of normalized) {
+      if (bucket[index]) result.push(bucket[index]);
+      if (result.length >= limit) return uniqueTerms(result, limit);
+    }
+  }
+  return uniqueTerms(result, limit);
+}
+
+function buildOmnivoreDiscoveryQueries(options = {}, tasteProfile = null, profile = buildDiscoveryProfile(options), limit = 96) {
+  if (!profile.isOmnivoreDiscovery || profile.scoringMode === "pure" || profile.scoringMode === "similar") return [];
+
+  const yearRange = parseYearRange(options);
+  const yearTerms = yearRange
+    ? Array.from({ length: yearRange.max - yearRange.min + 1 }, (_, index) => String(yearRange.min + index)).slice(-3)
+    : [""];
+  const traits = omnivoreBridgeTraits(options, profile);
+  const tasteLabels = topTasteLabels(tasteProfile, 8);
+  const buckets = [];
+
+  for (const lane of activeOmnivoreDiscoveryLanes(options)) {
+    const queries = [];
+    const anchors = lane.anchors.slice(0, 5);
+    const targets = lane.targets.slice(0, 3);
+    for (const year of yearTerms) {
+      for (const anchor of anchors) {
+        for (const target of targets.slice(0, 2)) {
+          queries.push(cleanText(`${anchor} ${target} ${year}`));
+        }
+        for (const trait of traits.slice(0, 2)) {
+          queries.push(cleanText(`${anchor} ${trait} ${year}`));
+        }
+        queries.push(cleanText(`${anchor} ${year}`));
+      }
+      for (const target of targets.slice(0, 2)) {
+        for (const trait of traits.slice(0, 3)) {
+          queries.push(cleanText(`${target} ${trait} ${year}`));
+        }
+        queries.push(cleanText(`${target} underground ${year}`));
+        queries.push(cleanText(`${target} ${year}`));
+      }
+    }
+    buckets.push(queries);
+  }
+
+  if (tasteLabels.length) {
+    const tasteQueries = [];
+    for (const year of yearTerms) {
+      for (const label of tasteLabels) {
+        tasteQueries.push(cleanText(`${label} ${year}`));
+        for (const trait of traits.slice(0, 3)) {
+          tasteQueries.push(cleanText(`${label} ${trait} ${year}`));
+        }
+      }
+    }
+    buckets.unshift(tasteQueries);
+  }
+
+  return interleaveQueryBuckets(buckets, limit);
+}
+
+function omnivoreTargetTerms(options = {}, limit = 12) {
+  return uniqueTerms(activeOmnivoreDiscoveryLanes(options).flatMap((lane) => lane.targets.slice(0, 2)), limit);
+}
+
+function omnivoreLaneEvidenceTerms(lane = {}) {
+  const extras = {
+    "leftfield-electronic": ["electronic", "electronica", "experimental electronic"],
+    downtempo: ["downtempo", "chillout", "balearic"],
+    ambient: ["ambient", "modern classical", "minimal"],
+    "indie-dance": ["indie dance", "dance", "disco"],
+    "nu-disco": ["disco", "funk", "boogie"],
+    breaks: ["breaks", "breakbeat", "electro"],
+    "psychedelic-electronic": ["psychedelic", "psytrance", "ambient"],
+    "jazz-fusion": ["jazz", "fusion", "nu jazz"],
+    "modern-soul": ["soul", "r&b", "r and b", "funk"],
+    "dream-pop": ["dream pop", "indie", "synth pop"],
+    "cinematic-rock": ["rock", "post rock", "krautrock"],
+    "deep-bass": ["bass", "dubstep", "garage", "dub"]
+  };
+  return uniqueTerms([...(lane.targets || []), ...(extras[lane.id] || [])], 16);
+}
+
+function omnivoreBridgeEvidenceFor(track = {}, query = "", options = {}, profile = buildDiscoveryProfile(options)) {
+  if (!profile.isOmnivoreDiscovery) return { points: 0, corroborates: false, queryOnly: false, queryMatched: false, lane: "", anchor: "", target: "" };
+
+  const metadataText = `${track.artist || ""} ${track.title || ""} ${track.album || ""} ${labelText(track)} ${Array.isArray(track.genre) ? track.genre.join(" ") : (track.genre || "")}`;
+  const queryText = cleanText(query || track.query || "");
+  const lanes = activeOmnivoreDiscoveryLanes(options);
+  let best = { points: 0, corroborates: false, queryOnly: false, queryMatched: false, lane: "", anchor: "", target: "" };
+
+  for (const lane of lanes) {
+    const anchors = lane.anchors || [];
+    const targets = omnivoreLaneEvidenceTerms(lane);
+    const metadataAnchor = anchors.find((anchor) => containsEntityTerm(metadataText, anchor)) || "";
+    const metadataTarget = targets.find((target) => hasAnyTerm(metadataText, [target])) || "";
+    const queryAnchor = anchors.find((anchor) => containsEntityTerm(queryText, anchor)) || "";
+    const queryTarget = targets.find((target) => hasAnyTerm(queryText, [target])) || "";
+    const queryMatched = Boolean(queryAnchor || queryTarget);
+    const corroborates = Boolean(metadataAnchor || metadataTarget);
+    const minutes = durationMinutes(track);
+    let points = 0;
+
+    if (metadataAnchor) points += 15;
+    if (metadataTarget) points += 10;
+    if (queryAnchor && corroborates) points += 5;
+    else if (queryAnchor) points += 3;
+    if (queryTarget && corroborates) points += 4;
+    else if (queryTarget) points += 2;
+    if (minutes >= 5 && minutes <= 12) points += 4;
+    else if (minutes >= 3.5 && minutes < 5) points += 2;
+
+    points = clamp(points, 0, 28);
+    if (points > best.points) {
+      best = {
+        points,
+        corroborates,
+        queryOnly: queryMatched && !corroborates,
+        queryMatched,
+        lane: lane.id,
+        anchor: metadataAnchor || queryAnchor || "",
+        target: metadataTarget || queryTarget || ""
+      };
+    }
+  }
+
+  return best;
+}
+
+function omnivoreDriftReason(track = {}, options = {}, profile = buildDiscoveryProfile(options)) {
+  if (!profile.isOmnivoreDiscovery) return "";
+  if (requestedLabelMatch(track, profile) || hasSeedArtistMatch(track, options, profile)) return "";
+  const evidence = omnivoreBridgeEvidenceFor(track, track.query, options, profile);
+  if (evidence.corroborates) return "";
+  if (evidence.queryMatched) {
+    return "Open any-genre discovery matched only the search query; TIDAL metadata does not corroborate the taste-bridge lane.";
+  }
+  return "Open any-genre discovery candidate lacks cross-genre taste-bridge evidence.";
 }
 
 function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDiscoveryProfile(options), history = null, freshArtistAvoidance = null) {
@@ -1768,19 +2292,27 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
     : [""];
   const isYearCatalogSearch = Boolean(yearRange && profile.targetGenres.length);
   const useAnchoredGenreSearch = Boolean(profile.isGenreDiscoveryTarget && !profile.isProgressiveTarget && !pureRequestedArtistSearch);
+  const outsideTastePrompt = Boolean(profile.promptIntent?.allowOutsideTaste && profile.scoringMode === "taste-guided");
+  const tasteArtistSeedLimit = outsideTastePrompt
+    ? 4
+    : (isYearCatalogSearch ? 34 : 18);
   const artists = filterFreshArtistSeeds(uniqueTerms([
-    ...planArtists,
+    ...(profile.isOmnivoreDiscovery ? [] : planArtists),
     ...branchArtists,
-    ...buildArtistSeeds(options, isYearCatalogSearch ? 34 : 18, tasteProfile, profile, history, freshArtistAvoidance)
+    ...buildArtistSeeds(options, tasteArtistSeedLimit, tasteProfile, profile, history, freshArtistAvoidance)
   ], isYearCatalogSearch ? 42 : 28), options, history, tasteProfile, profile, freshArtistAvoidance);
+  const promptQueries = promptIntentSearchQueries(options, profile, isYearCatalogSearch ? 48 : 36);
+  const omnivoreQueries = buildOmnivoreDiscoveryQueries(options, tasteProfile, profile, isYearCatalogSearch ? 120 : 84);
   const genreSeeds = genreDiscoverySeeds(profile);
   const targetTerms = pureRequestedArtistSearch && !profile.targetGenres.length
     ? [""]
-    : (planTargetTerms.length
+    : (profile.isOmnivoreDiscovery
+      ? omnivoreTargetTerms(options, 18)
+      : (planTargetTerms.length
     ? uniqueTerms([...planTargetTerms, ...(profile.isProgressiveTarget ? PROGRESSIVE_CATALOG_TARGETS : [])], 18)
     : (profile.targetGenres.length
       ? (profile.isProgressiveTarget ? uniqueTerms([...profile.targetGenres, ...PROGRESSIVE_CATALOG_TARGETS], 18) : profile.targetGenres)
-      : [profile.primaryTarget].filter(Boolean)));
+      : [profile.primaryTarget].filter(Boolean))));
   const vibeTerms = uniqueTerms([...planVibeTerms, ...profile.vibeTerms], 24);
   const artistQueries = [];
   const sceneQueries = [];
@@ -1857,7 +2389,7 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
     }
   }
 
-  for (const label of uniqueTerms([...branchLabelSeeds(options, profile, 18), ...planLabels], isYearCatalogSearch ? 24 : 16)) {
+  for (const label of uniqueTerms([...branchLabelSeeds(options, profile, 18), ...(profile.isOmnivoreDiscovery ? [] : planLabels)], isYearCatalogSearch ? 24 : 16)) {
     for (const target of targetTerms.slice(0, 3)) {
       for (const year of yearTerms.slice(-2)) labelQueries.push(cleanText(`${label} ${target} ${year}`));
     }
@@ -1887,7 +2419,7 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
         extendedQueries.push(cleanText(`${target} extended mix ${year}`));
         extendedQueries.push(cleanText(`${target} club mix ${year}`));
       }
-      for (const label of uniqueTerms([...branchLabelSeeds(options, profile, 14), ...planLabels], 18)) {
+      for (const label of uniqueTerms([...branchLabelSeeds(options, profile, 14), ...(profile.isOmnivoreDiscovery ? [] : planLabels)], 18)) {
         extendedQueries.push(cleanText(`${label} extended mix ${year}`));
         for (const target of targetTerms.slice(0, 2)) {
           extendedQueries.push(cleanText(`${label} ${target} extended mix ${year}`));
@@ -1896,7 +2428,10 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
     }
   }
 
-  const queryLimit = isYearCatalogSearch ? 88 : 42;
+  const wideDiscoveryPool = shouldBuildWideDiscoveryPool(options, profile);
+  const queryLimit = isYearCatalogSearch
+    ? (wideDiscoveryPool ? 140 : 88)
+    : (wideDiscoveryPool ? 90 : 42);
   const planQueryLimit = isYearCatalogSearch ? 18 : 12;
   const anchoredQueryLimit = isYearCatalogSearch ? 46 : 18;
   const progressiveLabelYearQueries = profile.isProgressiveTarget && isYearCatalogSearch
@@ -1905,11 +2440,19 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
       ...labelQueries
     ], 44)
     : [];
+  if (/^(1|true|yes)$/i.test(String(options.planOnlySearch || options.planQueriesOnly || "")) && planQueries.length) {
+    const planOnlyLimit = Math.max(1, Math.min(queryLimit, Number(options.planQueryLimit || planQueries.length || queryLimit)));
+    return Array.from(new Set(planQueries.map(cleanText).filter(Boolean))).slice(0, planOnlyLimit);
+  }
   if (pureRequestedArtistSearch) {
-    const requestedKeys = (profile.requestedArtists || []).map(normalize).filter(Boolean);
+    const requestedArtists = (profile.requestedArtists || []).map(cleanText).filter(Boolean);
     const requestedPlanQueries = planQueries.filter((query) => {
       const normalizedQuery = normalize(query);
-      return requestedKeys.some((artist) => normalizedQuery.includes(artist));
+      return requestedArtists.some((artist) => (
+        isCollisionSensitiveArtist(artist)
+          ? artistMatchesKnownName(query, artist, { contains: true })
+          : normalizedQuery.includes(normalize(artist))
+      ));
     });
     return Array.from(new Set([
       ...extendedQueries,
@@ -1928,17 +2471,21 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
   }
   return Array.from(new Set([
     ...extendedQueries,
+    ...omnivoreQueries.slice(0, profile.isOmnivoreDiscovery ? 72 : 48),
+    ...promptQueries.slice(0, profile.isOmnivoreDiscovery ? 6 : 24),
     ...progressiveLabelYearQueries,
     ...sceneAnchorQueries.slice(0, anchoredQueryLimit),
     ...labelQueries.slice(0, useAnchoredGenreSearch ? (isYearCatalogSearch ? 36 : 18) : 0),
     ...artistQueries.slice(0, useAnchoredGenreSearch ? (isYearCatalogSearch ? 30 : 14) : 0),
-    ...planQueries.slice(0, useAnchoredGenreSearch ? Math.ceil(planQueryLimit / 2) : planQueryLimit),
+    ...planQueries.slice(0, profile.isOmnivoreDiscovery ? 3 : (useAnchoredGenreSearch ? Math.ceil(planQueryLimit / 2) : planQueryLimit)),
     ...catalogYearQueries.slice(0, profile.isProgressiveTarget ? 36 : (profile.isGenreDiscoveryTarget ? 36 : 16)),
     ...artistQueries.slice(0, profile.isProgressiveTarget ? (isYearCatalogSearch ? 24 : 12) : 10),
     ...sceneQueries.slice(0, isYearCatalogSearch ? 22 : 14),
     ...labelQueries.slice(0, profile.isProgressiveTarget ? (isYearCatalogSearch ? 28 : 12) : (profile.isGenreDiscoveryTarget ? (isYearCatalogSearch ? 32 : 16) : 0)),
     ...tranceQueries.slice(0, 5),
-    ...artistQueries.slice(24, isYearCatalogSearch ? 42 : 18)
+    ...artistQueries.slice(24, isYearCatalogSearch ? 42 : 18),
+    ...omnivoreQueries.slice(profile.isOmnivoreDiscovery ? 72 : 48),
+    ...promptQueries.slice(profile.isOmnivoreDiscovery ? 6 : 24)
   ].map(cleanText).filter(Boolean))).slice(0, queryLimit);
 }
 
@@ -1987,16 +2534,22 @@ function buildBranchSearchQueries(options = {}, tasteProfile = null, profile = b
     ? Array.from({ length: yearRange.max - yearRange.min + 1 }, (_, index) => String(yearRange.min + index))
     : [""];
   const targetTerms = uniqueTerms([
-    ...(profile.targetGenres || []),
+    ...(profile.isOmnivoreDiscovery ? omnivoreTargetTerms(options, 10) : (profile.targetGenres || [])),
     ...(profile.primaryTarget ? [profile.primaryTarget] : [])
   ], 8);
   const vibeTerms = uniqueTerms([...(profile.vibeTerms || [])], 6);
+  const tasteGuidedBranchSeeds = profile.scoringMode === "taste-guided" && shouldBuildWideDiscoveryPool(options, profile)
+    ? buildArtistSeeds(options, profile.promptIntent?.allowOutsideTaste ? 4 : 14, tasteProfile, profile, history, freshArtistAvoidance)
+    : [];
   const artistSeeds = filterFreshArtistSeeds(uniqueTerms([
     ...branchArtistSeeds(options, profile, 28),
+    ...(profile.isOmnivoreDiscovery ? activeOmnivoreDiscoveryLanes(options).flatMap((lane) => lane.anchors.slice(0, 2)) : []),
+    ...tasteGuidedBranchSeeds,
     ...((profile.scoringMode === "similar" || profile.scoringMode === "explore") ? buildArtistSeeds(options, 10, tasteProfile, profile, history, freshArtistAvoidance) : [])
   ], 32), options, history, tasteProfile, profile, freshArtistAvoidance);
   const labelSeeds = uniqueTerms([
     ...branchLabelSeeds(options, profile, 24),
+    ...(profile.isOmnivoreDiscovery ? activeOmnivoreDiscoveryLanes(options).flatMap((lane) => lane.anchors.slice(0, 2)) : []),
     ...(profile.isProgressiveTarget ? PROGRESSIVE_LABELS.slice(0, 14) : [])
   ], 32);
 
@@ -2026,6 +2579,223 @@ function buildBranchSearchQueries(options = {}, tasteProfile = null, profile = b
   }
 
   return uniqueTerms(queries, yearRange ? 80 : 44);
+}
+
+function recoveryYearTerms(options = {}) {
+  const yearRange = parseYearRange(options);
+  if (!yearRange) return [];
+  const years = Array.from({ length: yearRange.max - yearRange.min + 1 }, (_, index) => String(yearRange.min + index));
+  return uniqueTerms([yearRange.label, ...years.slice(-3)], 4);
+}
+
+function recoveryQueryText(...parts) {
+  return cleanText(parts.filter(Boolean).join(" "));
+}
+
+function recoveryCandidatePairs(options = {}) {
+  const pairs = [];
+  for (const candidate of Array.isArray(options.llmCandidates) ? options.llmCandidates : []) {
+    const artist = cleanText(candidate?.artist);
+    const title = cleanText(candidate?.title);
+    if (artist && title) pairs.push({ artist, title });
+  }
+  const nowPlaying = options.nowPlaying || options.currentTrack || {};
+  if (nowPlaying && typeof nowPlaying === "object") {
+    const artist = cleanText(nowPlaying.artist);
+    const title = cleanText(nowPlaying.title);
+    if (artist && title) pairs.push({ artist, title });
+  }
+  return pairs.filter((pair, index, list) => {
+    const key = `${normalize(pair.artist)}|${normalize(pair.title)}`;
+    return key !== "|" && list.findIndex((item) => `${normalize(item.artist)}|${normalize(item.title)}` === key) === index;
+  }).slice(0, 12);
+}
+
+function buildAdaptiveRecoveryQueryFamilies(options = {}, tasteProfile = null, profile = buildDiscoveryProfile(options), artistSeeds = [], usedQueries = new Set(), history = null, freshArtistAvoidance = null) {
+  const used = usedQueries instanceof Set ? usedQueries : new Set();
+  const yearTerms = recoveryYearTerms(options);
+  const primaryYear = yearTerms[0] || "";
+  const targetTerms = uniqueTerms([
+    ...(profile.isOmnivoreDiscovery ? omnivoreTargetTerms(options, 10) : (profile.targetGenres || [])),
+    profile.primaryTarget || "",
+    ...(Array.isArray(options.llmSearchPlan?.targetGenres) ? options.llmSearchPlan.targetGenres : [])
+  ], 8);
+  const vibeTerms = uniqueTerms([
+    ...(profile.vibeTerms || []),
+    ...(Array.isArray(options.llmSearchPlan?.vibeTerms) ? options.llmSearchPlan.vibeTerms : [])
+  ], 8);
+  const labelSeeds = uniqueTerms([
+    ...(profile.requestedLabels || []),
+    ...(Array.isArray(options.llmSearchPlan?.candidateLabels) ? options.llmSearchPlan.candidateLabels : []),
+    ...branchLabelSeeds(options, profile, 18),
+    ...genreLabelSeeds(profile).slice(0, 14)
+  ], 24);
+  const requestedArtistSeeds = uniqueTerms([
+    ...(profile.requestedArtists || []),
+    ...(profile.seedArtists || [])
+  ], 18);
+  const branchSeeds = profile.scoringMode === "pure"
+    ? requestedArtistSeeds
+    : filterFreshArtistSeeds(uniqueTerms([
+      ...requestedArtistSeeds,
+      ...(Array.isArray(options.llmSearchPlan?.candidateArtists) ? options.llmSearchPlan.candidateArtists : []),
+      ...artistSeeds,
+      ...branchArtistSeeds(options, profile, 18)
+    ].filter((artist) => !isGenericSeedArtist(artist)), 28), options, history, tasteProfile, profile, freshArtistAvoidance);
+  const genreText = targetTerms.slice(0, 2).join(" ") || cleanText(options.genres) || "electronic music";
+  const vibeText = vibeTerms.slice(0, 2).join(" ");
+  const requestTheme = cleanText(options.request)
+    .replace(/\b(?:find|search|give me|show me|tracks?|songs?|music|please)\b/gi, " ")
+    .replace(/[.,!?]+/g, " ")
+    .trim()
+    .slice(0, 80);
+
+  function family(id, label, lane, queries) {
+    const filteredQueries = filterFreshArtistQueries(
+      uniqueTerms(queries, 24),
+      options,
+      history,
+      tasteProfile,
+      profile,
+      freshArtistAvoidance
+    );
+    return {
+      id,
+      label,
+      lane,
+      queries: filteredQueries
+        .filter((query) => query && !used.has(normalize(query)))
+    };
+  }
+
+  const exactTitleQueries = [];
+  for (const pair of recoveryCandidatePairs(options)) {
+    exactTitleQueries.push(recoveryQueryText(pair.artist, pair.title));
+    exactTitleQueries.push(recoveryQueryText(pair.title, pair.artist));
+    if (primaryYear) exactTitleQueries.push(recoveryQueryText(pair.artist, pair.title, primaryYear));
+  }
+
+  const exactArtistQueries = [];
+  for (const artist of requestedArtistSeeds.slice(0, 10)) {
+    exactArtistQueries.push(recoveryQueryText(artist, primaryYear));
+    exactArtistQueries.push(recoveryQueryText(artist, genreText, primaryYear));
+    if (vibeText) exactArtistQueries.push(recoveryQueryText(artist, vibeText, genreText));
+  }
+
+  const genreYearQueries = [];
+  for (const year of yearTerms.length ? yearTerms : [""]) {
+    genreYearQueries.push(recoveryQueryText(genreText, year, "new releases"));
+    genreYearQueries.push(recoveryQueryText(genreText, year, "underground"));
+    genreYearQueries.push(recoveryQueryText(genreText, year, "extended mix"));
+    if (vibeText) genreYearQueries.push(recoveryQueryText(genreText, vibeText, year));
+  }
+
+  const labelYearQueries = [];
+  if (profile.scoringMode !== "pure") {
+    for (const label of labelSeeds.slice(0, 14)) {
+      labelYearQueries.push(recoveryQueryText(label, genreText, primaryYear));
+      labelYearQueries.push(recoveryQueryText(label, primaryYear, "extended mix"));
+      if (vibeText) labelYearQueries.push(recoveryQueryText(label, vibeText, genreText));
+    }
+  }
+
+  const branchQueries = [];
+  if (profile.scoringMode !== "pure") {
+    for (const artist of branchSeeds.slice(0, 14)) {
+      branchQueries.push(recoveryQueryText(artist, genreText, primaryYear));
+      branchQueries.push(recoveryQueryText(artist, primaryYear, "new release"));
+      if (vibeText) branchQueries.push(recoveryQueryText(artist, vibeText, genreText));
+    }
+  }
+
+  const adjacentQueries = profile.scoringMode === "pure"
+    ? []
+    : buildAdjacentSearchQueries(options, tasteProfile, profile, history, freshArtistAvoidance).slice(0, 32);
+
+  const omnivoreQueries = [];
+  if (profile.isOmnivoreDiscovery && profile.scoringMode !== "pure") {
+    for (const lane of activeOmnivoreDiscoveryLanes(options).slice(0, 8)) {
+      const targets = (lane.targets || []).slice(0, 2);
+      const anchors = (lane.anchors || []).slice(0, 3);
+      for (const target of targets) {
+        omnivoreQueries.push(recoveryQueryText(target, "underground", primaryYear));
+        for (const anchor of anchors.slice(0, 2)) {
+          omnivoreQueries.push(recoveryQueryText(anchor, target));
+          if (primaryYear) omnivoreQueries.push(recoveryQueryText(anchor, target, primaryYear));
+        }
+      }
+    }
+  }
+
+  const themeQueries = [];
+  if (requestTheme && !targetTerms.length) {
+    themeQueries.push(recoveryQueryText(requestTheme, "electronic music", primaryYear));
+    themeQueries.push(recoveryQueryText(requestTheme, "dance music"));
+    themeQueries.push(recoveryQueryText(requestTheme, "ambient electronic"));
+  }
+
+  return [
+    family("exact-title", "Exact title retry", "core", exactTitleQueries),
+    family("exact-artist", "Exact artist catalog retry", "core", exactArtistQueries),
+    family("genre-year", "Genre/year discovery retry", "core", genreYearQueries),
+    family("label-year", "Label/year recovery", "label", labelYearQueries),
+    family("branch-artist", "Branch artist recovery", "branch", branchQueries),
+    family("adjacent-lane", "Adjacent lane recovery", "adjacent", adjacentQueries),
+    family("omnivore-branches", "Cross-genre branch recovery", "omnivore", omnivoreQueries),
+    family("theme", "Theme recovery", "adjacent", themeQueries)
+  ].filter((item) => item.queries.length);
+}
+
+function laneQuotaShortfalls(targets = {}, available = {}, buckets = ["omnivore", "label", "adjacent", "branch"]) {
+  return buckets.map((bucket) => {
+    const target = Number(targets?.[bucket] || 0);
+    const count = Number(available?.[bucket] || 0);
+    return {
+      bucket,
+      target,
+      available: count,
+      shortfall: Math.max(0, target - count)
+    };
+  }).filter((item) => item.target > 0 && item.shortfall > 0);
+}
+
+function shouldRunAdaptiveQueryRecovery({
+  keptCount = 0,
+  requestedCount = 0,
+  usefulCandidateTarget = 0,
+  queryYield = {},
+  budgetAvailable = true,
+  laneShortfalls = []
+} = {}) {
+  if (!budgetAvailable) return { run: false, reason: "runtime budget unavailable" };
+  const usefulFloor = Math.min(
+    Number(usefulCandidateTarget || 0) || Math.max(Number(requestedCount || 0) * 3, Number(requestedCount || 0) + 12),
+    Math.max(Number(requestedCount || 0) + 2, Math.ceil((Number(usefulCandidateTarget || 0) || Number(requestedCount || 0)) * 0.35))
+  );
+  if (keptCount < requestedCount) return { run: true, reason: "below requested count" };
+  if (keptCount < usefulFloor) return { run: true, reason: "thin candidate pool" };
+  const actionableShortfalls = (Array.isArray(laneShortfalls) ? laneShortfalls : [])
+    .filter((item) => item && Number(item.target || 0) > 0 && Number(item.shortfall || 0) > 0);
+  if (actionableShortfalls.length) {
+    const lanes = actionableShortfalls.map((item) => cleanText(item.bucket)).filter(Boolean);
+    const summary = actionableShortfalls
+      .slice(0, 3)
+      .map((item) => `${item.bucket} ${item.available || 0}/${item.target || 0}`)
+      .join(", ");
+    return {
+      run: true,
+      reason: `lane starvation: ${summary}`,
+      lanes,
+      laneShortfalls: actionableShortfalls
+    };
+  }
+  const attempted = Number(queryYield.attempted || 0);
+  const returned = Number(queryYield.returned || 0);
+  const accepted = Number(queryYield.accepted || 0);
+  const sludge = Number(queryYield.seoRejects || 0) + Number(queryYield.genreRejects || 0);
+  if (attempted >= 4 && accepted <= 1 && returned >= 20) return { run: true, reason: "weak query yield" };
+  if (sludge >= Math.max(8, accepted * 4)) return { run: true, reason: "high sludge rejection" };
+  return { run: false, reason: "" };
 }
 
 function yearTermsForBroadenPass(options = {}) {
@@ -2062,7 +2832,9 @@ function mergePlanForBroaden(options = {}, additions = {}) {
 }
 
 function broadenCoreQueries(options = {}, profile = buildDiscoveryProfile(options)) {
-  const targets = (profile.targetGenres?.length ? profile.targetGenres : [profile.primaryTarget]).filter(Boolean).slice(0, 6);
+  const targets = (profile.isOmnivoreDiscovery
+    ? omnivoreTargetTerms(options, 8)
+    : (profile.targetGenres?.length ? profile.targetGenres : [profile.primaryTarget])).filter(Boolean).slice(0, 8);
   const vibes = (profile.vibeTerms || []).slice(0, 5);
   const years = yearTermsForBroadenPass(options);
   const queries = [];
@@ -2083,6 +2855,49 @@ function broadenCoreQueries(options = {}, profile = buildDiscoveryProfile(option
   }
 
   return uniqueTerms(queries, 48);
+}
+
+function broadenBranchOutQueries(options = {}, profile = buildDiscoveryProfile(options)) {
+  if (profile.scoringMode === "pure" || profile.scoringMode === "similar") return [];
+  if (hasExplicitArtistFocus(options, profile) && !requestRequiresFreshArtists(options)) return [];
+
+  const targets = profile.isOmnivoreDiscovery
+    ? omnivoreTargetTerms(options, 10)
+    : uniqueTerms([
+      ...(profile.targetGenres || []),
+      ...(profile.primaryTarget ? [profile.primaryTarget] : [])
+    ], 8);
+  const vibes = (profile.vibeTerms || []).slice(0, 4);
+  const years = yearTermsForBroadenPass(options);
+  const artists = uniqueTerms([
+    ...branchArtistSeeds(options, profile, 28),
+    ...(profile.isOmnivoreDiscovery ? activeOmnivoreDiscoveryLanes(options).flatMap((lane) => lane.anchors.slice(0, 2)) : []),
+    ...(profile.isProgressiveTarget ? PROGRESSIVE_FRESH_ANCHORS.slice(0, 20) : []),
+    ...(profile.isProgressiveTarget ? PROGRESSIVE_ARTISTS.slice(0, 18) : []),
+    ...genreArtistAnchors(profile).slice(0, 24)
+  ], 44);
+  const labels = uniqueTerms([
+    ...branchLabelSeeds(options, profile, 28),
+    ...(profile.isOmnivoreDiscovery ? activeOmnivoreDiscoveryLanes(options).flatMap((lane) => lane.anchors.slice(0, 3)) : []),
+    ...(profile.isProgressiveTarget ? PROGRESSIVE_LABELS.slice(0, 24) : []),
+    ...genreDiscoverySeeds(profile).slice(0, 24)
+  ], 44);
+  const queries = [];
+
+  for (const year of years) {
+    for (const artist of artists.slice(0, 24)) {
+      queries.push(cleanText(`${artist} ${year}`));
+      for (const target of targets.slice(0, 3)) queries.push(cleanText(`${artist} ${target} ${year}`));
+      for (const vibe of vibes.slice(0, 2)) queries.push(cleanText(`${artist} ${vibe} ${year}`));
+    }
+    for (const label of labels.slice(0, 24)) {
+      queries.push(cleanText(`${label} ${year}`));
+      for (const target of targets.slice(0, 3)) queries.push(cleanText(`${label} ${target} ${year}`));
+      for (const vibe of vibes.slice(0, 2)) queries.push(cleanText(`${label} ${vibe} ${year}`));
+    }
+  }
+
+  return uniqueTerms(queries, 96);
 }
 
 function broadenAdjacentQueries(options = {}, profile = buildDiscoveryProfile(options)) {
@@ -2161,9 +2976,9 @@ function queryYieldHealthFor(result = {}, requestedCount = 8) {
 }
 
 function yieldRecoveryQueries(options = {}, profile = buildDiscoveryProfile(options)) {
-  const targets = (profile.targetGenres?.length ? profile.targetGenres : [profile.primaryTarget])
+  const targets = (profile.isOmnivoreDiscovery ? omnivoreTargetTerms(options, 8) : (profile.targetGenres?.length ? profile.targetGenres : [profile.primaryTarget]))
     .filter(Boolean)
-    .slice(0, 6);
+    .slice(0, 8);
   if (!targets.length) return [];
 
   const years = yearTermsForBroadenPass(options);
@@ -2226,11 +3041,13 @@ function autoBroadenSearchPasses(options = {}, profile = buildDiscoveryProfile(o
   const vibeTerms = profile.vibeTerms || [];
   const yieldQueries = yieldHealth.retryNeeded ? yieldRecoveryQueries(options, profile) : [];
   const coreQueries = broadenCoreQueries(options, profile);
+  const branchOutQueries = broadenBranchOutQueries(options, profile);
 
   if (yieldQueries.length) {
     passes.push({
       lane: "yield-retry",
       label: "Yield-aware retry",
+      stage: "1. Same-intent yield recovery",
       reason: `Query yield was weak (${yieldHealth.summary}); retrying with label/artist anchored same-intent queries.`,
       targetPool,
       queryYieldHealth: yieldHealth,
@@ -2239,6 +3056,7 @@ function autoBroadenSearchPasses(options = {}, profile = buildDiscoveryProfile(o
         autoBroaden: true,
         autoBroadenLane: "yield-retry",
         autoBroadenLabel: "Yield-aware retry",
+        adaptiveRetryStage: "same-intent-yield-recovery",
         effectiveCount: baseCount,
         llmSearchPlan: mergePlanForBroaden(options, {
           searchQueries: yieldQueries,
@@ -2256,6 +3074,7 @@ function autoBroadenSearchPasses(options = {}, profile = buildDiscoveryProfile(o
     passes.push({
       lane: "core-expanded",
       label: "Broadened same-lane search",
+      stage: yieldQueries.length ? "2. Same-lane expansion" : "1. Same-lane expansion",
       reason: yieldHealth.retryNeeded
         ? `Query yield was weak (${yieldHealth.summary}); expanding within requested intent.`
         : `Initial candidate pool ${currentPool}/${targetPool}; expanding within requested intent.`,
@@ -2266,6 +3085,7 @@ function autoBroadenSearchPasses(options = {}, profile = buildDiscoveryProfile(o
         autoBroaden: true,
         autoBroadenLane: "core-expanded",
         autoBroadenLabel: "Broadened same-lane search",
+        adaptiveRetryStage: "same-lane-expansion",
         effectiveCount: baseCount,
         llmSearchPlan: mergePlanForBroaden(options, {
           searchQueries: coreQueries,
@@ -2276,11 +3096,38 @@ function autoBroadenSearchPasses(options = {}, profile = buildDiscoveryProfile(o
     });
   }
 
+  if (branchOutQueries.length) {
+    passes.push({
+      lane: "branch-out",
+      label: "Branch-out search",
+      stage: `${passes.length + 1}. Scene branch-out`,
+      reason: `Initial candidate pool ${currentPool}/${targetPool}; checking adjacent artists and labels while keeping the requested intent.`,
+      targetPool,
+      options: {
+        ...options,
+        autoBroaden: true,
+        autoBroadenLane: "branch-out",
+        autoBroadenLabel: "Branch-out search",
+        adaptiveRetryStage: "scene-branch-out",
+        effectiveCount: baseCount,
+        llmSearchPlan: mergePlanForBroaden(options, {
+          searchQueries: branchOutQueries,
+          targetGenres,
+          vibeTerms,
+          candidateArtists: branchArtistSeeds(options, profile, 18),
+          candidateLabels: branchLabelSeeds(options, profile, 18),
+          queryLimit: 84
+        })
+      }
+    });
+  }
+
   const adjacentQueries = broadenAdjacentQueries(options, profile);
   if (profile.isGenreDiscoveryTarget && adjacentQueries.length) {
     passes.push({
       lane: "adjacent",
       label: "Broadened adjacent-lane search",
+      stage: `${passes.length + 1}. Adjacent-lane check`,
       reason: `Initial candidate pool ${currentPool}/${targetPool}; checking adjacent terms without changing requested genre.`,
       targetPool,
       options: {
@@ -2288,6 +3135,7 @@ function autoBroadenSearchPasses(options = {}, profile = buildDiscoveryProfile(o
         autoBroaden: true,
         autoBroadenLane: "adjacent",
         autoBroadenLabel: "Broadened adjacent-lane search",
+        adaptiveRetryStage: "adjacent-lane-check",
         effectiveCount: baseCount,
         llmSearchPlan: mergePlanForBroaden(options, {
           searchQueries: adjacentQueries,
@@ -2310,6 +3158,7 @@ function autoBroadenSearchPasses(options = {}, profile = buildDiscoveryProfile(o
       passes.push({
         lane: "relaxed-vibe",
         label: "Broadened genre-first search",
+        stage: `${passes.length + 1}. Relax vibe only`,
         reason: `Initial candidate pool ${currentPool}/${targetPool}; relaxing vibe terms while keeping requested genre.`,
         targetPool,
         options: {
@@ -2317,6 +3166,7 @@ function autoBroadenSearchPasses(options = {}, profile = buildDiscoveryProfile(o
           autoBroaden: true,
           autoBroadenLane: "relaxed-vibe",
           autoBroadenLabel: "Broadened genre-first search",
+          adaptiveRetryStage: "relax-vibe-only",
           effectiveCount: baseCount,
           mood: "",
           llmSearchPlan: mergePlanForBroaden(options, {
@@ -2329,7 +3179,16 @@ function autoBroadenSearchPasses(options = {}, profile = buildDiscoveryProfile(o
     }
   }
 
-  return passes.slice(0, 3);
+  return passes.slice(0, 4);
+}
+
+function shouldContinueAutoBroadenAfterError(error = null, context = {}) {
+  const message = typeof error === "string" ? error : String(error?.message || "");
+  const timedOut = /\b(?:timed out|took too long)\b/i.test(message);
+  if (!timedOut) return true;
+  if (context.initialTimedOut) return false;
+  if (Number(context.remainingPasses || 0) <= 0) return false;
+  return Number(context.currentPool || 0) < Number(context.requestedCount || 0);
 }
 
 function buildSceneAnchorRecentQueries(options = {}, tasteProfile = null, profile = buildDiscoveryProfile(options), history = null, freshArtistAvoidance = null) {
@@ -2408,7 +3267,7 @@ function buildArtistSeeds(options = {}, limit = 12, tasteProfile = null, profile
   ], limit);
   const seedArtists = profile.seedArtists || extractSeedArtists(options);
   const branchArtists = pureRequestedArtistSearch ? [] : branchArtistSeeds(options, profile, Math.max(4, Math.ceil(limit * 0.45)));
-  const seedKeys = new Set(seedArtists.map(normalize));
+  const seedKeys = new Set(seedArtists.map(artistIdentityKey));
   const useLearnedArtists = profile.scoringMode === "similar" ||
     (profile.scoringMode === "taste-guided" && !profile.hasExplicitDiscoveryIntent);
   const learnedLimit = profile.scoringMode === "similar" ? 12 : 3;
@@ -2426,8 +3285,8 @@ function buildArtistSeeds(options = {}, limit = 12, tasteProfile = null, profile
     : (profile.isProgressiveTarget && wantsProgressiveHouseOnly(options)
     ? PROGRESSIVE_ARTISTS.filter((artist) => !isTranceForwardArtist(artist))
     : (profile.isProgressiveTarget ? PROGRESSIVE_ARTISTS : genreArtistAnchors(profile)));
-  const priorityKeys = new Set([...seedArtists, ...freshYearAnchors].map(normalize));
-  const rotatedSceneArtists = shuffled(uniqueValues(sceneArtists).filter((artist) => !seedKeys.has(normalize(artist)) && !priorityKeys.has(normalize(artist))));
+  const priorityKeys = new Set([...seedArtists, ...freshYearAnchors].map(artistIdentityKey));
+  const rotatedSceneArtists = shuffled(uniqueValues(sceneArtists).filter((artist) => !seedKeys.has(artistIdentityKey(artist)) && !priorityKeys.has(artistIdentityKey(artist))));
   return filterFreshArtistSeeds(
     uniqueValues([...planArtists, ...seedArtists, ...branchArtists, ...learnedArtists, ...freshYearAnchors, ...rotatedSceneArtists]),
     options,
@@ -2490,14 +3349,14 @@ function buildFreshArtistAvoidance(options = {}, history = null, tasteProfile = 
   const enabled = requestRequiresFreshArtists(options);
   const likedArtists = enabled
     ? uniqueTerms(likedArtistsForFreshAvoidance(tasteProfile), 160)
-      .map((artist) => ({ artist, key: normalize(artist) }))
+      .map((artist) => ({ artist, key: artistIdentityKey(artist) }))
       .filter((entry) => entry.key)
     : [];
   const exposedArtists = enabled && history && typeof history.artistStats === "function"
     ? Array.from(history.artistStats().values())
       .map((entry) => ({
         artist: cleanText(entry.artist),
-        key: normalize(entry.artist),
+        key: artistIdentityKey(entry.artist),
         trackCount: Number(entry.trackCount || 0),
         shownCount: Number(entry.shownCount || 0)
       }))
@@ -2519,8 +3378,8 @@ function freshAvoidanceContext(options = {}, history = null, tasteProfile = null
 
 function textMatchesFreshArtist(value = "", artist = "") {
   if (!cleanText(value) || !cleanText(artist)) return false;
-  if (containsEntityTerm(value, artist) || containsEntityTerm(artist, value)) return true;
-  return splitArtists(value).some((part) => containsEntityTerm(part, artist) || containsEntityTerm(artist, part));
+  if (artistMatchesKnownName(value, artist, { contains: true })) return true;
+  return splitArtists(value).some((part) => artistNamesMatch(part, artist, { contains: true }));
 }
 
 function likedFreshArtistMatch(value = "", context = {}) {
@@ -2640,6 +3499,141 @@ function artistDiversityAdjustmentFor(track = {}, history = null, profile = {}, 
   };
 }
 
+function exposureDecayMultiplier(exposure = {}, now = Date.now(), maxAgeMs = 1000 * 60 * 60 * 24 * 30) {
+  if (!exposure) return 0;
+  const lastShownAt = Number(exposure.lastShownAt || 0);
+  if (!lastShownAt) return exposure.recent ? 0.5 : 0;
+  const ageMs = Math.max(0, now - lastShownAt);
+  if (ageMs >= maxAgeMs) return 0;
+  return Math.max(0, Math.min(1, 1 - (ageMs / maxAgeMs)));
+}
+
+function exposurePressure(exposure = {}, thresholds = {}) {
+  if (!exposure) return 0;
+  const trackCount = Number(exposure.trackCount || 0);
+  const shownCount = Number(exposure.shownCount || 0);
+  const heavyTracks = Number(thresholds.heavyTracks || 8);
+  const mediumTracks = Number(thresholds.mediumTracks || 5);
+  const lightTracks = Number(thresholds.lightTracks || 3);
+  const heavyShows = Number(thresholds.heavyShows || 12);
+  const mediumShows = Number(thresholds.mediumShows || 8);
+  const lightShows = Number(thresholds.lightShows || 5);
+
+  if (trackCount >= heavyTracks || shownCount >= heavyShows) return 4;
+  if (trackCount >= mediumTracks || shownCount >= mediumShows) return 3;
+  if (trackCount >= lightTracks || shownCount >= lightShows) return 2;
+  if (trackCount >= 2 || shownCount >= 3) return 1;
+  return 0;
+}
+
+function sourceNoveltyPenaltyAllowed(track = {}) {
+  const text = normalize(`${track.discoverySource || ""} ${track.discoveryLane || ""}`);
+  if (!text) return false;
+  if (/^(?:tidal search|core|catalogue|catalog)$/.test(text)) return false;
+  if (/\b(?:tidal search|catalogue result)\b/.test(text) && !/\b(?:branch|adjacent|omnivore|radio|liked|artist expansion|adaptive|standby|fallback|rescue)\b/.test(text)) {
+    return false;
+  }
+  return /\b(?:liked artist|artist expansion|branch|adjacent|omnivore|taste bridge|radio|remixer|adaptive|standby|recent|fallback|rescue|expanded)\b/.test(text);
+}
+
+function labelDiversityKeyForCandidate(candidate = {}, profile = {}) {
+  if (requestedLabelMatch(candidate, profile)) return "";
+  return normalize(labelText(candidate));
+}
+
+function sourceDiversityKeyForCandidate(candidate = {}) {
+  const text = normalize(`${candidate.discoverySource || ""} ${candidate.discoveryLane || ""}`);
+  if (text.includes("omnivore") || text.includes("taste bridge")) return "";
+  if (!sourceNoveltyPenaltyAllowed(candidate)) return "";
+  return normalize([candidate.discoverySource, candidate.discoveryLane].filter(Boolean).join(" | "));
+}
+
+function sourceDiversityLabelForCandidate(candidate = {}) {
+  return cleanText([candidate.discoverySource, candidate.discoveryLane].filter(Boolean).join(" / "));
+}
+
+function noveltyPenaltyForExposure(exposure = {}, options = {}) {
+  const pressure = exposurePressure(exposure, options.thresholds || {});
+  if (!pressure) return 0;
+  const decay = exposureDecayMultiplier(exposure, options.now, options.maxAgeMs);
+  if (!decay) return 0;
+  const recentBoost = exposure.recent ? Number(options.recentBoost || 1) : 0;
+  return Math.max(0, Math.round((pressure + recentBoost) * decay * Number(options.weight || 1)));
+}
+
+function recentSuggestionNoveltyPenaltyFor(track = {}, history = null, profile = {}, options = {}, now = Date.now()) {
+  if (!history) return { value: 0, reasons: [], components: {} };
+  if (profile.scoringMode === "pure") return { value: 0, reasons: [], components: {} };
+  const repeatFriendly = allowsArtistRepeatFallback(options, profile) || allowsPreviouslySuggested(options);
+  const scale = repeatFriendly ? 0.45 : 1;
+  const components = {};
+  const reasons = [];
+
+  function addComponent(kind, exposure, rawPenalty, label) {
+    const value = Math.round(Number(rawPenalty || 0) * scale);
+    if (!value) return;
+    components[kind] = value;
+    const name = cleanText(label || exposure?.artist || exposure?.label || exposure?.source || kind);
+    const count = Number(exposure?.trackCount || 0);
+    const appearances = Number(exposure?.shownCount || 0);
+    reasons.push(`${name} ${kind} surfaced ${count || appearances} prior ${count === 1 ? "track" : "tracks"}${exposure?.recent ? " recently" : ""}`);
+  }
+
+  if (typeof history.artistExposureFor === "function" &&
+      profile.scoringMode !== "similar" &&
+      !((profile.requestedArtists || []).length && artistMatchesRequested(track.artist, profile.requestedArtists))) {
+    const exposure = history.artistExposureFor(track, now);
+    addComponent("artist", exposure, noveltyPenaltyForExposure(exposure, {
+      now,
+      maxAgeMs: 1000 * 60 * 60 * 24 * 30,
+      weight: profile.scoringMode === "explore" ? 1 : 0.75,
+      recentBoost: 1
+    }), exposure?.artist);
+  }
+
+  if (typeof history.labelExposureFor === "function" && !requestedLabelMatch(track, profile)) {
+    const exposure = history.labelExposureFor(track, now);
+    addComponent("label", exposure, noveltyPenaltyForExposure(exposure, {
+      now,
+      maxAgeMs: 1000 * 60 * 60 * 24 * 45,
+      weight: profile.scoringMode === "explore" ? 1.15 : 0.9,
+      recentBoost: 1,
+      thresholds: {
+        lightTracks: 2,
+        mediumTracks: 4,
+        heavyTracks: 7,
+        lightShows: 3,
+        mediumShows: 6,
+        heavyShows: 10
+      }
+    }), exposure?.label);
+  }
+
+  if (typeof history.sourceExposureFor === "function" && sourceNoveltyPenaltyAllowed(track)) {
+    const exposure = history.sourceExposureFor(track, now);
+    addComponent("source", exposure, noveltyPenaltyForExposure(exposure, {
+      now,
+      maxAgeMs: 1000 * 60 * 60 * 24 * 21,
+      weight: profile.scoringMode === "explore" ? 1 : 0.8,
+      recentBoost: 1,
+      thresholds: {
+        lightTracks: 3,
+        mediumTracks: 6,
+        heavyTracks: 10,
+        lightShows: 4,
+        mediumShows: 8,
+        heavyShows: 14
+      }
+    }), exposure?.source);
+  }
+
+  return {
+    value: Math.max(0, Math.min(repeatFriendly ? 5 : 12, Object.values(components).reduce((sum, value) => sum + Number(value || 0), 0))),
+    reasons: reasons.slice(0, 4),
+    components
+  };
+}
+
 function hasAnyTerm(text, terms = []) {
   return terms.some((term) => containsNormalized(text, term));
 }
@@ -2709,10 +3703,10 @@ function specificChildGenreEvidenceFor(track = {}, profile = buildDiscoveryProfi
   const labelSeeds = uniqueTerms([...(genreProfile.labels || []), ...genreLabelSeeds(profile)], 48);
   const artistAnchors = uniqueTerms([...(genreProfile.artists || []), ...genreArtistAnchors(profile)], 48);
   const excludedLabel = (genreProfile.excludeLabels || []).find((seed) => containsEntityTerm(labelText(track), seed)) || "";
-  const excludedArtist = (genreProfile.excludeArtists || []).find((seed) => splitArtists(track.artist).some((artist) => normalize(artist) === normalize(seed))) || "";
+  const excludedArtist = (genreProfile.excludeArtists || []).find((seed) => artistMatchesKnownName(track.artist, seed)) || "";
   const labelSeed = labelSeeds.find((seed) => containsEntityTerm(labelText(track), seed)) || "";
-  const artistAnchor = artistAnchors.find((seed) => splitArtists(track.artist).some((artist) => normalize(artist) === normalize(seed))) || "";
-  const seedArtist = (profile.seedArtists || []).find((seed) => splitArtists(track.artist).some((artist) => normalize(artist) === normalize(seed))) || "";
+  const artistAnchor = artistAnchors.find((seed) => artistMatchesKnownName(track.artist, seed)) || "";
+  const seedArtist = (profile.seedArtists || []).find((seed) => artistMatchesKnownName(track.artist, seed)) || "";
   const sceneLabel = profile.isProgressiveTarget ? matchingSceneLabel(labelText(track)) : "";
   const sceneArtist = profile.isProgressiveTarget ? matchingSceneArtist(track.artist) : "";
   const sceneCatalog = profile.isProgressiveTarget && hasAnyTerm(metadataText, PROGRESSIVE_CATALOG_TARGETS);
@@ -2857,8 +3851,8 @@ function vibeInferenceFor(track = {}, query = "", profile = {}) {
 }
 
 function genreLabelSeeds(profile = {}) {
-  const artistKeys = new Set(genreArtistAnchors(profile).map(normalize));
-  return genreDiscoverySeeds(profile).filter((seed) => !artistKeys.has(normalize(seed)));
+  const artistKeys = new Set(genreArtistAnchors(profile).map(artistIdentityKey));
+  return genreDiscoverySeeds(profile).filter((seed) => !artistKeys.has(artistIdentityKey(seed)));
 }
 
 function tasteGenreEvidenceFor(track = {}, tasteProfile = null) {
@@ -2884,7 +3878,8 @@ function tasteGenreEvidenceFor(track = {}, tasteProfile = null) {
   }
 
   for (const artist of splitArtists(track.artist)) {
-    const entry = profile.artists?.[normalize(artist)];
+    const entry = profile.artists?.[artistIdentityKey(artist)] ||
+      (!isCollisionSensitiveArtist(artist) ? profile.artists?.[normalize(artist)] : null);
     if (!entry?.score) continue;
     const score = Number(entry.score || 0);
     evidence.push({
@@ -2979,7 +3974,7 @@ function genreInferenceFor(track = {}, query = "", options = {}, profile = build
   const labelSeed = genreLabelSeeds(profile).find((seed) => containsEntityTerm(label, seed)) || "";
   if (labelSeed) add("label", `${labelSeed} scene label`, 36, { genre: targetGenres[0] || "" });
 
-  const artistAnchor = genreArtistAnchors(profile).find((seed) => splitArtists(track.artist).some((artist) => normalize(artist) === normalize(seed))) || "";
+  const artistAnchor = genreArtistAnchors(profile).find((seed) => artistMatchesKnownName(track.artist, seed)) || "";
   if (artistAnchor) {
     const hasSceneSupport = Boolean(labelSeed || metadataTargets.length || metadataAdjacent.length || requestedLabelMatch(track, profile));
     add("artist", `${artistAnchor} genre anchor`, hasSceneSupport ? 28 : 12, {
@@ -3069,7 +4064,7 @@ function sceneEvidenceFor(track = {}, query = "", options = {}, profile = buildD
   const artistAnchors = genreArtistAnchors(profile);
   const adjacentTerms = adjacentLaneTerms(profile, options);
   const labelSeed = labelSeeds.find((seed) => containsEntityTerm(labelText(track), seed)) || "";
-  const artistAnchor = artistAnchors.find((seed) => splitArtists(track.artist).some((artist) => normalize(artist) === normalize(seed))) || "";
+  const artistAnchor = artistAnchors.find((seed) => artistMatchesKnownName(track.artist, seed)) || "";
   const metadataTarget = hasAnyTerm(metadataText, profile.targetGenres || []);
   const metadataAdjacent = hasAnyTerm(metadataText, adjacentTerms);
   const queryTarget = hasAnyTerm(query, profile.targetGenres || []);
@@ -3149,9 +4144,22 @@ function sourceQualityReason(track = {}, options = {}, profile = buildDiscoveryP
 function genericGenreArtistName(value, profile = {}) {
   const artist = normalize(value);
   if (!artist) return false;
+  const artistWords = artist.split(/\s+/).filter(Boolean);
+  const genreArtistWords = artist.match(/\b(?:edm|electronic|dance|melodic|progressive|deep|organic|hypnotic|dark|afro|electro|uk|garage|house|techno|tekkno|trance|ambient|downtempo|breaks|breakbeat|dubstep)\b/g) || [];
+  const genreArtistSegments = cleanText(value)
+    .split(/[,/&|]+/)
+    .map(cleanText)
+    .filter(Boolean);
+  if (
+    genreArtistSegments.length >= 2 &&
+    genreArtistSegments.every((segment) => looksLikeStandaloneGenreStylePhrase(segment) || /\b(?:house|techno|tekkno|trance|ambient|downtempo|breaks|breakbeat|dubstep|edm)\b/i.test(segment))
+  ) {
+    return true;
+  }
+  if (genreArtistWords.length >= 3 && genreArtistWords.length >= artistWords.length - 1) return true;
   if (/^(?:deep house|house music|tech house|tech house music|techno house|deep vocallo|viral hits|dance hits|edm|electronic dance music|background music|benetti house bar|soundify background music|easy to dance music|electronic music|dance music|various artists?)$/.test(artist)) return true;
   if (
-    /\b(?:house|techno|trance|edm|dance|electronic|lounge|nightlife)\b/.test(artist) &&
+    /\b(?:house|techno|tekkno|trance|edm|dance|electronic|lounge|nightlife)\b/.test(artist) &&
     /\b(?:music|lounge|nation|zone|masters|hits|playlist|background|cafe|club)\b/.test(artist) &&
     artist.split(/\s+/).length >= 4
   ) {
@@ -3160,6 +4168,33 @@ function genericGenreArtistName(value, profile = {}) {
   return profile.targetGenres?.length &&
     hasAnyTerm(artist, profile.targetGenres) &&
     artist.split(/\s+/).length <= 5;
+}
+
+function looksLikeGenericGenreKeywordUploadTitle(title = "", album = "") {
+  const rawTitle = cleanText(title);
+  const normalizedTitle = normalize(rawTitle);
+  if (!normalizedTitle) return false;
+  const rawAlbum = cleanText(album);
+  const titleEqualsAlbum = normalizedTitle && normalizedTitle === normalize(rawAlbum);
+  const hasGenre = /\b(?:deep house|tech house|afro house|electro house|progressive house|melodic house|organic house|house|melodic techno|progressive techno|deep techno|hypnotic techno|techno|progressive trance|psytrance|psy trance|trance|ambient|downtempo|breaks|breakbeat|uk garage|garage|dubstep|edm)\b/.test(normalizedTitle);
+  if (!hasGenre) return false;
+
+  const genreWords = normalizedTitle.match(/\b(?:edm|electronic|dance|melodic|progressive|deep|organic|hypnotic|dark|afro|electro|uk|garage|house|techno|trance|ambient|downtempo|breaks|breakbeat|dubstep)\b/g) || [];
+  const versionWords = /\b(?:mix|version|edit|remix|loop|club|dub|rework)\b/.test(normalizedTitle);
+  const parentheticalGenre = /\([^)]*\b(?:house|techno|trance|garage|ambient|downtempo|breaks|breakbeat|dubstep|edm)\b[^)]*\)/i.test(rawTitle);
+  const coreGenres = normalizedTitle.match(/\b(?:house|techno|trance|garage|ambient|downtempo|breaks|breakbeat|dubstep|edm)\b/g) || [];
+  const titleWords = normalizedTitle.split(/\s+/).filter(Boolean);
+  const genreDominated = genreWords.length >= 2 && genreWords.length >= titleWords.length - 2;
+  const multiGenreSoup = new Set(coreGenres).size >= 2 && genreWords.length >= 3;
+  const durationOrBackgroundHook = /\b(?:background|\d+\s*(?:hr|hour|hours)|one\s+hour|two\s+hour|three\s+hour)\b/.test(normalizedTitle);
+
+  return Boolean(
+    durationOrBackgroundHook ||
+    (titleEqualsAlbum && genreDominated) ||
+    (parentheticalGenre && (versionWords || titleEqualsAlbum || genreWords.length >= 2)) ||
+    (versionWords && genreDominated) ||
+    multiGenreSoup
+  );
 }
 
 function seoSpamReason(track = {}, options = {}, profile = buildDiscoveryProfile(options)) {
@@ -3180,7 +4215,7 @@ function seoSpamReason(track = {}, options = {}, profile = buildDiscoveryProfile
     : false);
   const embeddedMarketingYear = /\b(?:19\d{2}|20\d{2})\b/.test(titleAlbum);
   const dateCode = /\b(?:0?[1-9]|1[0-2])[-_/](?:19\d{2}|20\d{2})\b|\b(?:19\d{2}|20\d{2})[-_/](?:0?[1-9]|1[0-2])\b/i.test(titleAlbum);
-  const catalogFillerNoun = /\b(?:fusion|fusions|grooves?|vibes?|sessions?|cuts?|tracks?|beats?|essentials?|selections?|collection|compilation|mixes|journeys?|sounds?|playlist|chart|hits?|anthems?)\b/i.test(titleAlbum);
+  const catalogFillerNoun = /\b(?:fusion|fusions|grooves?|vibes?|sessions?|cuts?|tracks?|beats?|essentials?|selections?|collection|compilation|mixes|journals?|journeys?|sounds?|playlist|chart|hits?|anthems?)\b/i.test(titleAlbum);
   const romanOrVersionTail = /\b(?:v|vol(?:ume)?|pt|part)\s*(?:\d+|[ivxlcdm]{1,6})\b/i.test(titleAlbum) ||
     /\b(?:ii|iii|iv|v|vi|vii|viii|ix|x)\b\s*$/i.test(rawTitle);
   const shortCatalogCode = /\b[a-z]{1,4}\d+\b/i.test(`${rawArtist} ${rawTitle}`);
@@ -3191,26 +4226,47 @@ function seoSpamReason(track = {}, options = {}, profile = buildDiscoveryProfile
   const functionalMusicText = /\b(?:music\s+for|for\s+(?:programming|coding|focus|studying|study|sleep|meditation|relaxation|healing|energy balance|cafe|caf[eé]|workout|spa)|programming\s+and\s+coding|coding music|studying music|sleeping music|relaxing music|chakra healing|deep meditation|public domain|background music)\b/i.test(raw);
   const functionalMusicArtist = /\b(?:programming|coding|studying|sleeping|relaxing|relaxation|focus|meditation|healing|chill\s+house\s+music|music\s+caf[eé]|background music)\b/i.test(rawArtist);
   const genreStyleParenthetical = rawTitle.match(/\([^)]{8,140}\)/g)?.some(looksLikeGenreStyleDescriptor) || false;
+  const slashGenreStyleDescriptor = looksLikeSlashSeparatedGenreStyleDescriptor(rawTitle) ||
+    looksLikeSlashSeparatedGenreStyleDescriptor(rawAlbum);
   const artistLooksLikeMusicChannel = /\b(?:music|official|channel|sounds?|records?|recordings?)\b/i.test(rawArtist);
   const genreYearTag = /\|\s*[^|]*(?:house|techno|trance|ambient|breaks|breakbeat)[^|]*\|\s*(?:19\d{2}|20\d{2})\b/i.test(`${rawTitle} ${rawAlbum}`);
   const titleEqualsAlbum = normalize(rawTitle) && normalize(rawTitle) === normalize(rawAlbum);
+  const genreCataloguePhrase = hasTargetGenreInTitle && catalogFillerNoun &&
+    (titleEqualsAlbum || artistLooksLikeMusicChannel || normalize(rawTitle).split(/\s+/).length >= 5 || normalize(rawAlbum).split(/\s+/).length >= 4);
+  const genreKeywordRemixTail = hasTargetGenreInTitle &&
+    /\b(?:emotional|melodic|progressive|deep|organic|uplifting|dark|cinematic|driving|hypnotic|vocal|instrumental|club|dance|edm)\b.{0,48}\b(?:house|techno|trance|ambient|downtempo|breaks|breakbeat|dubstep|drum\s+and\s+bass|dnb)\b.{0,32}\bremix\b/i.test(rawTitle);
   const titleOnlyYear = /^(?:19\d{2}|20\d{2})$/.test(rawTitle);
   const shortGenreYearTitle = hasTargetGenreInTitle && embeddedMarketingYear && normalize(rawTitle).split(/\s+/).length <= 5;
   const distributorLabel = /^\d+\s+records\s+dk$/i.test(rawLabel);
   const labelAsArtist = normalize(rawArtist) && normalize(rawArtist) === normalize(rawLabel) && /\brecords?\b/i.test(rawArtist);
   const obviousCoverOrKaraoke = /\b(?:karaoke|tribute to|cover version|covers?|as made famous by|originally performed by)\b/i.test(raw);
   const longGenericAlbum = hasTargetGenreInTitle && embeddedMarketingYear && normalize(rawAlbum).split(/\s+/).length >= 6;
+  const audiobookChapter = /\bchapter\s+\d+\b/i.test(rawTitle) &&
+    /\b(?:unabridged|audiobook|audio\s*book|book|novel|story|escapist|romance|tale)\b/i.test(`${rawAlbum} ${rawLabel}`);
+  const distributorKeywordUpload = distributorLabel && (
+    longKeywordTitle ||
+    /\b(?:official audio|dj mix|female vocal|new\s+(?:bollywood|hindi|saraiki)|electronic dance|romantic dj|qaseeda|new year)\b/i.test(raw)
+  );
+  const seasonalCatalogueFiller = embeddedMarketingYear &&
+    /\b(?:happy new year songs?|new year|new beginnings?)\b/i.test(`${rawTitle} ${rawAlbum}`) &&
+    (distributorLabel || normalize(rawArtist) === normalize(rawLabel) || /\b(?:lofi|songs?|catalogue|catalog)\b/i.test(raw));
 
+  if (audiobookChapter) return "Audiobook chapter result, not a music track.";
   if (titleOnlyYear) return "Title is only a year, not a useful track match.";
   if (obviousCoverOrKaraoke) return "Cover/karaoke/tribute catalogue result.";
   if (functionalMusicText || functionalMusicArtist) return "Functional/background music result looks like SEO catalogue filler.";
   if (genericGenreArtistName(rawArtist, profile)) return "Artist name looks like genre/SEO catalogue filler.";
   if (labelAsArtist) return "Artist name looks like a label/catalogue account, not a real artist.";
+  if (distributorKeywordUpload) return "Distributor-label keyword upload looks like catalogue filler.";
+  if (seasonalCatalogueFiller) return "Seasonal/greeting catalogue result looks like filler.";
   if (distributorLabel && hasTargetGenreInTitle) return "Distributor-label genre upload looks like catalogue filler.";
   if (genreYearTag) return "Title looks like SEO genre/year tagging instead of a real track title.";
   if (shortGenreYearTitle) return "Title is just genre/year keywords, not a real track title.";
   if (genreStyleParenthetical && (titleEqualsAlbum || artistLooksLikeMusicChannel || hasTargetGenreInTitle)) {
     return "Title uses genre/style descriptor keywords like SEO catalogue filler.";
+  }
+  if (slashGenreStyleDescriptor && (titleEqualsAlbum || artistLooksLikeMusicChannel || hasTargetGenreInTitle || longKeywordTitle)) {
+    return "Title uses slash-separated genre/style descriptor keywords like SEO catalogue filler.";
   }
   if (hasTargetGenreInTitle && /\b(?:rework|genre remix|style remix)\b/i.test(rawTitle)) return "Title uses genre/remix keywords like catalogue filler.";
   if (hasTargetGenreInTitle && embeddedMarketingYear && (dateCode || catalogFillerNoun || romanOrVersionTail) && (shortCatalogCode || normalize(rawTitle).split(/\s+/).length >= 6 || normalize(rawAlbum).split(/\s+/).length >= 6)) {
@@ -3223,6 +4279,11 @@ function seoSpamReason(track = {}, options = {}, profile = buildDiscoveryProfile
   if (longGenericAlbum && (listOrVolume || lifestyleKeywords)) return "Album looks like generic genre/year catalogue filler.";
   if (titleEqualsAlbum && embeddedMarketingYear && hasTargetGenreInTitle && normalizedTitleAlbum.split(/\s+/).length >= 7) {
     return "Title repeats genre/year keywords like a catalogue filler upload.";
+  }
+  if (genreCataloguePhrase) return "Title/album uses genre catalogue wording like SEO catalogue filler.";
+  if (genreKeywordRemixTail) return "Title uses genre/remix keywords like catalogue filler.";
+  if (looksLikeGenericGenreKeywordUploadTitle(rawTitle, rawAlbum)) {
+    return "Title is dominated by genre/style/version keywords like a catalogue upload.";
   }
   return "";
 }
@@ -3295,6 +4356,7 @@ function belowMinimumRescueNote(candidate = {}, softRejectReason = "", options =
 }
 
 function hasExplicitArtistFocus(options = {}, profile = {}) {
+  if (profile.isOmnivoreDiscovery && !(profile.requestedArtists || []).length && !extractSeedArtists(options).length) return false;
   return Boolean(
     (profile.requestedArtists || []).length ||
     (profile.seedArtists || []).length ||
@@ -3365,7 +4427,7 @@ function poolDiagnosticBucketFor(item = {}) {
   if (!reason) return "Other discarded";
   if (/\b(?:previously suggested|held back|history|already suggested|already recommended|not recommended before|repeat)\b/.test(reason)) return "Previously suggested";
   if (/\b(?:release|year|date|outside|range|canonical|reissue|remaster|older)\b/.test(reason)) return "Date/range mismatch";
-  if (/\b(?:seo|catalogue|catalog|filler|functional|background|keyword|genre year|genre date|compilation|chart style|playlist)\b/.test(reason)) return "SEO/catalog sludge";
+  if (/\b(?:seo|catalogue|catalog|filler|functional|background|keyword|genre year|genre date|compilation|chart style|playlist|audiobook|audio book|chapter)\b/.test(reason)) return "SEO/catalog sludge";
   if (/\b(?:below minimum|minimum|weak prompt|not close enough|weak requested genre)\b/.test(reason)) return "Below minimum / weak match";
   if (/\b(?:outside the requested|genre vibe|requested genre|scene|wrong genre|corroborat|metadata does not confirm|query only)\b/.test(reason)) return "Weak genre/scene evidence";
   if (/\b(?:search was for|pure search requested|requested .* returned|artist mismatch|same title wrong artist)\b/.test(reason)) return "Artist/search drift";
@@ -3412,8 +4474,26 @@ function buildPoolDiagnostics({
   usefulCandidateTarget = 0,
   budgetExhausted = false,
   laneSelection = {},
-  queryYield = {}
+  queryYield = {},
+  queryRecovery = {}
 } = {}) {
+  function artistCountMapFor(list = []) {
+    const counts = new Map();
+    for (const track of list || []) {
+      const keys = artistKeysForCandidate(track);
+      if (!keys.length) continue;
+      const primary = keys[0];
+      counts.set(primary, (counts.get(primary) || 0) + 1);
+    }
+    return counts;
+  }
+  function repeatedArtistsFrom(map = new Map()) {
+    return [...map.entries()]
+      .filter(([, count]) => Number(count || 0) > 1)
+      .sort((left, right) => Number(right[1] || 0) - Number(left[1] || 0))
+      .slice(0, 8)
+      .map(([artist, count]) => ({ artist, count }));
+  }
   const bucketCounts = new Map();
   const examplesByBucket = new Map();
   for (const item of discarded) {
@@ -3429,7 +4509,48 @@ function buildPoolDiagnostics({
     examples: examplesByBucket.get(bucket.label) || []
   }));
   const laneQuota = laneSelection?.quota || {};
+  const selectedArtistCounts = artistCountMapFor(tracks);
+  const retainedArtistCounts = artistCountMapFor([...tracks, ...alternates]);
+  const selectedRepeatedArtists = repeatedArtistsFrom(selectedArtistCounts);
+  const retainedRepeatedArtists = repeatedArtistsFrom(retainedArtistCounts);
+  const noveltyTaxedCandidates = [...tracks, ...alternates]
+    .filter((track) => Number(track.recentSuggestionPenalty || 0) > 0)
+    .sort((left, right) => Number(right.recentSuggestionPenalty || 0) - Number(left.recentSuggestionPenalty || 0));
   const querySludge = Number(queryYield.seoRejects || 0) + Number(queryYield.genreRejects || 0);
+  function topObjectCounts(object = {}, labelMap = {}) {
+    return Object.entries(object || {})
+      .map(([key, count]) => ({
+        label: cleanText(labelMap[key] || key),
+        count: Number(count || 0)
+      }))
+      .filter((item) => item.label && item.count > 0)
+      .sort((left, right) => Number(right.count || 0) - Number(left.count || 0) || left.label.localeCompare(right.label))
+      .slice(0, 8);
+  }
+  function capHeldDiagnosticsFor(value = {}) {
+    const normalizeHeld = (item = {}) => ({
+      kind: cleanText(item.kind),
+      key: cleanText(item.key),
+      identity: cleanText(item.identity),
+      label: cleanText(item.label),
+      candidate: cleanText(item.candidate),
+      score: Number(item.score || 0),
+      bucket: cleanText(item.bucket),
+      source: cleanText(item.source),
+      cap: Number(item.cap || 0),
+      count: Number(item.count || 0),
+      reason: cleanText(item.reason)
+    });
+    const label = Array.isArray(value.label) ? value.label.map(normalizeHeld).filter((item) => item.candidate) : [];
+    const source = Array.isArray(value.source) ? value.source.map(normalizeHeld).filter((item) => item.candidate) : [];
+    const uniqueIdentities = new Set([...label, ...source].map((item) => item.identity || item.candidate));
+    return {
+      total: Number(value.total || uniqueIdentities.size || 0),
+      label: label.slice(0, 8),
+      source: source.slice(0, 8)
+    };
+  }
+  const capHeldDiagnostics = capHeldDiagnosticsFor(laneQuota.capHeld || {});
   const notes = [];
   if (budgetExhausted) notes.push("Runtime budget was exhausted before every crawl/search path could finish.");
   if (previousCandidates.length) notes.push(`${previousCandidates.length} previously suggested candidate${previousCandidates.length === 1 ? "" : "s"} held back for novelty.`);
@@ -3442,7 +4563,15 @@ function buildPoolDiagnostics({
   if (querySludge) notes.push(`${querySludge} query-yield reject${querySludge === 1 ? "" : "s"} looked like SEO sludge or genre drift.`);
   if (queryYield.prunedCount) notes.push(`${queryYield.prunedCount} historically low-yield quer${queryYield.prunedCount === 1 ? "y was" : "ies were"} skipped before spending crawl budget.`);
   if (Array.isArray(queryYield.laneBudgetStops) && queryYield.laneBudgetStops.length) notes.push("Core search stopped early enough to reserve crawl time for later lanes.");
+  if (queryRecovery?.triggered) notes.push(`Adaptive query recovery tried ${queryRecovery.attempted || 0} alternate quer${queryRecovery.attempted === 1 ? "y" : "ies"} and accepted ${queryRecovery.accepted || 0} candidate${queryRecovery.accepted === 1 ? "" : "s"}.`);
   if (laneQuota?.enabled && laneQuota.rescueApplied) notes.push(`${laneQuota.rescueKept || 0} lower-confidence branch-out fallback${laneQuota.rescueKept === 1 ? "" : "s"} kept because the run undershot.`);
+  if (laneQuota?.enabled && Number(laneQuota.artistCap || 0) === 1) notes.push("Novelty budget capped displayed results at one track per artist.");
+  if (laneQuota?.enabled && laneQuota.repeatFallbackAllowed) notes.push("Repeated artists are allowed because this request is artist-near or explicitly permits repeats.");
+  if (laneQuota?.enabled && laneQuota.labelSourceRelaxed) notes.push(`${laneQuota.labelSourceRelaxed} candidate${laneQuota.labelSourceRelaxed === 1 ? "" : "s"} kept after label/source caps relaxed because the selected pool was short.`);
+  if (capHeldDiagnostics.total) notes.push(`${capHeldDiagnostics.total} high-ranking candidate${capHeldDiagnostics.total === 1 ? " was" : "s were"} held back by label/source caps.`);
+  if (!selectedRepeatedArtists.length && tracks.length > 1) notes.push("Artist diversity cap held the displayed set to one track per artist.");
+  if (retainedRepeatedArtists.length) notes.push(`${retainedRepeatedArtists.length} retained artist${retainedRepeatedArtists.length === 1 ? " has" : "s have"} alternates beyond the displayed cap.`);
+  if (noveltyTaxedCandidates.length) notes.push(`${noveltyTaxedCandidates.length} retained candidate${noveltyTaxedCandidates.length === 1 ? "" : "s"} received a recent-suggestion novelty tax for overused artists, labels, or sources.`);
 
   return {
     requested: Number(requestedCount || 0),
@@ -3462,6 +4591,34 @@ function buildPoolDiagnostics({
     rescueKept: Number(laneQuota.rescueKept || tracks.filter((track) => track.belowMinimumRescue).length || 0),
     countFillAvailable: countFillCandidates.length,
     countFillKept: Number(belowMinimumCountFillKept || 0),
+    artistSpread: {
+      selectedArtists: selectedArtistCounts.size,
+      retainedArtists: retainedArtistCounts.size,
+      artistCap: laneQuota.artistCap || null,
+      repeatFallbackAllowed: Boolean(laneQuota.repeatFallbackAllowed),
+      selectedRepeatedArtists,
+      retainedRepeatedArtists
+    },
+    diversityCaps: {
+      artistCap: laneQuota.artistCap || null,
+      labelCap: laneQuota.labelCap || null,
+      sourceCap: laneQuota.sourceCap || null,
+      labelSourceRelaxed: Number(laneQuota.labelSourceRelaxed || 0),
+      topLabels: topObjectCounts(laneQuota.labels || {}),
+      topSources: topObjectCounts(laneQuota.sources || {}, laneQuota.sourceLabels || {}),
+      capHeld: capHeldDiagnostics
+    },
+    recentNovelty: {
+      taxed: noveltyTaxedCandidates.length,
+      maxPenalty: Math.max(0, ...noveltyTaxedCandidates.map((track) => Number(track.recentSuggestionPenalty || 0))),
+      examples: noveltyTaxedCandidates.slice(0, 6).map((track) => ({
+        label: cleanText([track.artist, track.title].filter(Boolean).join(" - ")) || "Unknown candidate",
+        penalty: Number(track.recentSuggestionPenalty || 0),
+        reasons: Array.isArray(track.recentSuggestionPenaltyReasons)
+          ? track.recentSuggestionPenaltyReasons.slice(0, 3)
+          : []
+      }))
+    },
     queryYield: {
       attempted: Number(queryYield.attempted || 0),
       returned: Number(queryYield.returned || 0),
@@ -3471,6 +4628,43 @@ function buildPoolDiagnostics({
       errors: Number(queryYield.errorCount || 0),
       pruned: Number(queryYield.prunedCount || 0),
       laneBudgetStops: Array.isArray(queryYield.laneBudgetStops) ? queryYield.laneBudgetStops.length : 0
+    },
+    queryRecovery: {
+      enabled: Boolean(queryRecovery?.enabled),
+      triggered: Boolean(queryRecovery?.triggered),
+      reason: cleanText(queryRecovery?.reason || ""),
+      keptBefore: Number(queryRecovery?.keptBefore || 0),
+      keptAfter: Number(queryRecovery?.keptAfter || 0),
+      attempted: Number(queryRecovery?.attempted || 0),
+      returned: Number(queryRecovery?.returned || 0),
+      accepted: Number(queryRecovery?.accepted || 0),
+      errors: Number(queryRecovery?.errors || 0),
+      targetLanes: Array.isArray(queryRecovery?.targetLanes)
+        ? queryRecovery.targetLanes.map(cleanText).filter(Boolean).slice(0, 8)
+        : [],
+      laneShortfalls: Array.isArray(queryRecovery?.laneShortfalls)
+        ? queryRecovery.laneShortfalls.slice(0, 8).map((item) => ({
+          bucket: cleanText(item.bucket),
+          target: Number(item.target || 0),
+          available: Number(item.available || 0),
+          shortfall: Number(item.shortfall || 0)
+        }))
+        : [],
+      families: Array.isArray(queryRecovery?.families)
+        ? queryRecovery.families.slice(0, 8).map((family) => ({
+          id: cleanText(family.id),
+          label: cleanText(family.label),
+          lane: cleanText(family.lane),
+          queries: Number(family.queries || 0),
+          attempted: Number(family.attempted || 0),
+          returned: Number(family.returned || 0),
+          accepted: Number(family.accepted || 0),
+          rejected: Number(family.rejected || 0),
+          seoRejects: Number(family.seoRejects || 0),
+          genreRejects: Number(family.genreRejects || 0),
+          errors: Number(family.errors || 0)
+        }))
+        : []
     },
     lanes: {
       selected: laneQuota.selected || {},
@@ -3528,9 +4722,7 @@ function isLikelySceneCandidate(track = {}, query = "", options = {}, profile = 
 function artistMatchesRequested(trackArtist = "", requestedArtists = []) {
   const actualArtists = splitArtists(trackArtist);
   if (!actualArtists.length || !requestedArtists.length) return false;
-  return requestedArtists.some((requested) => actualArtists.some((actual) => (
-    containsEntityTerm(actual, requested) || containsEntityTerm(requested, actual)
-  )));
+  return requestedArtists.some((requested) => actualArtists.some((actual) => artistNamesMatch(actual, requested, { contains: true })));
 }
 
 function requestedArtistMismatchReason(track = {}, profile = {}) {
@@ -3562,10 +4754,11 @@ function rejectReason(track = {}, options = {}, profile = buildDiscoveryProfile(
     profile.requestedArtists?.length &&
     artistMatchesRequested(track.artist, profile.requestedArtists)
   );
-  const targetArtist = queryTargetArtist(track.query);
+  const targetArtist = queryTargetArtist(track.query, profile);
   if (targetArtist) {
     const target = normalize(targetArtist);
-    const matchedTarget = normalize(track.artist).includes(target) || normalize(`${track.title} ${track.album}`).includes(target);
+    const matchedTarget = artistMatchesKnownName(track.artist, targetArtist, { contains: true }) ||
+      normalize(`${track.title} ${track.album}`).includes(target);
     if (!matchedTarget && !sceneCorroboratesArtistDrift(track, options, profile)) {
       return `Search was for ${targetArtist}, but TIDAL returned ${track.artist}.`;
     }
@@ -3582,6 +4775,8 @@ function rejectReason(track = {}, options = {}, profile = buildDiscoveryProfile(
   if (yearRange && hasOutOfRangeEmbeddedYear(track, yearRange)) return `Title or album references an older year outside ${yearRange.label}.`;
   const seoReason = seoSpamReason(track, options, profile);
   if (seoReason) return seoReason;
+  const omnivoreReason = omnivoreDriftReason(track, options, profile);
+  if (omnivoreReason) return omnivoreReason;
   if (isShortEdit(track)) return "Short/radio edit.";
   if (profile.targetGenres.length && !pureRequestedArtistMatch) {
     const scene = sceneEvidenceFor(track, track.query, options, profile);
@@ -3596,9 +4791,9 @@ function rejectReason(track = {}, options = {}, profile = buildDiscoveryProfile(
 }
 
 function hasSeedArtistMatch(track = {}, options = {}, profile = null) {
-  const seedKeys = new Set((profile?.seedArtists || extractSeedArtists(options)).map(normalize));
+  const seedKeys = new Set((profile?.seedArtists || extractSeedArtists(options)).map(artistIdentityKey));
   if (!seedKeys.size) return false;
-  return splitArtists(track.artist).some((artist) => seedKeys.has(normalize(artist)));
+  return artistKeysForCandidate(track).some((artist) => seedKeys.has(artist));
 }
 
 function requestedLabelMatch(track = {}, profile = {}) {
@@ -3632,16 +4827,18 @@ function topLastFmArtistMatchFor(track = {}, scrobbleHistory = null) {
   if (!scrobbleHistory?.checked || scrobbleHistory.error || scrobbleHistory.usernameValid === false) return null;
   const topArtistsByKey = scrobbleHistory.topArtistsByKey || {};
   for (const artist of splitArtists(track.artist)) {
-    const key = normalize(artist);
+    const key = artistIdentityKey(artist);
     if (key && topArtistsByKey[key]) return topArtistsByKey[key];
+    const looseKey = normalize(artist);
+    if (!isCollisionSensitiveArtist(artist) && looseKey && topArtistsByKey[looseKey]) return topArtistsByKey[looseKey];
   }
   return null;
 }
 
 function profileSeedArtistMatch(track = {}, profile = {}) {
-  const seedKeys = new Set((profile.seedArtists || []).map(normalize));
+  const seedKeys = new Set((profile.seedArtists || []).map(artistIdentityKey));
   if (!seedKeys.size) return false;
-  return splitArtists(track.artist).some((artist) => seedKeys.has(normalize(artist)));
+  return artistKeysForCandidate(track).some((artist) => seedKeys.has(artist));
 }
 
 function lastFmAdjustmentFor(track = {}, scrobbleHistory = null, profile = {}) {
@@ -3793,6 +4990,7 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
   const vibeInference = profile.vibeTerms.length
     ? vibeInferenceFor(track, track.query, profile)
     : { confidence: 0, evidence: [], summary: "", queryOnly: false, corroboratesRequested: true, matchedTerms: [] };
+  const promptIntentEvidence = promptIntentEvidenceFor(track, track.query, profile);
   const minutes = durationMinutes(track);
   const currentYear = new Date().getFullYear();
   const prefersExtendedMixes = requestPrefersExtendedMixes(options);
@@ -3830,7 +5028,7 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
   let artistMatch = 0;
   if (hasSeedArtistMatch(track, options, profile)) artistMatch = SCORE_MAX.artistMatch;
   else if (sceneArtist) artistMatch = 15;
-  else if (wanted && splitArtists(track.artist).some((artist) => wanted.includes(normalize(artist)))) artistMatch = 11;
+  else if (wanted && splitArtists(track.artist).some((artist) => !isCollisionSensitiveArtist(artist) && wanted.includes(normalize(artist)))) artistMatch = 11;
   if (profile.isGenreDiscoveryTarget && track.artist) {
     const seedArtist = sceneEvidence.artistAnchor && sceneEvidence.metadataSceneEvidence ? sceneEvidence.artistAnchor : "";
     artistMatch = Math.max(artistMatch, seedArtist ? 15 : 5);
@@ -3904,6 +5102,19 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
       genreMatch += Math.min(2, Math.max(1, Math.round(Number(vibeInference.confidence || 0) / 20)));
     }
   }
+  if (profile.promptIntent?.matchTerms?.length) {
+    if (promptIntentEvidence.corroboratesRequested) {
+      genreMatch += clamp(Math.round(Number(promptIntentEvidence.confidence || 0) / (profile.targetGenres.length ? 16 : 5)), 3, profile.targetGenres.length ? 8 : 18);
+    } else if (promptIntentEvidence.queryOnly) {
+      genreMatch += 2;
+    }
+  }
+  if (profile.isOmnivoreDiscovery) {
+    const omnivoreBridge = omnivoreBridgeEvidenceFor(track, track.query, options, profile);
+    genreMatch += omnivoreBridge.corroborates
+      ? omnivoreBridge.points
+      : Math.min(2, omnivoreBridge.points);
+  }
   if (!profile.targetGenres.length && wanted.includes("progressive")) genreMatch += 5;
   if (sceneArtist) genreMatch += 6;
   if (sceneLabel) genreMatch += 4;
@@ -3935,6 +5146,10 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
   let tasteMin = profile.isGenreDiscoveryTarget ? -4 : -12;
   let tasteMax = profile.isGenreDiscoveryTarget ? 6 : 12;
   if (profile.scoringMode === "taste-guided" && profile.hasExplicitDiscoveryIntent) tasteMax = Math.min(tasteMax, 4);
+  if (profile.scoringMode === "taste-guided" && profile.promptIntent?.allowOutsideTaste) {
+    tasteMin = Math.max(tasteMin, -4);
+    tasteMax = Math.min(tasteMax, 2);
+  }
   let tasteAdjustment = clamp(taste.value || 0, tasteMin, tasteMax);
   if (profile.scoringMode === "pure") {
     tasteMin = 0;
@@ -3973,6 +5188,7 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
     genreMatch,
     genreInference,
     vibeInference,
+    promptIntentEvidence,
     tasteAdjustment,
     calibrationAdjustment
   });
@@ -3996,6 +5212,7 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
     genreMatch,
     genreInference,
     vibeInference,
+    promptIntentEvidence,
     tasteAdjustment,
     tasteReasons: [...(taste.reasons || []), ...lastfmTaste.reasons],
     lastfmAdjustment: lastfmTaste.value,
@@ -4041,6 +5258,9 @@ function reasonFor(track = {}, options = {}, breakdown = null, profile = buildDi
   if (score.genreInference?.summary && Number(score.genreInference.confidence || 0) >= 35) {
     parts.push(`genre inferred from ${score.genreInference.summary}`);
   }
+  if (score.promptIntentEvidence?.summary && Number(score.promptIntentEvidence.confidence || 0) >= 35) {
+    parts.push(`prompt evidence from ${score.promptIntentEvidence.summary}`);
+  }
   if (score.vibeInference?.summary && Number(score.vibeInference.confidence || 0) >= 25) {
     parts.push(`trait evidence from ${score.vibeInference.summary}`);
   } else if (score.vibeInference?.queryOnly) {
@@ -4048,6 +5268,7 @@ function reasonFor(track = {}, options = {}, breakdown = null, profile = buildDi
   }
   if (!sceneArtist && hasAnyTerm(`${metadataText} ${track.query}`, profile.targetGenres)) parts.push(`${profile.targetGenres[0]} target fit`);
   if (track.discoveryLane === "adjacent") parts.push("adjacent-lane discovery");
+  if (track.discoveryLane === "omnivore") parts.push("cross-genre taste-bridge discovery");
   if (track.discoveryLane === "recent") parts.push("recent-year fallback");
   if (hasAnyTerm(`${metadataText} ${track.query}`, profile.vibeTerms)) parts.push(`${profile.vibeTerms[0]} seed-vibe fit`);
   if (requestPrefersExtendedMixes(options) && score.versionPreferenceAdjustment > 0) parts.push("extended/long version preference");
@@ -4068,29 +5289,27 @@ function reasonFor(track = {}, options = {}, breakdown = null, profile = buildDi
 }
 
 function hasArtistMatch(value, artist) {
-  const wanted = normalize(artist);
-  if (!wanted) return false;
-  return splitArtists(value).some((candidate) => normalize(candidate) === wanted);
+  return artistMatchesKnownName(value, artist);
 }
 
 function discoverySourceForArtist(artist, options = {}, tasteProfile = null) {
   if (hasArtistMatch(options.nowPlaying?.artist, artist)) return "Recently played seed";
-  if (extractSeedArtists(options).some((seed) => normalize(seed) === normalize(artist))) return "Artist expansion";
+  if (extractSeedArtists(options).some((seed) => artistNamesMatch(seed, artist))) return "Artist expansion";
   if (artistMatchesSeedList(artist, optionValues(options, ["radioArtistSeeds", "artistRadioSeeds"]))) return "Radio branch artist";
   if (artistMatchesSeedList(artist, optionValues(options, ["remixerSeeds", "remixArtistSeeds"]))) return "Remixer branch artist";
   if (artistMatchesSeedList(artist, extractRemixerSeedsFromText(`${options.request || ""} ${options.reference || ""} ${options.nowPlaying?.title || ""}`))) return "Remixer branch artist";
   if (artistMatchesSeedList(artist, optionValues(options, ["similarArtistSeeds", "branchArtistSeeds", "relatedArtistSeeds"]))) return "Similar artist branch";
   const learned = typeof tasteProfile?.getTopArtists === "function" ? tasteProfile.getTopArtists(12) : [];
-  if (learned.some((seed) => normalize(seed) === normalize(artist))) return "Liked artist expansion";
+  if (learned.some((seed) => artistNamesMatch(seed, artist))) return "Liked artist expansion";
   return "Similar artist";
 }
 
 function discoverySourceForResult(track = {}, options = {}) {
   const query = normalize(track.query);
-  if (splitArtists(options.nowPlaying?.artist).some((artist) => query.includes(normalize(artist)))) {
+  if (splitArtists(options.nowPlaying?.artist).some((artist) => !isCollisionSensitiveArtist(artist) && query.includes(normalize(artist)))) {
     return "Recently played seed";
   }
-  if (extractSeedArtists(options).some((artist) => query.includes(normalize(artist)))) {
+  if (extractSeedArtists(options).some((artist) => !isCollisionSensitiveArtist(artist) && query.includes(normalize(artist)))) {
     return "Artist expansion";
   }
   const radioSeeds = optionValues(options, ["radioArtistSeeds", "artistRadioSeeds"]);
@@ -4115,6 +5334,7 @@ function discoverySourceForResult(track = {}, options = {}) {
 function discoveryQuotaBucket(track = {}, profile = {}) {
   const lane = normalize(track.discoveryLane);
   const source = normalize(track.discoverySource);
+  if (lane.includes("omnivore") || source.includes("omnivore") || source.includes("taste bridge")) return "omnivore";
   if (lane.includes("adjacent")) return "adjacent";
   if (lane.includes("recent") || source.includes("fallback")) return "recent";
   if (lane.includes("expanded") || lane.includes("relaxed") || track.autoBroadened) return "expanded";
@@ -4130,27 +5350,46 @@ function discoveryQuotaBucket(track = {}, profile = {}) {
   return "core";
 }
 
+function omnivoreLaneKeyForCandidate(candidate = {}) {
+  return cleanText(
+    candidate.discoveryOmnivoreLane ||
+    candidate.omnivoreLane ||
+    candidate.tidal?.discoveryOmnivoreLane ||
+    candidate.tidal?.omnivoreLane ||
+    ""
+  );
+}
+
 function discoveryLaneQuotaPlan(requestedCount = 8, profile = {}) {
   const count = Math.max(1, Math.min(40, Number(requestedCount || 8)));
   const explore = profile.scoringMode === "explore";
   const similar = profile.scoringMode === "similar";
   const pure = profile.scoringMode === "pure";
+  const discoveryFirst = !pure && !similar && Boolean(profile.hasExplicitDiscoveryIntent || profile.promptIntent?.hasIntent);
   const smallDiscoveryRequest = count >= 5 && count < 8 && !pure && !similar && Boolean(profile.targetGenres?.length || profile.vibeTerms?.length);
+  const tasteTarget = pure ? 0 : (similar
+    ? Math.max(1, Math.floor(count * 0.3))
+    : (discoveryFirst ? (count >= 12 ? 1 : 0) : (smallDiscoveryRequest ? 1 : (count >= 8 ? 1 : 0))));
+  const tasteMax = pure ? 0 : (similar
+    ? Math.max(2, Math.ceil(count * 0.6))
+    : (discoveryFirst ? Math.max(1, Math.ceil(count * 0.12)) : Math.max(1, Math.ceil(count * (explore ? 0.2 : 0.22)))));
   const targets = {
     core: count >= 8 ? Math.max(2, Math.floor(count * (explore ? 0.35 : 0.45))) : Math.max(1, Math.ceil(count * 0.6)),
+    omnivore: profile.isOmnivoreDiscovery ? (count >= 8 ? Math.max(2, Math.ceil(count * 0.28)) : Math.max(1, Math.ceil(count * 0.35))) : 0,
     adjacent: count >= 8 ? Math.max(1, Math.floor(count * (explore ? 0.22 : 0.16))) : ((explore && count >= 5) || smallDiscoveryRequest ? 1 : 0),
     label: count >= 8 ? 1 : (smallDiscoveryRequest ? 1 : 0),
     branch: !pure && !similar && count >= 8 ? Math.max(1, Math.floor(count * (explore ? 0.18 : 0.14))) : (smallDiscoveryRequest ? 1 : 0),
-    taste: !pure && count >= 8 ? Math.max(1, Math.floor(count * (similar ? 0.3 : 0.1))) : (smallDiscoveryRequest ? 1 : 0),
+    taste: tasteTarget,
     expanded: count >= 12 ? 1 : 0,
     recent: 0
   };
   const max = {
-    core: count,
+    core: profile.isOmnivoreDiscovery ? Math.max(targets.core, Math.ceil(count * 0.45)) : count,
+    omnivore: profile.isOmnivoreDiscovery ? Math.max(targets.omnivore, Math.ceil(count * 0.55)) : 0,
     adjacent: Math.max(targets.adjacent, Math.ceil(count * (explore ? 0.4 : 0.3))),
     label: Math.max(targets.label, Math.ceil(count * 0.35)),
     branch: pure ? 0 : Math.max(targets.branch, Math.ceil(count * (explore ? 0.32 : 0.28))),
-    taste: pure ? 0 : Math.max(targets.taste, Math.ceil(count * (similar ? 0.6 : (explore ? 0.2 : 0.22)))),
+    taste: Math.max(targets.taste, tasteMax),
     expanded: Math.max(targets.expanded, Math.ceil(count * 0.25)),
     recent: Math.max(1, Math.ceil(count * 0.15))
   };
@@ -4167,10 +5406,10 @@ function calibrationBucketRisk(entry = {}) {
 
   const missRate = misses / total;
   let risk = misses >= 1 ? 1 : 0;
-  if (total >= 2 && missRate >= 0.34) risk += 1;
-  if (total >= 3 && missRate >= 0.5) risk += 1;
-  if (badBoosts >= 2 || promptMismatches >= 2) risk += 1;
-  return Math.max(0, Math.min(4, risk));
+  if (total >= 2 && missRate >= CALIBRATION_QUOTA_RISK.moderateMissRate) risk += 1;
+  if (total >= 3 && missRate >= CALIBRATION_QUOTA_RISK.highMissRate) risk += 1;
+  if (badBoosts >= CALIBRATION_QUOTA_RISK.repeatIssueThreshold || promptMismatches >= CALIBRATION_QUOTA_RISK.repeatIssueThreshold) risk += 1;
+  return Math.max(0, Math.min(CALIBRATION_QUOTA_RISK.maxBucketRisk, risk));
 }
 
 function findCalibrationEntry(items = [], key = "", property = "name") {
@@ -4195,11 +5434,13 @@ function candidateCalibrationRisk(candidate = {}, calibration = null) {
     const weighted = Math.max(1, Math.round(risk * weight));
     value += weighted;
     const name = entry.source || entry.lane || entry.label || entry.name || kind;
-    reasons.push(`${kind} ${name} ${entry.modelMisses}/${entry.total}`);
+    const issues = calibrationIssueCount(entry);
+    const detail = calibrationIssueDetail(entry);
+    reasons.push(`${kind} ${name} ${issues}/${entry.total} issues${detail ? ` (${detail})` : ""}`);
   }
 
   return {
-    value: Math.max(0, Math.min(8, value)),
+    value: Math.max(0, Math.min(CALIBRATION_QUOTA_RISK.maxCandidateRisk, value)),
     reasons: reasons.slice(0, 4)
   };
 }
@@ -4278,6 +5519,7 @@ function withQuotaBucket(track = {}, bucket = "core", risk = null) {
 function selectDiscoveryLaneCandidates(candidates = [], requestedCount = 8, options = {}, profile = buildDiscoveryProfile(options), calibration = null) {
   const limit = Math.max(0, Math.min(40, Number(requestedCount || 0)));
   const avoidRepeatedArtists = exploreAvoidsRepeatedArtists(options, profile);
+  const allowRepeatFallback = allowsArtistRepeatFallback(options, profile);
   const riskCache = new WeakMap();
   function riskFor(candidate = {}) {
     if (!candidate || typeof candidate !== "object") return { value: 0, reasons: [] };
@@ -4286,7 +5528,8 @@ function selectDiscoveryLaneCandidates(candidates = [], requestedCount = 8, opti
   }
   function quotaRank(candidate = {}) {
     const repeatedArtistPenalty = repeatedArtistDiversityPenaltyApplies(candidate, options, profile) ? 20 : 0;
-    return Number(candidate.score || 0) - (riskFor(candidate).value * 4) - repeatedArtistPenalty;
+    const recentNoveltyPenalty = Number(candidate.recentSuggestionPenalty || 0);
+    return Number(candidate.score || 0) - (riskFor(candidate).value * CALIBRATION_QUOTA_RISK.scorePenaltyPerRiskPoint) - repeatedArtistPenalty - recentNoveltyPenalty;
   }
   const sorted = candidates.slice().sort((left, right) => (
     quotaRank(right) - quotaRank(left) ||
@@ -4295,15 +5538,27 @@ function selectDiscoveryLaneCandidates(candidates = [], requestedCount = 8, opti
   ));
   const basePlan = discoveryLaneQuotaPlan(limit, profile);
   let plan = basePlan;
-  const bucketOrder = ["core", "label", "adjacent", "branch", "taste", "expanded", "recent"];
+  const bucketOrder = ["core", "omnivore", "label", "adjacent", "branch", "taste", "expanded", "recent"];
   const selected = [];
   const selectedKeys = new Set();
   const artistCounts = new Map();
   const albumCounts = new Map();
+  const labelCounts = new Map();
+  const sourceCounts = new Map();
+  const sourceLabels = new Map();
+  const capHeldByKey = new Map();
   const bucketCounts = new Map();
   const availableCounts = new Map();
   const buckets = new Map(bucketOrder.map((bucket) => [bucket, []]));
-  const maxPerPrimaryArtist = avoidRepeatedArtists || limit <= 12 ? 1 : 2;
+  const maxPerPrimaryArtist = defaultPerRunArtistCap(options, profile, limit);
+  const maxPerLabel = defaultPerRunLabelCap(options, profile, limit);
+  const maxPerSource = defaultPerRunSourceCap(options, profile, limit);
+  let effectiveLabelCap = maxPerLabel;
+  let effectiveSourceCap = maxPerSource;
+  const maxPerOmnivoreLane = profile.isOmnivoreDiscovery
+    ? Math.max(2, Math.ceil(limit * 0.25))
+    : Number.MAX_SAFE_INTEGER;
+  const omnivoreLaneCounts = new Map();
 
   for (const candidate of sorted) {
     const bucket = discoveryQuotaBucket(candidate, profile);
@@ -4318,6 +5573,86 @@ function selectDiscoveryLaneCandidates(candidates = [], requestedCount = 8, opti
     return keys.length && keys.some((key) => selectedKeys.has(key));
   }
 
+  function capHoldIdentityPartFor(candidate = {}) {
+    const identityKeys = candidateIdentityKeys(candidate);
+    return identityKeys[0]
+      || [
+        normalize(candidate.artist),
+        normalizeIdentityTitle(candidate.title),
+        normalize(candidate.album),
+        normalize(candidate.discoverySource),
+        normalize(candidate.discoveryLane),
+        normalize(candidate.query)
+      ].filter(Boolean).join("|");
+  }
+
+  function capHoldCandidateLabel(candidate = {}) {
+    return cleanText([candidate.artist, candidate.title].filter(Boolean).join(" - "))
+      || cleanText(candidate.query)
+      || "Unknown candidate";
+  }
+
+  function recordCapHold(candidate = {}, kind = "", capKey = "", label = "", cap = 0, count = 0, replace = false) {
+    const identity = capHoldIdentityPartFor(candidate);
+    const numericCap = Number(cap || 0);
+    if (!identity || !kind || !capKey || !Number.isFinite(numericCap)) return;
+    const key = `${kind}:${capKey}:${identity}`;
+    const score = Number(candidate.score || 0);
+    const existing = capHeldByKey.get(key);
+    if (!replace && existing && Number(existing.score || 0) >= score) return;
+    const cleanLabel = cleanText(label || capKey);
+    capHeldByKey.set(key, {
+      kind,
+      key: capKey,
+      identity,
+      label: cleanLabel,
+      candidate: capHoldCandidateLabel(candidate),
+      score,
+      bucket: discoveryQuotaBucket(candidate, profile),
+      source: sourceDiversityLabelForCandidate(candidate) || cleanText(candidate.discoverySource || candidate.discoveryLane || ""),
+      cap: numericCap,
+      count: Number(count || 0),
+      reason: cleanText(`${cleanLabel} ${kind} cap ${Number(count || 0)}/${numericCap}`)
+    });
+  }
+
+  function clearCapHold(candidate = {}) {
+    const identity = capHoldIdentityPartFor(candidate);
+    if (!identity) return;
+    for (const key of [...capHeldByKey.keys()]) {
+      if (key.endsWith(`:${identity}`)) capHeldByKey.delete(key);
+    }
+  }
+
+  function capHeldDiagnostics() {
+    const items = [...capHeldByKey.values()].sort((left, right) => (
+      Number(right.score || 0) - Number(left.score || 0) ||
+      String(left.candidate || "").localeCompare(String(right.candidate || ""))
+    ));
+    const uniqueIdentities = new Set(items.map((item) => item.identity || item.candidate));
+    return {
+      total: uniqueIdentities.size,
+      label: items.filter((item) => item.kind === "label").slice(0, 8),
+      source: items.filter((item) => item.kind === "source").slice(0, 8)
+    };
+  }
+
+  function auditFinalCapHolds() {
+    for (const candidate of sorted) {
+      if (hasSelected(candidate)) continue;
+      const labelKey = labelDiversityKeyForCandidate(candidate, profile);
+      const sourceKey = sourceDiversityKeyForCandidate(candidate);
+      const labelCount = labelCounts.get(labelKey) || 0;
+      const sourceCount = sourceCounts.get(sourceKey) || 0;
+      if (labelKey && Number.isFinite(effectiveLabelCap) && labelCount >= effectiveLabelCap) {
+        recordCapHold(candidate, "label", labelKey, labelText(candidate) || labelKey, effectiveLabelCap, labelCount, true);
+      }
+      if (sourceKey && Number.isFinite(effectiveSourceCap) && sourceCount >= effectiveSourceCap) {
+        recordCapHold(candidate, "source", sourceKey, sourceDiversityLabelForCandidate(candidate) || sourceKey, effectiveSourceCap, sourceCount, true);
+      }
+    }
+  }
+
   function addCandidate(candidate = {}, caps = {}) {
     if (selected.length >= limit || hasSelected(candidate)) return false;
     const bucket = discoveryQuotaBucket(candidate, profile);
@@ -4327,19 +5662,43 @@ function selectDiscoveryLaneCandidates(candidates = [], requestedCount = 8, opti
 
     const artistKeys = artistKeysForCandidate(candidate);
     const albumKey = normalize(candidate.album);
+    const labelKey = labelDiversityKeyForCandidate(candidate, profile);
+    const sourceKey = sourceDiversityKeyForCandidate(candidate);
     const artistCap = caps.artistCap ?? maxPerPrimaryArtist;
     const albumCap = caps.albumCap ?? 1;
+    const labelCap = caps.labelCap ?? maxPerLabel;
+    const sourceCap = caps.sourceCap ?? maxPerSource;
+    const omnivoreLane = bucket === "omnivore" ? omnivoreLaneKeyForCandidate(candidate) : "";
+    const omnivoreLaneCap = caps.omnivoreLaneCap ?? maxPerOmnivoreLane;
     if (artistKeys.some((artistKey) => (artistCounts.get(artistKey) || 0) >= artistCap)) return false;
     if (albumKey && (albumCounts.get(albumKey) || 0) >= albumCap) return false;
+    const labelCount = labelCounts.get(labelKey) || 0;
+    const sourceCount = sourceCounts.get(sourceKey) || 0;
+    if (labelKey && Number.isFinite(labelCap) && labelCount >= labelCap) {
+      recordCapHold(candidate, "label", labelKey, labelText(candidate) || labelKey, labelCap, labelCount);
+      return false;
+    }
+    if (sourceKey && Number.isFinite(sourceCap) && sourceCount >= sourceCap) {
+      recordCapHold(candidate, "source", sourceKey, sourceDiversityLabelForCandidate(candidate) || sourceKey, sourceCap, sourceCount);
+      return false;
+    }
+    if (omnivoreLane && (omnivoreLaneCounts.get(omnivoreLane) || 0) >= omnivoreLaneCap) return false;
 
     const keys = candidateIdentityKeys(candidate);
     for (const key of keys) selectedKeys.add(key);
     selected.push(withQuotaBucket(candidate, bucket, riskFor(candidate)));
+    clearCapHold(candidate);
     for (const artistKey of artistKeys) {
       artistCounts.set(artistKey, (artistCounts.get(artistKey) || 0) + 1);
     }
     if (albumKey) albumCounts.set(albumKey, (albumCounts.get(albumKey) || 0) + 1);
+    if (labelKey) labelCounts.set(labelKey, (labelCounts.get(labelKey) || 0) + 1);
+    if (sourceKey) {
+      sourceCounts.set(sourceKey, (sourceCounts.get(sourceKey) || 0) + 1);
+      if (!sourceLabels.has(sourceKey)) sourceLabels.set(sourceKey, sourceDiversityLabelForCandidate(candidate) || sourceKey);
+    }
     bucketCounts.set(bucket, bucketCount + 1);
+    if (omnivoreLane) omnivoreLaneCounts.set(omnivoreLane, (omnivoreLaneCounts.get(omnivoreLane) || 0) + 1);
     return true;
   }
 
@@ -4374,16 +5733,52 @@ function selectDiscoveryLaneCandidates(candidates = [], requestedCount = 8, opti
     addCandidate(candidate, { bucketMax: plan.max[bucket] ?? limit });
   }
 
-  if (!avoidRepeatedArtists) {
+  for (const candidate of sorted) {
+    if (selected.length >= limit) break;
+    const bucket = discoveryQuotaBucket(candidate, profile);
+    if (bucket === "taste" && profile.scoringMode !== "similar") continue;
+    addCandidate(candidate, { bucketMax: Number.MAX_SAFE_INTEGER });
+  }
+
+  let labelSourceRelaxed = 0;
+  if (selected.length < limit) {
+    const beforeRelax = selected.length;
+    const relaxedLabelCap = Math.max(maxPerLabel, Math.ceil(limit * 0.55));
+    const relaxedSourceCap = Math.max(maxPerSource, Math.ceil(limit * 0.75));
+    effectiveLabelCap = relaxedLabelCap;
+    effectiveSourceCap = relaxedSourceCap;
+    for (const candidate of sorted) {
+      if (selected.length >= limit) break;
+      const bucket = discoveryQuotaBucket(candidate, profile);
+      if (bucket === "taste" && profile.scoringMode !== "similar") continue;
+      addCandidate(candidate, {
+        bucketMax: Number.MAX_SAFE_INTEGER,
+        labelCap: relaxedLabelCap,
+        sourceCap: relaxedSourceCap
+      });
+    }
+    labelSourceRelaxed = Math.max(0, selected.length - beforeRelax);
+  }
+
+  if (allowRepeatFallback) {
+    const repeatFallbackNeeded = selected.length < limit;
     for (const candidate of sorted) {
       if (selected.length >= limit) break;
       addCandidate(candidate, {
         bucketMax: Number.MAX_SAFE_INTEGER,
         artistCap: Number.MAX_SAFE_INTEGER,
-        albumCap: Number.MAX_SAFE_INTEGER
+        albumCap: Number.MAX_SAFE_INTEGER,
+        labelCap: Number.MAX_SAFE_INTEGER,
+        sourceCap: Number.MAX_SAFE_INTEGER
       });
     }
+    if (repeatFallbackNeeded) {
+      effectiveLabelCap = Number.MAX_SAFE_INTEGER;
+      effectiveSourceCap = Number.MAX_SAFE_INTEGER;
+    }
   }
+
+  auditFinalCapHolds();
 
   const alternates = sorted
     .filter((candidate) => !hasSelected(candidate))
@@ -4395,6 +5790,17 @@ function selectDiscoveryLaneCandidates(candidates = [], requestedCount = 8, opti
     quota: {
       enabled: true,
       requested: limit,
+      artistCap: maxPerPrimaryArtist,
+      labelCap: maxPerLabel,
+      sourceCap: maxPerSource,
+      labelSourceRelaxed,
+      repeatFallbackAllowed: allowRepeatFallback,
+      omnivoreLaneCap: profile.isOmnivoreDiscovery ? maxPerOmnivoreLane : 0,
+      omnivoreLanes: countObjectFromMap(omnivoreLaneCounts),
+      labels: countObjectFromMap(labelCounts),
+      sources: countObjectFromMap(sourceCounts),
+      sourceLabels: Object.fromEntries([...sourceLabels.entries()]),
+      capHeld: capHeldDiagnostics(),
       targets: plan.targets,
       max: plan.max,
       baseTargets: basePlan.targets,
@@ -4501,6 +5907,197 @@ function whyBulletsFor(track = {}, options = {}, breakdown = {}, historyEntry = 
   }).slice(0, 6);
 }
 
+function pushEvidence(list = [], value = "") {
+  const text = cleanText(value);
+  if (!text) return;
+  const key = normalize(text);
+  if (!key || list.some((item) => normalize(item) === key)) return;
+  list.push(text);
+}
+
+function evidenceLabelsForInference(inference = {}, { minWeight = 1, limit = 4 } = {}) {
+  return (inference.evidence || [])
+    .filter((item) => Number(item.weight || 0) >= minWeight && !item.queryOnly)
+    .sort((left, right) => Number(right.weight || 0) - Number(left.weight || 0))
+    .slice(0, limit)
+    .map((item) => {
+      const label = cleanText(item.label || item.term || item.genre || item.source);
+      const source = cleanText(item.source);
+      const weight = Number(item.weight || 0);
+      const suffix = [
+        source && !normalize(label).includes(normalize(source)) ? source : "",
+        weight ? `weight ${weight}` : ""
+      ].filter(Boolean).join(", ");
+      return suffix ? `${label} (${suffix})` : label;
+    })
+    .filter(Boolean);
+}
+
+function buildDiscoveryEvidenceLedger(track = {}, {
+  options = {},
+  profile = buildDiscoveryProfile(options),
+  decision = "candidate",
+  decisionReason = ""
+} = {}) {
+  const sourceTrack = track.tidal || track;
+  const breakdown = track.scoreBreakdown || {};
+  const queryText = cleanText(track.query || sourceTrack.query || options.request || "");
+  const label = labelText(track) || labelText(sourceTrack);
+  const artist = cleanText(track.artist || sourceTrack.artist);
+  const title = cleanText(track.title || sourceTrack.title);
+  const releaseValue = releaseValueForDisplay(track) || releaseValueForDisplay(sourceTrack);
+  const yearRange = parseYearRange(options);
+  const durationMs = Number(track.durationMs || sourceTrack.durationMs || 0);
+  const genreInference = breakdown.genreInference || (profile.targetGenres?.length
+    ? genreInferenceFor(sourceTrack, queryText, options, profile)
+    : {});
+  const vibeInference = breakdown.vibeInference || (profile.vibeTerms?.length
+    ? vibeInferenceFor(sourceTrack, queryText, profile)
+    : {});
+  const statusChecks = Array.isArray(track.statusChecks) ? track.statusChecks : [];
+  const statusText = cleanText(statusChecks.join("; "));
+  const promptPercent = Number(breakdown.promptMatch?.percent ?? track.promptMatch?.percent ?? 0);
+  const tastePercent = Number(breakdown.tasteMatch?.percent ?? track.tasteMatch?.percent ?? 0);
+  const score = Number(track.score || breakdown.total || 0);
+
+  const proof = {
+    artist: [],
+    label: [],
+    genre: [],
+    vibe: [],
+    year: [],
+    novelty: [],
+    quality: []
+  };
+
+  if (artist) pushEvidence(proof.artist, `candidate artist: ${artist}`);
+  if (hasSeedArtistMatch(sourceTrack, options, profile)) pushEvidence(proof.artist, "matched an explicit seed artist");
+  const scene = profile.targetGenres?.length ? sceneEvidenceFor(sourceTrack, queryText, options, profile) : {};
+  if (scene.artistAnchor) pushEvidence(proof.artist, `${scene.artistAnchor} scene artist anchor`);
+  if (breakdown.artistMatch !== undefined) {
+    pushEvidence(proof.artist, `artist score ${breakdown.artistMatch}/${breakdown.max?.artistMatch || SCORE_MAX.artistMatch}`);
+  }
+
+  if (label) pushEvidence(proof.label, `${label} label metadata`);
+  const requestedLabel = requestedLabelMatch(sourceTrack, profile);
+  if (requestedLabel) pushEvidence(proof.label, `${requestedLabel} requested label match`);
+  const sceneLabel = matchingSceneLabel(label);
+  if (sceneLabel) pushEvidence(proof.label, `${sceneLabel} scene label match`);
+  if (breakdown.labelMatch !== undefined) {
+    pushEvidence(proof.label, `label score ${breakdown.labelMatch}/${breakdown.max?.labelMatch || SCORE_MAX.labelMatch}`);
+  }
+
+  if (breakdown.matchGenre) pushEvidence(proof.genre, `ranked as ${breakdown.matchGenre}`);
+  for (const item of evidenceLabelsForInference(genreInference, { minWeight: 1, limit: 5 })) {
+    pushEvidence(proof.genre, item);
+  }
+  if (genreInference.summary) pushEvidence(proof.genre, `genre inference: ${genreInference.summary}`);
+  const officialGenres = trackGenreValues(sourceTrack).filter((value) => !/^(?:hires|hi[-_\s]?res|lossless|hires_lossless)$/i.test(cleanText(value)));
+  for (const value of officialGenres.slice(0, 3)) pushEvidence(proof.genre, `official genre hint: ${value}`);
+  if (breakdown.genreMatch !== undefined) {
+    pushEvidence(proof.genre, `genre score ${breakdown.genreMatch}/${breakdown.max?.genreMatch || SCORE_MAX.genreMatch}`);
+  }
+
+  for (const item of evidenceLabelsForInference(vibeInference, { minWeight: 1, limit: 4 })) {
+    pushEvidence(proof.vibe, item);
+  }
+  if (vibeInference.summary) pushEvidence(proof.vibe, `trait inference: ${vibeInference.summary}`);
+  if (profile.vibeTerms?.length && !proof.vibe.length) pushEvidence(proof.vibe, `requested trait: ${profile.vibeTerms.join(", ")}`);
+
+  if (releaseValue) {
+    const fits = !yearRange
+      ? true
+      : (yearRange.dateSpecific
+        ? releaseDateFits(sourceTrack.releaseDate || track.releaseDate, yearRange)
+        : yearFits(sourceTrack.year || track.year, yearRange, sourceTrack.releaseDate || track.releaseDate));
+    pushEvidence(proof.year, `release ${releaseValue}${yearRange ? ` ${fits ? "fits" : "misses"} ${yearRange.label}` : ""}`);
+  } else if (yearRange) {
+    pushEvidence(proof.year, `missing release date/year for ${yearRange.label}`);
+  }
+  if (breakdown.freshness !== undefined) {
+    pushEvidence(proof.year, `freshness score ${breakdown.freshness}/${breakdown.max?.freshness || SCORE_MAX.freshness}`);
+  }
+
+  if (/Not previously suggested/i.test(statusText)) pushEvidence(proof.novelty, "not previously suggested");
+  if (/Previously suggested/i.test(statusText)) pushEvidence(proof.novelty, "previously suggested");
+  if (track.artistNoveltyFallback || track.artistNoveltyRelaxed) pushEvidence(proof.novelty, track.artistNoveltyReason || "artist novelty fallback");
+  if (track.discoveryQuotaBucket) pushEvidence(proof.novelty, `${track.discoveryQuotaBucket} discovery lane`);
+  if (track.discoveryLane) pushEvidence(proof.novelty, `${track.discoveryLane} search lane`);
+
+  if (sourceTrack.tidalUrl || track.tidalUrl) pushEvidence(proof.quality, "TIDAL catalog result");
+  if (/Roon queue action ready/i.test(statusText) || track.roon?.queueActionReady) pushEvidence(proof.quality, "Roon queue action ready");
+  if (durationMs) pushEvidence(proof.quality, `${(durationMs / 60000).toFixed(1)} minute playable length`);
+  if (promptPercent) pushEvidence(proof.quality, `prompt match ${promptPercent}%`);
+  if (tastePercent) pushEvidence(proof.quality, `taste match ${tastePercent}%`);
+
+  const keptBecause = [];
+  if (Array.isArray(track.why)) {
+    for (const reason of track.why.slice(0, 6)) pushEvidence(keptBecause, reason);
+  }
+  if (!keptBecause.length && track.reason) {
+    for (const reason of cleanText(track.reason).split(/\s*;\s*/).slice(0, 6)) pushEvidence(keptBecause, reason);
+  }
+
+  const risks = [];
+  if (track.belowMinimum) pushEvidence(risks, `below ${track.minimumScoreLabel || "minimum"} floor`);
+  if (score && score < 60) pushEvidence(risks, "long-shot score");
+  if (promptPercent && promptPercent < 50) pushEvidence(risks, "weak prompt match");
+  if (genreInference.queryOnly) pushEvidence(risks, "requested genre/trait only appears in the query");
+  if (genreInference.weakOfficialGenre) pushEvidence(risks, "official genre tag is generic");
+  if (profile.targetGenres?.length && Number(genreInference.confidence || 0) < 35) pushEvidence(risks, "weak genre corroboration");
+  if (!label) pushEvidence(risks, "no trusted label metadata");
+  if (yearRange && !releaseValue) pushEvidence(risks, `missing release value for ${yearRange.label}`);
+  if (yearRange && releaseValue && !proof.year.some((item) => /\bfits\b/.test(item))) pushEvidence(risks, `release date outside ${yearRange.label}`);
+  if (isShortEdit(sourceTrack)) pushEvidence(risks, "short/radio edit");
+  if (track.discoveryQuotaRisk) pushEvidence(risks, "feedback calibration risk");
+
+  const rejectedBecause = [];
+  const rejectText = cleanText(decisionReason || track.reason);
+  if (/^(?:discarded|rejected)$/i.test(cleanText(decision)) && rejectText) {
+    for (const reason of rejectText.split(/\s*;\s*/).slice(0, 4)) pushEvidence(rejectedBecause, reason);
+  }
+
+  return {
+    version: 1,
+    decision: cleanText(decision) || "candidate",
+    identity: {
+      artist,
+      title
+    },
+    query: {
+      text: queryText,
+      requested: cleanText(options.request || ""),
+      mode: scoringModeLabel(profile.scoringMode)
+    },
+    source: {
+      discoverySource: cleanText(track.discoverySource || discoverySourceForResult(sourceTrack, options)),
+      discoveryLane: cleanText(track.discoveryLane || "core"),
+      verificationSource: cleanText(track.verificationSource || (sourceTrack.tidalUrl || track.tidalUrl ? "tidal" : "catalog"))
+    },
+    scoring: {
+      score,
+      promptMatch: promptPercent,
+      tasteMatch: tastePercent,
+      genreConfidence: Number(genreInference.confidence || 0),
+      vibeConfidence: Number(vibeInference.confidence || 0),
+      tasteAdjustment: Number(breakdown.tasteAdjustment || 0),
+      artistDiversityAdjustment: Number(breakdown.artistDiversityAdjustment || 0)
+    },
+    proof,
+    keptBecause,
+    risks,
+    rejectedBecause
+  };
+}
+
+function withDiscoveryEvidenceLedger(track = {}, context = {}) {
+  if (!track || typeof track !== "object") return track;
+  return {
+    ...track,
+    evidenceLedger: buildDiscoveryEvidenceLedger(track, context)
+  };
+}
+
 async function mapWithConcurrency(items, limit, mapper) {
   const results = [];
   let index = 0;
@@ -4527,6 +6124,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
   const deadlineAt = runtimeMs ? startedAt + runtimeMs : 0;
   let budgetExhausted = false;
   function hasBudget(reserveMs = 0) {
+    voiceExecution.check();
     if (!deadlineAt) return true;
     return Date.now() + reserveMs < deadlineAt;
   }
@@ -4542,7 +6140,8 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
   const isYearCatalogSearch = Boolean(yearRange && profile.targetGenres.length);
   const smallExactRequest = hasExplicitCountRequest(options) && originalRequestedCount <= 8;
   const smallExactYearSearch = smallExactRequest && isYearCatalogSearch;
-  const candidatePoolTarget = strictRoonMode
+  const wideDiscoveryPool = shouldBuildWideDiscoveryPool(options, profile);
+  const baseCandidatePoolTarget = strictRoonMode
     ? (isYearCatalogSearch
       ? Math.min(160, Math.max(Math.ceil(requestedCount * 7), requestedCount + 54))
       : Math.min(650, Math.max(Math.ceil(requestedCount * 18), requestedCount + 260)))
@@ -4551,15 +6150,25 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
         ? Math.min(180, Math.max(Math.ceil(requestedCount * 18), requestedCount + 95))
         : Math.min(140, Math.max(Math.ceil(requestedCount * 7), requestedCount + 48)))
       : Math.min(140, Math.max(Math.ceil(requestedCount * 4), requestedCount + 35)));
+  const candidatePoolTarget = wideDiscoveryPool
+    ? (strictRoonMode
+      ? Math.min(900, Math.max(baseCandidatePoolTarget, Math.ceil(requestedCount * 28), requestedCount + 280))
+      : (isYearCatalogSearch
+        ? Math.min(520, Math.max(baseCandidatePoolTarget, Math.ceil(requestedCount * 42), requestedCount + 220))
+        : Math.min(420, Math.max(baseCandidatePoolTarget, Math.ceil(requestedCount * 22), requestedCount + 150))))
+    : baseCandidatePoolTarget;
   const usefulCandidateTarget = isYearCatalogSearch
-    ? (smallExactYearSearch
-      ? Math.min(candidatePoolTarget, Math.max(Math.ceil(requestedCount * 8), requestedCount + 36))
-      : Math.min(candidatePoolTarget, Math.max(Math.ceil(requestedCount * (strictRoonMode ? 4 : 3)), requestedCount + (strictRoonMode ? 28 : 18))))
+    ? (wideDiscoveryPool
+      ? Math.min(candidatePoolTarget, Math.max(Math.ceil(requestedCount * (strictRoonMode ? 14 : 11)), requestedCount + (strictRoonMode ? 95 : 65)))
+      : (smallExactYearSearch
+        ? Math.min(candidatePoolTarget, Math.max(Math.ceil(requestedCount * 8), requestedCount + 36))
+        : Math.min(candidatePoolTarget, Math.max(Math.ceil(requestedCount * (strictRoonMode ? 4 : 3)), requestedCount + (strictRoonMode ? 28 : 18)))))
     : candidatePoolTarget;
   const minScore = minimumScoreFor(options);
   const minScoreLabel = minimumScoreLabel(minScore);
   const freshArtistAvoidance = buildFreshArtistAvoidance(options, history, tasteProfile);
   const queries = buildSearchQueries(options, tasteProfile, profile, history, freshArtistAvoidance);
+  const omnivoreQueryKeys = new Set(buildOmnivoreDiscoveryQueries(options, tasteProfile, profile, 160).map(normalize));
   const discarded = [];
   const scoreFiltered = [];
   const minimumRescueCandidates = [];
@@ -4677,6 +6286,10 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     record.errorCount += 1;
   }
 
+  function queryYieldSnapshot() {
+    return summarizeRecords(Array.from(queryYieldRecords.values()), queryYieldAdjustments);
+  }
+
   function queryContextFor(result = {}, context = null) {
     return {
       query: cleanText(context?.query || result.query || ""),
@@ -4713,6 +6326,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
   }
 
   function consider(result, scoringOptions = options, scoringProfile = profile, queryContext = null) {
+    if (typeof options.standbyAcceptCandidate === "function" && !options.standbyAcceptCandidate(result)) return;
     const keys = candidateIdentityKeys(result);
     const key = keys[0];
     if (!key || keys.some((candidateKey) => seenCandidateKeys.has(candidateKey))) return;
@@ -4736,6 +6350,13 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     const artistDiversityChecks = artistDiversity.value
       ? [`Artist diversity ${artistDiversity.value}: ${artistDiversity.reasons.join("; ")}`]
       : [];
+    const recentNovelty = recentSuggestionNoveltyPenaltyFor(result, history, scoringProfile, scoringOptions);
+    const recentNoveltyChecks = recentNovelty.value
+      ? [`Recent suggestion novelty tax -${recentNovelty.value}: ${recentNovelty.reasons.join("; ")}`]
+      : [];
+    const omnivoreBridge = scoringProfile.isOmnivoreDiscovery
+      ? omnivoreBridgeEvidenceFor(result, result.query, scoringOptions, scoringProfile)
+      : null;
     const candidate = {
       artist: result.artist,
       title: result.title,
@@ -4749,9 +6370,22 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       discoverySource: result.discoverySource || discoverySourceForResult(result, options),
       discoveryLane: result.discoveryLane || "core",
       score: scoreBreakdown.total,
-      scoreBreakdown,
+      scoreBreakdown: {
+        ...scoreBreakdown,
+        recentSuggestionPenalty: recentNovelty.value ? -recentNovelty.value : 0,
+        recentSuggestionPenaltyReasons: recentNovelty.reasons || [],
+        recentSuggestionPenaltyComponents: recentNovelty.components || {}
+      },
+      recentSuggestionPenalty: recentNovelty.value,
+      recentSuggestionPenaltyReasons: recentNovelty.reasons || [],
+      recentSuggestionPenaltyComponents: recentNovelty.components || {},
       tidal: result,
-      statusChecks: [...discoveryStatusFor(result, historyEntry, false, scrobbleHistory), ...artistDiversityChecks],
+      ...(omnivoreBridge?.lane ? {
+        discoveryOmnivoreLane: omnivoreBridge.lane,
+        discoveryOmnivoreAnchor: omnivoreBridge.anchor,
+        discoveryOmnivoreTarget: omnivoreBridge.target
+      } : {}),
+      statusChecks: [...discoveryStatusFor(result, historyEntry, false, scrobbleHistory), ...artistDiversityChecks, ...recentNoveltyChecks],
       verificationSource: "tidal"
     };
     candidate.feedback = typeof tasteProfile?.getFeedbackFor === "function" ? tasteProfile.getFeedbackFor(candidate) : "";
@@ -4870,6 +6504,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
 
     if (context.tracked) recordQueryAccepted(context.query, context.lane);
     byKey.set(key, candidate);
+    if (typeof options.standbyOnCandidate === "function") options.standbyOnCandidate(candidate);
   }
 
   function candidateCountForQuotaBucket(bucket) {
@@ -4900,12 +6535,30 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     });
   }
 
-  const artistSeedLimit = isYearCatalogSearch
+  const artistSeedLimit = wideDiscoveryPool
+    ? (isYearCatalogSearch
+      ? (strictRoonMode ? 56 : 44)
+      : (strictRoonMode ? 36 : 28))
+    : (isYearCatalogSearch
     ? (strictRoonMode
       ? Math.min(42, Math.max(30, requestedCount + 24))
       : (smallExactYearSearch ? Math.min(24, Math.max(14, requestedCount + 10)) : Math.min(26, Math.max(18, requestedCount + 12))))
-    : (strictRoonMode ? Math.max(12, Math.min(24, requestedCount + 8)) : Math.max(10, Math.min(18, requestedCount + 6)));
+    : (strictRoonMode ? Math.max(12, Math.min(24, requestedCount + 8)) : Math.max(10, Math.min(18, requestedCount + 6))));
   const artistSeeds = buildArtistSeeds(options, artistSeedLimit, tasteProfile, profile, history, freshArtistAvoidance);
+  const adaptiveRecovery = {
+    enabled: !/^(0|false|no)$/i.test(String(options.adaptiveQueryRecovery ?? "true")),
+    triggered: false,
+    reason: "",
+    keptBefore: 0,
+    keptAfter: 0,
+    attempted: 0,
+    returned: 0,
+    accepted: 0,
+    errors: 0,
+    targetLanes: [],
+    laneShortfalls: [],
+    families: []
+  };
   const hasGenreArtistAnchors = Boolean(profile.isGenreDiscoveryTarget && genreArtistAnchors(profile).length);
   const wantsDeepArtistCrawl = /\b(?:deep catalog|catalog crawl|discography|albums?|artist deep dive|accuracy|accurate|scrape)\b/i.test(`${options.request || ""} ${options.reference || ""}`);
   const useAlbumExpansion = !options.autoBroaden && (isYearCatalogSearch
@@ -4917,12 +6570,16 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
 
   if (useAlbumExpansion) {
     const artistExpansionLimit = isYearCatalogSearch
-      ? (strictRoonMode
+      ? (wideDiscoveryPool
+        ? (strictRoonMode ? 44 : 30)
+        : (strictRoonMode
         ? Math.min(36, Math.max(26, requestedCount + 16))
         : (smallExactYearSearch
           ? (requestedCount <= 2 ? Math.min(34, Math.max(24, requestedCount + 20)) : Math.min(12, Math.max(8, requestedCount + 5)))
-          : Math.min(20, Math.max(12, requestedCount + 6))))
-      : (strictRoonMode ? (requestedCount >= 20 ? 14 : 10) : (requestedCount >= 20 ? 8 : 6));
+          : Math.min(20, Math.max(12, requestedCount + 6)))))
+      : (wideDiscoveryPool
+        ? (strictRoonMode ? 24 : 16)
+        : (strictRoonMode ? (requestedCount >= 20 ? 14 : 10) : (requestedCount >= 20 ? 8 : 6)));
     const artistsToExpand = artistSeeds.slice(0, artistExpansionLimit);
     await mapWithConcurrency(artistsToExpand, isYearCatalogSearch ? (strictRoonMode ? 3 : 2) : 2, async (artist) => {
       if (!hasBudget(albumExpansionReserveMs)) {
@@ -4944,7 +6601,9 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
 
       let artistAccepted = 0;
       const perArtistLimit = isYearCatalogSearch
-        ? (strictRoonMode ? 3 : (smallExactYearSearch ? 1 : 2))
+        ? (wideDiscoveryPool && !allowsArtistRepeatFallback(options, profile)
+          ? 1
+          : (strictRoonMode ? 3 : (smallExactYearSearch ? 1 : 2)))
         : (strictRoonMode ? (requestedCount >= 20 ? 5 : 3) : (requestedCount >= 20 ? 3 : 2));
       for (const album of albums) {
         if (!hasBudget(albumExpansionReserveMs)) {
@@ -4984,27 +6643,34 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     });
   }
 
+  const searchQueryLimit = isYearCatalogSearch
+    ? (wideDiscoveryPool
+      ? (strictRoonMode ? 56 : 64)
+      : (strictRoonMode ? 28 : (smallExactYearSearch ? 28 : Math.min(14, Math.max(8, requestedCount + 6)))))
+    : (wideDiscoveryPool ? Math.min(90, Math.max(48, requestedCount * 5)) : 0);
   const searchQueries = isYearCatalogSearch
-    ? queries.slice(0, strictRoonMode ? 28 : (smallExactYearSearch ? 28 : Math.min(14, Math.max(8, requestedCount + 6))))
-    : queries;
+    ? queries.slice(0, searchQueryLimit)
+    : (wideDiscoveryPool ? queries.slice(0, searchQueryLimit) : queries);
   const coreLane = options.autoBroadenLane || "core";
   const rankedSearchQueries = rankTrackedQueries(searchQueries, coreLane);
   if (byKey.size < usefulCandidateTarget) await mapWithConcurrency(rankedSearchQueries, searchConcurrencyFor(coreLane), async (query) => {
-    if (!hasLaneBudget(coreLane)) {
+    const queryLane = omnivoreQueryKeys.has(normalize(query)) ? "omnivore" : coreLane;
+    if (!hasLaneBudget(queryLane)) {
       return;
     }
     if (byKey.size >= usefulCandidateTarget) return;
     let results = [];
     try {
       results = await tidal.searchTracks(query, {
+        standbyFresh: typeof options.standbyAcceptCandidate === "function",
         limit: strictRoonMode ? (isYearCatalogSearch ? 16 : 16) : (isYearCatalogSearch ? (smallExactYearSearch ? 12 : 8) : 6),
         detailLimit: yearRange?.dateSpecific
           ? (strictRoonMode ? 12 : 8)
-          : (yearRange ? (isYearCatalogSearch ? (strictRoonMode ? 5 : (smallExactYearSearch ? 4 : 2)) : (strictRoonMode ? 5 : 3)) : (strictRoonMode ? 3 : 1))
+            : (yearRange ? (isYearCatalogSearch ? (strictRoonMode ? 5 : (smallExactYearSearch ? 4 : 2)) : (strictRoonMode ? 5 : 3)) : (strictRoonMode ? 3 : 1))
       });
-      recordQueryAttempt(query, coreLane, results.length);
+      recordQueryAttempt(query, queryLane, results.length);
     } catch (error) {
-      recordQueryError(query, coreLane);
+      recordQueryError(query, queryLane);
       discarded.push({ query, reason: error.message });
       return;
     }
@@ -5012,9 +6678,13 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     for (const result of results) {
       consider({
         ...result,
-        discoverySource: cleanText(options.autoBroadenLabel) || discoverySourceForResult(result, options),
-        discoveryLane: options.autoBroadenLane === "adjacent" ? "adjacent" : (result.discoveryLane || options.autoBroadenLane || "core")
-      }, options, profile, { query, lane: coreLane, trackYield: true });
+        discoverySource: queryLane === "omnivore"
+          ? "Omnivore taste-bridge search"
+          : (cleanText(options.autoBroadenLabel) || discoverySourceForResult(result, options)),
+        discoveryLane: queryLane === "omnivore"
+          ? "omnivore"
+          : (options.autoBroadenLane === "adjacent" ? "adjacent" : (result.discoveryLane || options.autoBroadenLane || "core"))
+      }, options, profile, { query, lane: queryLane, trackYield: true });
       if (byKey.size >= usefulCandidateTarget) break;
     }
   });
@@ -5024,7 +6694,9 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
   const usedCoreQueries = new Set(searchQueries.map(normalize));
   const branchQueries = buildBranchSearchQueries(options, tasteProfile, profile, history, freshArtistAvoidance)
     .filter((query) => !usedCoreQueries.has(normalize(query)))
-    .slice(0, isYearCatalogSearch ? (strictRoonMode ? 28 : 22) : 16);
+    .slice(0, isYearCatalogSearch
+      ? (wideDiscoveryPool ? (strictRoonMode ? 56 : 48) : (strictRoonMode ? 28 : 22))
+      : (wideDiscoveryPool ? 36 : 16));
   const needsBranchCandidate = () => branchQuotaTarget > 0 && candidateCountForQuotaBucket("branch") < branchQuotaTarget;
   if (branchQueries.length && (needsBranchCandidate() || byKey.size < usefulCandidateTarget)) {
     const rankedBranchQueries = rankTrackedQueries(branchQueries, "branch");
@@ -5036,6 +6708,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       let results = [];
       try {
         results = await tidal.searchTracks(query, {
+        standbyFresh: typeof options.standbyAcceptCandidate === "function",
           limit: strictRoonMode ? (isYearCatalogSearch ? 14 : 12) : (isYearCatalogSearch ? (smallExactYearSearch ? 10 : 8) : 6),
           detailLimit: yearRange?.dateSpecific
             ? (strictRoonMode ? 10 : 7)
@@ -5067,7 +6740,9 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     const usedQueries = new Set([...searchQueries, ...branchQueries].map(normalize));
     const adjacentQueries = buildAdjacentSearchQueries(options, tasteProfile, profile, history, freshArtistAvoidance)
       .filter((query) => !usedQueries.has(normalize(query)))
-      .slice(0, isYearCatalogSearch ? (strictRoonMode ? 28 : 22) : 16);
+      .slice(0, isYearCatalogSearch
+        ? (wideDiscoveryPool ? (strictRoonMode ? 56 : 48) : (strictRoonMode ? 28 : 22))
+        : (wideDiscoveryPool ? 36 : 16));
     const rankedAdjacentQueries = rankTrackedQueries(adjacentQueries, "adjacent");
 
     await mapWithConcurrency(rankedAdjacentQueries, searchConcurrencyFor("adjacent"), async (query) => {
@@ -5078,6 +6753,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       let results = [];
       try {
         results = await tidal.searchTracks(query, {
+        standbyFresh: typeof options.standbyAcceptCandidate === "function",
           limit: strictRoonMode ? (isYearCatalogSearch ? 16 : 14) : (isYearCatalogSearch ? (smallExactYearSearch ? 12 : 8) : 8),
           detailLimit: yearRange?.dateSpecific
             ? (strictRoonMode ? 12 : 8)
@@ -5119,6 +6795,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       let results = [];
       try {
         results = await tidal.searchTracks(query, {
+        standbyFresh: typeof options.standbyAcceptCandidate === "function",
           limit: strictRoonMode ? 14 : 10,
           detailLimit: strictRoonMode ? 5 : 4
         });
@@ -5138,6 +6815,117 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
         if (byKey.size >= usefulCandidateTarget) break;
       }
     });
+  }
+
+  if (adaptiveRecovery.enabled) {
+    function currentLaneShortfalls() {
+      return laneQuotaShortfalls(baseQuotaPlan.targets, {
+        omnivore: candidateCountForQuotaBucket("omnivore"),
+        label: candidateCountForQuotaBucket("label"),
+        adjacent: candidateCountForQuotaBucket("adjacent"),
+        branch: candidateCountForQuotaBucket("branch")
+      });
+    }
+
+    const recoveryDecision = shouldRunAdaptiveQueryRecovery({
+      keptCount: byKey.size,
+      requestedCount,
+      usefulCandidateTarget,
+      queryYield: queryYieldSnapshot(),
+      budgetAvailable: hasBudget(3_500),
+      laneShortfalls: currentLaneShortfalls()
+    });
+    if (recoveryDecision.run) {
+      const usedQueries = new Set(Array.from(queryYieldRecords.values()).map((record) => normalize(record.query)).filter(Boolean));
+      const targetLaneSet = new Set((recoveryDecision.lanes || []).map(cleanText).filter(Boolean));
+      const recoveringStarvedLanes = targetLaneSet.size > 0;
+      const families = buildAdaptiveRecoveryQueryFamilies(options, tasteProfile, profile, artistSeeds, usedQueries, history, freshArtistAvoidance)
+        .filter((family) => !recoveringStarvedLanes || targetLaneSet.has(cleanText(family.lane)));
+      const maxRecoveryQueries = wideDiscoveryPool
+        ? (strictRoonMode ? 42 : 36)
+        : Math.max(12, Math.min(30, requestedCount * 4));
+      let remainingQueries = maxRecoveryQueries;
+      adaptiveRecovery.triggered = true;
+      adaptiveRecovery.reason = recoveryDecision.reason;
+      adaptiveRecovery.keptBefore = byKey.size;
+      adaptiveRecovery.targetLanes = [...targetLaneSet];
+      adaptiveRecovery.laneShortfalls = recoveryDecision.laneShortfalls || [];
+
+      for (const family of families) {
+        if (!remainingQueries || (!recoveringStarvedLanes && byKey.size >= usefulCandidateTarget) || !hasBudget(2_500)) break;
+        if (recoveringStarvedLanes && !currentLaneShortfalls().some((item) => targetLaneSet.has(item.bucket))) break;
+        const queryLane = cleanText(family.lane || "adaptive-recovery") || "adaptive-recovery";
+        const familyQueries = rankTrackedQueries(family.queries, queryLane).slice(0, remainingQueries);
+        if (!familyQueries.length) continue;
+        const familyStats = {
+          id: family.id,
+          label: family.label,
+          lane: family.lane,
+          queries: familyQueries.length,
+          attempted: 0,
+          returned: 0,
+          accepted: 0,
+          rejected: 0,
+          seoRejects: 0,
+          genreRejects: 0,
+          errors: 0
+        };
+        adaptiveRecovery.families.push(familyStats);
+        remainingQueries -= familyQueries.length;
+
+        await mapWithConcurrency(familyQueries, 2, async (query) => {
+          if (!hasLaneBudget(queryLane)) return;
+          if (!recoveringStarvedLanes && byKey.size >= usefulCandidateTarget) return;
+          let results = [];
+          try {
+            results = await tidal.searchTracks(query, {
+        standbyFresh: typeof options.standbyAcceptCandidate === "function",
+              limit: strictRoonMode ? (isYearCatalogSearch ? 14 : 12) : (isYearCatalogSearch ? 10 : 8),
+              detailLimit: yearRange?.dateSpecific
+                ? (strictRoonMode ? 9 : 7)
+                : (yearRange ? (strictRoonMode ? 4 : 3) : 2)
+            });
+            recordQueryAttempt(query, queryLane, results.length);
+            familyStats.attempted += 1;
+            familyStats.returned += results.length;
+            adaptiveRecovery.attempted += 1;
+            adaptiveRecovery.returned += results.length;
+          } catch (error) {
+            recordQueryError(query, queryLane);
+            familyStats.attempted += 1;
+            familyStats.errors += 1;
+            adaptiveRecovery.attempted += 1;
+            adaptiveRecovery.errors += 1;
+            discarded.push({ query, reason: error.message });
+            return;
+          }
+
+          let acceptedForQuery = 0;
+          for (const result of results) {
+            const before = byKey.size;
+            const discardedBefore = discarded.length;
+            consider({
+              ...result,
+              discoverySource: `Adaptive recovery: ${family.label}`,
+              discoveryLane: family.lane || "core"
+            }, options, profile, { query, lane: queryLane, trackYield: true });
+            if (byKey.size > before) {
+              acceptedForQuery += 1;
+              familyStats.accepted += 1;
+              adaptiveRecovery.accepted += 1;
+            }
+            for (const item of discarded.slice(discardedBefore)) {
+              const bucket = rejectionBucketForReason(item.reason);
+              if (bucket === "seo") familyStats.seoRejects += 1;
+              if (bucket === "genre") familyStats.genreRejects += 1;
+            }
+            if (!recoveringStarvedLanes && byKey.size >= usefulCandidateTarget) break;
+          }
+          familyStats.rejected += Math.max(0, results.length - acceptedForQuery);
+        });
+      }
+      adaptiveRecovery.keptAfter = byKey.size;
+    }
   }
 
   const candidates = Array.from(byKey.values())
@@ -5406,12 +7194,16 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       return true;
     }
 
-    const fallbackStages = [
-      { artistCap: 1, albumCap: 1 },
-      { artistCap: 2, albumCap: 1 },
-      { artistCap: 2, albumCap: 2 },
-      { artistCap: Number.MAX_SAFE_INTEGER, albumCap: Number.MAX_SAFE_INTEGER }
-    ];
+    const fallbackStages = allowsArtistRepeatFallback(options, profile)
+      ? [
+          { artistCap: 1, albumCap: 1 },
+          { artistCap: 2, albumCap: 1 },
+          { artistCap: 2, albumCap: 2 },
+          { artistCap: Number.MAX_SAFE_INTEGER, albumCap: Number.MAX_SAFE_INTEGER }
+        ]
+      : [
+          { artistCap: 1, albumCap: 1 }
+        ];
     for (const caps of fallbackStages) {
       if (tracks.length >= requestedCount) break;
       for (const candidate of noveltyPool) {
@@ -5429,15 +7221,31 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
   const remainingArtistNoveltyCandidates = artistNoveltyCandidates
     .filter((candidate) => !candidateIdentityKeys(candidate).some((key) => selectedKeys.has(key)));
   const finalDiscarded = discarded.filter((candidate) => !candidateIdentityKeys(candidate).some((key) => selectedKeys.has(key)));
-  const belowMinimumKept = tracks.filter((candidate) => candidate.belowMinimum).length;
-  const belowMinimumAlternates = alternates.filter((candidate) => candidate.belowMinimum).length;
-  const aboveMinimumKept = minScore ? Math.max(0, tracks.length - belowMinimumKept) : tracks.length;
-  const generated = tracks.length + alternates.length + finalDiscarded.length;
+  const tracksWithEvidence = tracks.map((candidate) => withDiscoveryEvidenceLedger(candidate, {
+    options,
+    profile,
+    decision: "kept"
+  }));
+  const alternatesWithEvidence = alternates.map((candidate) => withDiscoveryEvidenceLedger(candidate, {
+    options,
+    profile,
+    decision: "alternate"
+  }));
+  const finalDiscardedWithEvidence = finalDiscarded.map((candidate) => withDiscoveryEvidenceLedger(candidate, {
+    options,
+    profile,
+    decision: "discarded",
+    decisionReason: candidate.reason
+  }));
+  const belowMinimumKept = tracksWithEvidence.filter((candidate) => candidate.belowMinimum).length;
+  const belowMinimumAlternates = alternatesWithEvidence.filter((candidate) => candidate.belowMinimum).length;
+  const aboveMinimumKept = minScore ? Math.max(0, tracksWithEvidence.length - belowMinimumKept) : tracksWithEvidence.length;
+  const generated = tracksWithEvidence.length + alternatesWithEvidence.length + finalDiscardedWithEvidence.length;
   const queryYield = queryYieldSummary();
   const poolDiagnostics = buildPoolDiagnostics({
-    tracks,
-    alternates,
-    discarded: finalDiscarded,
+    tracks: tracksWithEvidence,
+    alternates: alternatesWithEvidence,
+    discarded: finalDiscardedWithEvidence,
     scoreFiltered,
     minimumRescueCandidates,
     countFillCandidates,
@@ -5451,14 +7259,15 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     usefulCandidateTarget,
     budgetExhausted,
     laneSelection,
-    queryYield
+    queryYield,
+    queryRecovery: adaptiveRecovery
   });
 
   return {
     requestedCount,
-    tracks,
-    alternates,
-    discarded: finalDiscarded,
+    tracks: tracksWithEvidence,
+    alternates: alternatesWithEvidence,
+    discarded: finalDiscardedWithEvidence,
     verification: {
       enabled: true,
       tidal: true,
@@ -5466,8 +7275,8 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       originalRequested: originalRequestedCount,
       countExpanded: requestedCount !== originalRequestedCount,
       generated,
-      kept: tracks.length,
-      discarded: finalDiscarded.length,
+      kept: tracksWithEvidence.length,
+      discarded: finalDiscardedWithEvidence.length,
       runtimeMs: Date.now() - startedAt,
       budgetExhausted,
       minScore,
@@ -5478,7 +7287,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       aboveMinimumKept,
       minScoreSoftFallback: Boolean(minScore && belowMinimumKept),
       belowMinimumRescueAvailable: minimumRescueCandidates.length,
-      belowMinimumRescueKept: minimumRescueKept || tracks.filter((candidate) => candidate.belowMinimumRescue).length,
+      belowMinimumRescueKept: minimumRescueKept || tracksWithEvidence.filter((candidate) => candidate.belowMinimumRescue).length,
       belowMinimumCountFillAvailable: countFillCandidates.length,
       belowMinimumCountFillKept,
       strategy: "tidal-catalog-first",
@@ -5493,6 +7302,8 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       queries: queries.slice(0, 12),
       candidatePoolTarget,
       usefulCandidateTarget,
+      wideDiscoveryPool,
+      perRunArtistCap: defaultPerRunArtistCap(options, profile, requestedCount),
       laneQuotas: laneSelection.quota,
       adjacentLaneTerms: adjacentLaneTerms(profile, options).slice(0, 12),
       profile: {
@@ -5508,6 +7319,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       taste: typeof tasteProfile?.summary === "function" ? tasteProfile.summary() : null,
       lastfm: scrobbleVerificationSummary(scrobbleHistory),
       queryYield,
+      queryRecovery: adaptiveRecovery,
       poolDiagnostics
     }
   };
@@ -5528,16 +7340,29 @@ module.exports = {
   rejectReason,
   scoreBreakdownFor,
   whyBulletsFor,
+  buildDiscoveryEvidenceLedger,
   buildDiscoveryProfile,
+  buildOmnivoreDiscoveryQueries,
   belowMinimumSoftRejectReason,
   releaseFilterRequiresVerification,
   autoBroadenSearchPasses,
+  buildAdaptiveRecoveryQueryFamilies,
+  laneQuotaShortfalls,
+  shouldRunAdaptiveQueryRecovery,
   discoveryQuotaBucket,
   artistDiversityAdjustmentFor,
+  artistKeysForCandidate,
+  matchingSceneArtist,
   requestRequiresFreshArtists,
   requestRequiresStrictFreshArtists,
   requestPrefersExtendedMixes,
+  promptIntentEvidenceFor,
   previouslyRecommendedArtistReason,
+  recentSuggestionNoveltyPenaltyFor,
   selectDiscoveryLaneCandidates,
+  shouldContinueAutoBroadenAfterError,
+  allowsArtistRepeatFallback,
+  noveltyBudgetFor,
+  defaultPerRunArtistCap,
   normalizeScoringMode
 };

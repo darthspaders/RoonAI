@@ -8,6 +8,7 @@ const {
   httpStatusError,
   positiveNumber
 } = require("./tidalRequestGuard");
+const { normalizeTidalTrackUrl } = require("./tidalIdentity");
 
 const DEFAULT_MIN_LOOKUP_INTERVAL_MS = 1500;
 const DEFAULT_CACHE_MAX = 200;
@@ -487,13 +488,6 @@ function getTidalCoverArtRefs(item = {}) {
 function getTidalExternalLink(item = {}) {
   const links = Array.isArray(item.attributes?.externalLinks) ? item.attributes.externalLinks : [];
   return cleanText(links.find((link) => link?.meta?.type === "TIDAL_SHARING")?.href || links[0]?.href);
-}
-
-function normalizeTidalTrackUrl(value) {
-  const url = cleanText(value);
-  const trackMatch = url.match(/^https?:\/\/(?:www\.)?(?:listen\.)?tidal\.com\/(?:browse\/)?track\/(\d+)/i);
-  if (trackMatch) return `https://tidal.com/browse/track/${trackMatch[1]}`;
-  return url;
 }
 
 function getTidalTrackUrl(item = {}) {

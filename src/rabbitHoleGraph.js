@@ -2,6 +2,10 @@
 
 const fs = require("fs");
 const path = require("path");
+const {
+  normalizedTrackKey,
+  normalizeTrackIdentityText
+} = require("./trackIdentity");
 
 const CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const CACHE_VERSION = 2;
@@ -12,13 +16,7 @@ function cleanText(value) {
 }
 
 function normalize(value) {
-  return cleanText(value)
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+  return normalizeTrackIdentityText(value);
 }
 
 function splitArtists(value) {
@@ -29,9 +27,7 @@ function splitArtists(value) {
 }
 
 function trackKey(track = {}) {
-  const tidalUrl = cleanText(track.tidal?.tidalUrl || track.tidalUrl);
-  if (tidalUrl) return tidalUrl.toLowerCase();
-  return `${normalize(track.artist)}|${normalize(track.title)}`;
+  return normalizedTrackKey(track);
 }
 
 function labelFor(track = {}) {
@@ -321,6 +317,7 @@ class RabbitHoleGraph {
   constructor(options = {}) {
     this.file = options.file || path.join(__dirname, "..", "data", "rabbit-hole-cache.json");
     this.ttlMs = Number(options.ttlMs || CACHE_TTL_MS);
+    this.maxEntries = Number(options.maxEntries ?? 0);
     this.cache = new Map();
     this.load();
   }
@@ -335,11 +332,17 @@ class RabbitHoleGraph {
   }
 
   save() {
-    const entries = [...this.cache.values()]
-      .sort((left, right) => Number(right.updatedAtMs || 0) - Number(left.updatedAtMs || 0))
-      .slice(0, 500);
+    let entries = [...this.cache.values()]
+      .sort((left, right) => Number(right.updatedAtMs || 0) - Number(left.updatedAtMs || 0));
+    if (Number.isFinite(this.maxEntries) && this.maxEntries > 0) {
+      entries = entries.slice(0, this.maxEntries);
+    }
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file, JSON.stringify({ entries }, null, 2));
+    fs.writeFileSync(this.file, JSON.stringify({
+      maxEntries: this.maxEntries || null,
+      unlimited: !this.maxEntries,
+      entries
+    }, null, 2));
     this.cache = new Map(entries.map((entry) => [entry.key, entry]));
   }
 

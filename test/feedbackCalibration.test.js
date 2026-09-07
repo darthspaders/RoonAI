@@ -159,7 +159,81 @@ test("calibration dampens future candidates from repeatedly bad buckets", () => 
   });
 
   assert.ok(adjustment.value < 0);
-  assert.match(adjustment.reasons.join(" "), /feedback misses/i);
+  assert.match(adjustment.reasons.join(" "), /feedback issues/i);
+});
+
+test("wrong-genre feedback calibrates future buckets even without model review", () => {
+  const taste = new TasteProfile(tempTasteFile());
+  taste.record({
+    artist: "Mango",
+    title: "Leben",
+    label: "Unwanted Label",
+    discoverySource: "Similar artist",
+    discoveryLane: "core",
+    tidalUrl: "https://tidal.com/browse/track/wrong-genre-unreviewed"
+  }, "wrong_genre");
+
+  const profile = taste.read();
+  const adjustment = taste.calibrationAdjustmentFor({
+    artist: "Another Artist",
+    title: "Another Track",
+    label: "Unwanted Label",
+    discoverySource: "Similar artist",
+    discoveryLane: "core"
+  });
+
+  assert.equal(profile.calibration.modelMisses, 0);
+  assert.equal(profile.calibration.promptMismatches, 1);
+  assert.ok(adjustment.value < 0);
+  assert.match(adjustment.reasons.join(" "), /feedback issues/i);
+});
+
+test("prompt-only wrong-genre buckets stay visible in ranked calibration summary", () => {
+  const feedback = {};
+  for (let index = 0; index < 8; index += 1) {
+    const detail = feedbackCalibrationEntry({
+      artist: `Model Artist ${index}`,
+      title: `Model Track ${index}`,
+      label: `Model Label ${index}`,
+      discoverySource: `Model Source ${index}`,
+      discoveryLane: "core",
+      modelReview: {
+        action: "boosted",
+        modelScore: 80
+      }
+    }, "skip");
+    feedback[`model-${index}`] = {
+      artist: `Model Artist ${index}`,
+      title: `Model Track ${index}`,
+      rating: "skip",
+      calibration: detail,
+      updatedAt: detail.recordedAt
+    };
+  }
+
+  for (let index = 0; index < 2; index += 1) {
+    const wrongGenreDetail = feedbackCalibrationEntry({
+      artist: `Prompt Artist ${index}`,
+      title: `Prompt Track ${index}`,
+      label: "Prompt Label",
+      discoverySource: "Prompt Source",
+      discoveryLane: "core"
+    }, "wrong_genre");
+    feedback[`prompt-${index}`] = {
+      artist: `Prompt Artist ${index}`,
+      title: `Prompt Track ${index}`,
+      rating: "wrong_genre",
+      calibration: wrongGenreDetail,
+      updatedAt: wrongGenreDetail.recordedAt
+    };
+  }
+
+  const calibration = rebuildCalibration(feedback);
+  const promptSource = calibration.sources.find((entry) => entry.source === "Prompt Source");
+  assert.ok(promptSource);
+  assert.equal(promptSource.issueCount, 2);
+  assert.equal(promptSource.modelMisses, 0);
+  assert.equal(promptSource.promptMismatches, 2);
 });
 
 test("discovery scoring applies calibration as a separate soft adjustment", () => {
@@ -228,6 +302,27 @@ test("liked long-shot feedback creates a future serendipity boost", () => {
   assert.equal(profile.calibration.recent[0].issue, "liked_longshot");
   assert.ok(adjustment.value > 0);
   assert.match(adjustment.reasons.join(" "), /liked long shots/i);
+});
+
+test("feedback saved by TIDAL URL is found for now-playing artist and title", () => {
+  const taste = new TasteProfile(tempTasteFile());
+  taste.record({
+    artist: "Tim Green",
+    title: "Shiratani",
+    tidalUrl: "https://tidal.com/browse/track/285143430"
+  }, "love");
+
+  assert.equal(taste.getFeedbackFor({
+    artist: "Tim Green",
+    title: "Shiratani"
+  }), "love");
+  assert.equal(taste.getFeedbackFor({
+    metadataEnrichment: {
+      artist: "TIM GREEN",
+      title: "Shiratani",
+      tidalUrl: "https://tidal.com/browse/track/285143430"
+    }
+  }), "love");
 });
 
 test("discovery scoring lifts verified sparse-metadata long shots", () => {

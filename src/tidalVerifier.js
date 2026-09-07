@@ -14,6 +14,7 @@ const {
   httpStatusError,
   positiveNumber
 } = require("./tidalRequestGuard");
+const { normalizeTidalTrackUrl } = require("./tidalIdentity");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -36,6 +37,21 @@ function normalizeSearchQuery(value) {
   return cleanText(value)
     .replace(/&/g, " ")
     .replace(/[^a-z0-9()]+/gi, " ")
+    .trim();
+}
+
+function normalizeExactSearchQuery(value) {
+  return cleanText(value)
+    .replace(/&/g, " ")
+    .replace(/[,;/+|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeLooseSearchQuery(value) {
+  return normalizeSearchQuery(value)
+    .replace(/[()]+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -270,7 +286,33 @@ function getArtistNames(item = {}, searchJson = {}) {
     .filter(Boolean);
   if (relationshipNames.length) return relationshipNames;
 
-  return [cleanText(item.artist?.name || item.attributes?.artistName)].filter(Boolean);
+  return [cleanText(
+    (typeof item.artist === "string" ? item.artist : item.artist?.name) ||
+    item.artistName ||
+    item.attributes?.artistName
+  )].filter(Boolean);
+}
+
+function getArtistIds(item = {}, searchJson = {}) {
+  const artists = Array.isArray(item.artists) ? item.artists : [];
+  const flatIds = artists.map((artist) => cleanText(artist?.id || artist?.artistId || artist?.artist_id)).filter(Boolean);
+  const relationshipIds = getRelationshipData(item, "artists")
+    .map((ref) => cleanText(ref?.id))
+    .filter(Boolean);
+  const includedIds = getRelationshipData(item, "artists")
+    .map((ref) => findIncluded(searchJson, ref, "artists"))
+    .map((artist) => cleanText(artist?.id))
+    .filter(Boolean);
+  return [...new Set([...flatIds, ...relationshipIds, ...includedIds])];
+}
+
+function getArtistRefs(item = {}, searchJson = {}) {
+  const names = getArtistNames(item, searchJson);
+  const ids = getArtistIds(item, searchJson);
+  return names.map((name, index) => ({
+    name,
+    id: ids[index] || ""
+  })).filter((artist) => artist.name || artist.id);
 }
 
 function getAlbum(item = {}, searchJson = {}) {
@@ -279,13 +321,6 @@ function getAlbum(item = {}, searchJson = {}) {
 
   const ref = getRelationshipData(item, "albums")[0] || getRelationshipData(item, "album")[0];
   return findIncluded(searchJson, ref, "albums") || {};
-}
-
-function normalizeTidalTrackUrl(value) {
-  const url = cleanText(value);
-  const trackMatch = url.match(/^https?:\/\/(?:www\.)?(?:listen\.)?tidal\.com\/(?:browse\/)?track\/(\d+)/i);
-  if (trackMatch) return `https://tidal.com/browse/track/${trackMatch[1]}`;
-  return url;
 }
 
 function getExternalLink(item = {}) {
@@ -313,9 +348,38 @@ function imageUrlFromLinks(value) {
     .sort((left, right) => right.length - left.length)[0] || "";
 }
 
-function getImageUrl(item = {}, album = {}) {
+function imageUrlFromArtworkObject(artwork = {}) {
+  const files = Array.isArray(artwork.attributes?.files) ? artwork.attributes.files : [];
+  const fileUrl = files
+    .map((file) => ({
+      href: cleanText(file?.href || file?.url),
+      width: Number(file?.meta?.width || 0),
+      height: Number(file?.meta?.height || 0)
+    }))
+    .filter((file) => /^https?:\/\//i.test(file.href))
+    .sort((left, right) => (right.width * right.height) - (left.width * left.height))[0]?.href || "";
+  if (fileUrl) return fileUrl;
+  return imageUrlFromLinks(artwork.attributes?.imageLinks || artwork.imageLinks || artwork.links);
+}
+
+function imageUrlFromCoverArtRelationship(album = {}, searchJson = {}) {
+  const refs = getRelationshipData(album, "coverArt");
+  for (const ref of refs) {
+    const artwork = findIncluded(searchJson, ref, "artworks");
+    const imageUrl = imageUrlFromArtworkObject(artwork);
+    if (imageUrl) return imageUrl;
+    const fallbackUrl = imageUrlFromTidalId(ref?.id);
+    if (fallbackUrl) return fallbackUrl;
+  }
+  return "";
+}
+
+function getImageUrl(item = {}, album = {}, searchJson = {}) {
   const linkUrl = imageUrlFromLinks(album.imageLinks || album.attributes?.imageLinks || item.imageLinks || item.attributes?.imageLinks);
   if (linkUrl) return linkUrl;
+
+  const coverArtUrl = imageUrlFromCoverArtRelationship(album, searchJson);
+  if (coverArtUrl) return coverArtUrl;
 
   const candidates = [
     album.cover,
@@ -539,6 +603,13 @@ function chooseCandidate(searchJson, track = {}, options = {}) {
   return chooseCandidateResult(searchJson, track, options)?.entry || null;
 }
 
+function searchNeedsDetailExpansion(searchJson = {}) {
+  return getItems(searchJson).some((item) => {
+    const album = getAlbum(item, searchJson);
+    return !getArtistNames(item, searchJson).length || !cleanText(album.title || album.attributes?.title);
+  });
+}
+
 function yearFromValue(value) {
   const match = cleanText(value).match(/\b(19\d{2}|20\d{2})\b/);
   return match ? Number(match[1]) : null;
@@ -560,6 +631,10 @@ function getIsrcYear(item = {}) {
   if (!/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(isrc)) return null;
   const shortYear = Number(isrc.slice(5, 7));
   return shortYear <= 39 ? 2000 + shortYear : 1900 + shortYear;
+}
+
+function getIsrc(item = {}) {
+  return cleanText(item.isrc || item.attributes?.isrc).replace(/[^a-z0-9]/gi, "").toUpperCase();
 }
 
 function firstYear(values) {
@@ -815,19 +890,25 @@ function extractReleaseMetadataFromHtml(html) {
 
 function buildResult(item, searchJson, query) {
   const album = getAlbum(item, searchJson);
+  const artistRefs = getArtistRefs(item, searchJson);
+  const artistIds = artistRefs.map((artist) => artist.id).filter(Boolean);
   return {
     verified: true,
     id: cleanText(item.id),
     query,
     title: cleanText(item.title || item.attributes?.title),
-    artist: cleanText(getArtistNames(item, searchJson).join(", ")),
+    version: cleanText(item.version || item.attributes?.version),
+    artist: cleanText(artistRefs.map((artist) => artist.name).filter(Boolean).join(", ")),
+    artists: artistRefs,
+    artistIds,
     album: cleanText(album.title || album.attributes?.title),
     label: getLabel(item, album),
     year: getReleaseYear(item, album),
     releaseDate: getReleaseDate(item, album),
     releaseEvidence: getReleaseEvidence(item, album),
     durationMs: getDurationMs(item),
-    imageUrl: getImageUrl(item, album),
+    isrc: getIsrc(item),
+    imageUrl: getImageUrl(item, album, searchJson),
     tidalUrl: getTidalTrackUrl(item),
     mediaTags: getMediaTags(item),
     audioQuality: getAudioQuality(item),
@@ -836,6 +917,45 @@ function buildResult(item, searchJson, query) {
     channels: getChannelCount(item),
     source: "tidal"
   };
+}
+
+function resultFromCandidate(candidate, searchJson, query) {
+  if (!candidate?.entry) return null;
+  const entry = candidate.entry;
+  const result = entry.source === "tidal" && entry.tidalUrl
+    ? { ...entry, query: entry.query || query }
+    : buildResult(entry, searchJson, query);
+  return {
+    ...result,
+    matchScore: candidate.score
+  };
+}
+
+function exactTrackSearchQueries(track = {}) {
+  const title = cleanText(track.title);
+  const artist = cleanText(track.artist);
+  const baseTitle = stripMixVersionSuffix(title);
+  const guestlessTitle = stripGuestCredit(title);
+  const artistAliases = getArtistLookupAliases(artist);
+  const rawQueries = [
+    `${artist} ${title}`,
+    `${title} ${artist}`,
+    ...artistAliases.flatMap((alias) => [
+      `${alias} ${title}`,
+      `${title} ${alias}`,
+      baseTitle && baseTitle !== title ? `${alias} ${baseTitle}` : "",
+      baseTitle && baseTitle !== title ? `${baseTitle} ${alias}` : "",
+      guestlessTitle && guestlessTitle !== title ? `${alias} ${guestlessTitle}` : "",
+      guestlessTitle && guestlessTitle !== title ? `${guestlessTitle} ${alias}` : ""
+    ]),
+    ...createSearchQueries(track, { strict: false }).slice(0, 8)
+  ];
+
+  return Array.from(new Set(rawQueries.flatMap((query) => [
+    normalizeExactSearchQuery(query),
+    normalizeSearchQuery(query),
+    normalizeLooseSearchQuery(query)
+  ]).map(cleanText).filter(Boolean)));
 }
 
 function getTrackIdFromUrl(value) {
@@ -857,6 +977,10 @@ class TidalVerifier {
     this.clientSecret = config.clientSecret || "";
     this.accessToken = config.accessToken || "";
     this.staticAccessTokenRejected = false;
+    this.profileAccessTokenProvider = typeof config.profileAccessTokenProvider === "function" ? config.profileAccessTokenProvider : null;
+    this.profileAccessToken = "";
+    this.profileAccessTokenRejected = false;
+    this.useProfileAccessToken = false;
     this.fetchImpl = config.fetchImpl || globalThis.fetch;
     this.clock = config.clock || (() => Date.now());
     this.timeoutMs = positiveNumber(config.timeoutMs, DEFAULT_TIDAL_FETCH_TIMEOUT_MS, { min: 500, max: 120_000 });
@@ -872,7 +996,7 @@ class TidalVerifier {
   }
 
   isConfigured() {
-    return Boolean(this.enabled && (this.accessToken || (this.clientId && this.clientSecret)));
+    return Boolean(this.enabled && (this.accessToken || (this.clientId && this.clientSecret) || this.profileAccessTokenProvider));
   }
 
   status() {
@@ -880,8 +1004,54 @@ class TidalVerifier {
       enabled: this.enabled,
       configured: this.isConfigured(),
       timeoutMs: this.timeoutMs,
+      profileTokenFallbackConfigured: Boolean(this.profileAccessTokenProvider),
+      usingProfileTokenFallback: Boolean(this.useProfileAccessToken),
       circuit: this.circuitBreaker.status()
     };
+  }
+
+  async findExactTrack(track, { strict = false, limit = 6, includePageYear = false, maxQueries = 6 } = {}, attempt = 0) {
+    if (!this.isConfigured()) return null;
+    const queries = exactTrackSearchQueries(track).slice(0, Math.max(1, Math.min(12, Number(maxQueries || 6))));
+    if (!queries.length) return null;
+
+    const normalizedLimit = Math.max(1, Math.min(20, Number(limit || 6)));
+    const cacheKey = `exact:${strict ? "strict" : "loose"}:${normalizeMatchText(track.artist)}|${normalizeMatchText(track.title)}:${normalizedLimit}:${queries.length}:${includePageYear ? "page" : "detail"}`;
+    if (this.cache.has(cacheKey)) return this.cache.get(cacheKey);
+
+    let bestResult = null;
+    for (const query of queries) {
+      const searchUrl = new URL(`${TIDAL_SEARCH_ROOT}/${encodeURIComponent(query)}/relationships/tracks`);
+      searchUrl.searchParams.set("countryCode", this.countryCode);
+      searchUrl.searchParams.set("include", "tracks");
+      searchUrl.searchParams.set("limit", String(normalizedLimit));
+
+      const searchJson = await this.fetchTidalJson(searchUrl.toString());
+      let candidate = chooseCandidateResult(searchJson, track, { strict });
+      if (!candidate && searchNeedsDetailExpansion(searchJson)) {
+        candidate = await this.chooseCandidateResultWithDetails(searchJson, track, query, { strict });
+      }
+
+      const result = resultFromCandidate(candidate, searchJson, query);
+      if (!result) continue;
+      if (!bestResult || Number(result.matchScore || 0) > Number(bestResult.matchScore || 0)) {
+        bestResult = result;
+      }
+      if (Number(result.matchScore || 0) >= (strict ? 175 : 145)) break;
+    }
+
+    if (!bestResult && attempt < 1 && !this.useProfileAccessToken && await this.enableProfileAccessTokenFallback()) {
+      return this.findExactTrack(track, {
+        strict,
+        limit: normalizedLimit,
+        includePageYear,
+        maxQueries: queries.length
+      }, attempt + 1);
+    }
+
+    const finalResult = bestResult && includePageYear ? await this.withPageYear(bestResult) : bestResult;
+    this.cache.set(cacheKey, finalResult || null);
+    return finalResult || null;
   }
 
   async fetchTidalResponse(url, options = {}, label = "TIDAL request") {
@@ -918,6 +1088,20 @@ class TidalVerifier {
     let lastError = null;
     let fallbackResult = null;
     const highConfidenceScore = strict ? 175 : 145;
+
+    try {
+      const exactCandidate = await this.findExactTrack(track, { strict, limit: 6, includePageYear: false });
+      if (exactCandidate) {
+        if (Number(exactCandidate.matchScore || 0) >= highConfidenceScore) {
+          const verified = await this.withPageYear(exactCandidate);
+          this.cache.set(cacheKey, verified);
+          return verified;
+        }
+        fallbackResult = exactCandidate;
+      }
+    } catch (error) {
+      lastError = error;
+    }
 
     for (const query of createSearchQueries(track, { strict })) {
       let result = null;
@@ -962,26 +1146,76 @@ class TidalVerifier {
     return null;
   }
 
-  async searchTracks(query, { limit = 10, detailLimit = 3 } = {}) {
+  async searchExactCandidates(track, { id = "", signal, timeoutMs = 12000, logger = () => {} } = {}) {
+    const query = normalizeExactSearchQuery(`${track.artist || ""} ${track.title || ""}`);
+    const url = id ? new URL(`${TIDAL_TRACK_ROOT}/${encodeURIComponent(id)}`)
+      : new URL(`${TIDAL_SEARCH_ROOT}/${encodeURIComponent(query)}/relationships/tracks`);
+    url.searchParams.set("countryCode", this.countryCode);
+    url.searchParams.set("include", id ? "artists,albums" : "tracks.artists,tracks.albums");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      signal?.throwIfAborted();
+      try {
+        const slot = Math.max(Date.now(), this.nextExactRequestAt || 0);
+        this.nextExactRequestAt = slot + 400;
+        if (slot > Date.now()) await require("node:timers/promises").setTimeout(slot - Date.now(), undefined, { signal });
+        const token = await this.getAccessToken();
+        signal?.throwIfAborted();
+        const response = await fetchWithTimeout(url.toString(), { signal, headers: {
+          accept: "application/vnd.api+json", authorization: `Bearer ${token}`
+        } }, { fetchImpl: this.fetchImpl, timeoutMs, dnsRetries: 0, label: "TIDAL exact verification" });
+        if (response.status === 404) return [];
+        if (!response.ok) {
+          const error = httpStatusError("TIDAL exact verification", response.status);
+          // Never log raw bodies, headers, tokens, or provider error detail text.
+          error.category = response.status === 400 ? "invalid_request" : response.status === 401 ? "authentication" : response.status === 429 ? "rate_limit" : "upstream_error";
+          const retryAfter = response.headers?.get?.("retry-after");
+          error.retryAfterMs = retryAfter ? (Number.isFinite(Number(retryAfter)) ? Number(retryAfter) * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now())) : 1500;
+          if (response.status === 401 && attempt === 0 && (this.invalidateRejectedAccessToken(token) || await this.enableProfileAccessTokenFallback(token))) continue;
+          throw error;
+        }
+        const json = await response.json();
+        return (id ? [json.data].filter(Boolean) : getItems(json).slice(0, 20))
+          .map(item => {
+            const result = buildResult(item, json, query);
+            const version = cleanText(item.attributes?.version || item.version);
+            const { normalize } = require("./exactTrackVerification");
+            if (version && !normalize(result.title).endsWith(normalize(version))) result.title += ` (${version})`;
+            return result;
+          })
+          .filter(item => item.artist && item.title && item.id);
+      } catch (error) {
+        logger({ endpointType: id ? "track" : "search_tracks", normalizedQuery: query, requestMode: "exact_track_verification", httpStatus: error.status || null, errorCategory: error.category || (signal?.aborted ? "timeout" : "network"), networkCode: error.code || error.cause?.code || "", retryCount: attempt, timeoutMs, track: { artist: track.artist || "", title: track.title || "" } });
+        if (attempt || signal?.aborted || !(error.retryable || /fetch failed|ECONNRESET/.test(error.message))) throw error;
+        await require("node:timers/promises").setTimeout(Math.max(400, error.retryAfterMs || 1500), undefined, { signal });
+      }
+    }
+    return [];
+  }
+
+  async searchTracks(query, { limit = 10, detailLimit = 3, standbyFresh = false } = {}) {
     if (!this.isConfigured()) return [];
     const normalizedLimit = Math.max(1, Math.min(20, Number(limit || 10)));
     const normalizedDetailLimit = Math.max(0, Math.min(normalizedLimit, Number(detailLimit || 0)));
-    const cacheKey = `catalog:${normalizeMatchText(query)}:${normalizedLimit}:${normalizedDetailLimit}`;
+    const cacheKey = `catalog:${normalizeMatchText(query)}:${normalizedLimit}:${normalizedDetailLimit}:${standbyFresh}`;
     if (this.cache.has(cacheKey)) return this.cache.get(cacheKey);
 
     const searchUrl = new URL(`${TIDAL_SEARCH_ROOT}/${encodeURIComponent(query)}/relationships/tracks`);
     searchUrl.searchParams.set("countryCode", this.countryCode);
-    searchUrl.searchParams.set("include", "tracks,albums,artists");
+    searchUrl.searchParams.set("include", standbyFresh ? "tracks.artists,tracks.albums" : "tracks");
     searchUrl.searchParams.set("limit", String(normalizedLimit));
 
     const searchJson = await this.fetchTidalJson(searchUrl.toString());
+    const effectiveDetailLimit = searchNeedsDetailExpansion(searchJson)
+      ? normalizedLimit
+      : normalizedDetailLimit;
     const results = [];
     let index = 0;
     for (const item of getItems(searchJson).slice(0, normalizedLimit)) {
       const result = buildResult(item, searchJson, query);
       if (!result.title || !result.tidalUrl) continue;
-      const enriched = index < normalizedDetailLimit ? await this.withDetailYear(result) : result;
+      const enriched = index < effectiveDetailLimit ? await this.withDetailYear(result) : result;
       if (!enriched.title || !enriched.artist || !enriched.tidalUrl) continue;
+      if (standbyFresh && result.version && !normalizeMatchText(enriched.title).includes(normalizeMatchText(result.version))) enriched.title += ` (${result.version})`;
       results.push(enriched);
       index += 1;
     }
@@ -1143,25 +1377,30 @@ class TidalVerifier {
     try {
       const detailUrl = new URL(`${TIDAL_TRACK_ROOT}/${encodeURIComponent(trackId)}`);
       detailUrl.searchParams.set("countryCode", this.countryCode);
-      detailUrl.searchParams.set("include", "albums,artists");
+      detailUrl.searchParams.set("include", "albums,artists,albums.coverArt");
       const detailJson = await this.fetchTidalJson(detailUrl.toString());
       const track = detailJson?.data || {};
       const album = getAlbum(track, detailJson);
       const year = getReleaseYear(track, album);
       const releaseDate = getReleaseDate(track, album);
       const artist = cleanText(getArtistNames(track, detailJson).join(", "));
+      const artistRefs = getArtistRefs(track, detailJson);
+      const artistIds = artistRefs.map((entry) => entry.id).filter(Boolean);
 
       return {
         ...result,
         title: cleanText(track.title || track.attributes?.title) || result.title,
         artist: artist || result.artist,
+        artists: artistRefs.length ? artistRefs : (result.artists || []),
+        artistIds: artistIds.length ? artistIds : (result.artistIds || []),
         album: cleanText(album.title || album.attributes?.title) || result.album,
         label: getLabel(track, album) || result.label || "",
         year: year || result.year,
         releaseDate: releaseDate || result.releaseDate || "",
         releaseEvidence: getReleaseEvidence(track, album),
         durationMs: getDurationMs(track) || result.durationMs,
-        imageUrl: getImageUrl(track, album) || result.imageUrl || "",
+        isrc: getIsrc(track) || result.isrc || "",
+        imageUrl: getImageUrl(track, album, detailJson) || result.imageUrl || "",
         mediaTags: getMediaTags(track).length ? getMediaTags(track) : (result.mediaTags || []),
         audioQuality: getAudioQuality(track) || result.audioQuality || "",
         sampleRateKhz: getSampleRateKhz(track) || result.sampleRateKhz || null,
@@ -1177,15 +1416,34 @@ class TidalVerifier {
   async searchV2(track, query, options = {}) {
     const searchUrl = new URL(`${TIDAL_SEARCH_ROOT}/${encodeURIComponent(query)}/relationships/tracks`);
     searchUrl.searchParams.set("countryCode", this.countryCode);
-    searchUrl.searchParams.set("include", "tracks,albums,artists");
+    searchUrl.searchParams.set("include", "tracks");
     searchUrl.searchParams.set("limit", "20");
 
     const searchJson = await this.fetchTidalJson(searchUrl.toString());
-    const candidate = chooseCandidateResult(searchJson, track, options);
-    return candidate ? {
-      ...buildResult(candidate.entry, searchJson, query),
-      matchScore: candidate.score
-    } : null;
+    let candidate = chooseCandidateResult(searchJson, track, options);
+    if (!candidate && searchNeedsDetailExpansion(searchJson)) {
+      candidate = await this.chooseCandidateResultWithDetails(searchJson, track, query, options);
+    }
+    return resultFromCandidate(candidate, searchJson, query);
+  }
+
+  async chooseCandidateResultWithDetails(searchJson, track = {}, query = "", options = {}) {
+    const candidates = [];
+    const highConfidenceScore = options.strict ? 175 : 145;
+    let index = 0;
+    for (const item of getItems(searchJson).slice(0, 8)) {
+      const result = buildResult(item, searchJson, query);
+      if (!result.title || !result.tidalUrl) {
+        index += 1;
+        continue;
+      }
+      const enriched = await this.withDetailYear(result);
+      const score = candidateMatchScore(enriched, track, {}, options);
+      if (score >= highConfidenceScore) return { entry: enriched, index, score };
+      if (score > 0) candidates.push({ entry: enriched, index, score });
+      index += 1;
+    }
+    return candidates.sort((left, right) => right.score - left.score || left.index - right.index)[0] || null;
   }
 
   async searchLegacy(track, query, options = {}) {
@@ -1231,9 +1489,14 @@ class TidalVerifier {
       if (attempt < 1 && this.invalidateRejectedAccessToken(token)) {
         return this.fetchTidalJson(url, attempt + 1);
       }
+      if (attempt < 2 && await this.enableProfileAccessTokenFallback(token)) {
+        return this.fetchTidalJson(url, attempt + 1);
+      }
       const error = new Error(this.accessToken
         ? "Configured TIDAL_ACCESS_TOKEN was rejected by TIDAL. Remove it or configure TIDAL_CLIENT_ID/TIDAL_CLIENT_SECRET so Rabbit Hole can fetch a fresh catalog token."
-        : "TIDAL catalog token was rejected. Check TIDAL_CLIENT_ID and TIDAL_CLIENT_SECRET.");
+        : this.profileAccessTokenProvider
+          ? "TIDAL catalog token was rejected. Rabbit Hole also tried the TIDAL profile OAuth token; reconnect TIDAL if this persists."
+          : "TIDAL catalog token was rejected. Check TIDAL_CLIENT_ID and TIDAL_CLIENT_SECRET.");
       error.status = 401;
       error.source = "tidal";
       throw error;
@@ -1253,15 +1516,34 @@ class TidalVerifier {
       this.staticAccessTokenRejected = true;
       return Boolean(this.clientId && this.clientSecret);
     }
+    if (this.profileAccessToken && rejected === this.profileAccessToken) {
+      this.profileAccessTokenRejected = true;
+      this.useProfileAccessToken = false;
+      return false;
+    }
     return false;
   }
 
+  async enableProfileAccessTokenFallback(rejectedToken = "") {
+    if (!this.profileAccessTokenProvider || this.profileAccessTokenRejected) return false;
+    const profileToken = cleanText(await this.profileAccessTokenProvider().catch(() => ""));
+    if (!profileToken || profileToken === cleanText(rejectedToken)) return false;
+    this.profileAccessToken = profileToken;
+    this.useProfileAccessToken = true;
+    return true;
+  }
+
   async getAccessToken() {
+    if (this.useProfileAccessToken && this.profileAccessToken && !this.profileAccessTokenRejected) {
+      return this.profileAccessToken;
+    }
+
     if (this.accessToken && !this.staticAccessTokenRejected) return this.accessToken;
 
     const now = this.clock();
     if (this.token?.accessToken && this.token.expiresAtMs - now > 60_000) return this.token.accessToken;
     if (!this.clientId || !this.clientSecret) {
+      if (await this.enableProfileAccessTokenFallback()) return this.profileAccessToken;
       if (this.accessToken && this.staticAccessTokenRejected) {
         throw new Error("Configured TIDAL_ACCESS_TOKEN was rejected by TIDAL. Remove it or configure TIDAL_CLIENT_ID/TIDAL_CLIENT_SECRET so Rabbit Hole can fetch a fresh catalog token.");
       }

@@ -90,6 +90,168 @@ test("genre style parenthetical with ampersand is rejected as SEO sludge", () =>
   assert.match(reason, /genre\/style descriptor keywords/i);
 });
 
+test("slash-separated genre catalogue title is rejected as SEO sludge", () => {
+  const options = {
+    request: "Find hypnotic deep progressive house standby tracks",
+    genres: "progressive house, melodic house, melodic techno",
+    mood: "hypnotic deep",
+    scoringMode: "explore",
+    standbyPool: "true"
+  };
+  const profile = buildDiscoveryProfile(options);
+
+  const reason = rejectReason({
+    artist: "Noctiv",
+    title: "Hypnotic Deep House / Melodic Techno Journal",
+    album: "Hypnotic Deep House / Melodic Techno Journal",
+    label: "Noctiv",
+    durationMs: 420000,
+    query: "hypnotic deep house melodic techno"
+  }, options, profile);
+
+  assert.match(reason, /slash-separated genre\/style descriptor keywords/i);
+});
+
+test("double-slash genre tail is rejected as SEO sludge", () => {
+  const options = {
+    request: "Find hypnotic deep progressive house standby tracks",
+    genres: "progressive house, melodic house, melodic techno",
+    mood: "hypnotic deep",
+    scoringMode: "explore",
+    standbyPool: "true"
+  };
+  const profile = buildDiscoveryProfile(options);
+
+  const reason = rejectReason({
+    artist: "Noctiv",
+    title: "Stay //Hypnotic Deep House / Melodic Techno Journal",
+    album: "Stay //Hypnotic Deep House / Melodic Techno Journal",
+    label: "Noctiv",
+    durationMs: 389000,
+    query: "hypnotic deep house melodic techno"
+  }, options, profile);
+
+  assert.match(reason, /slash-separated genre\/style descriptor keywords/i);
+});
+
+test("genre catalogue journey title is rejected as SEO sludge", () => {
+  const options = {
+    request: "Find hypnotic deep progressive house standby tracks",
+    genres: "progressive house, melodic house, melodic techno",
+    mood: "hypnotic deep",
+    scoringMode: "explore",
+    standbyPool: "true"
+  };
+  const profile = buildDiscoveryProfile(options);
+
+  const reason = rejectReason({
+    artist: "Tobu",
+    title: "Deep Progressive House Journey - Candyland",
+    album: "Deep Progressive House Journey",
+    label: "Tobu",
+    durationMs: 356000,
+    query: "progressive house journey"
+  }, options, profile);
+
+  assert.match(reason, /genre catalogue wording|SEO filler/i);
+});
+
+test("genre keyword remix tail is rejected as SEO sludge", () => {
+  const options = {
+    request: "Find hypnotic deep progressive house standby tracks",
+    genres: "progressive house, melodic house, melodic techno",
+    mood: "hypnotic deep",
+    scoringMode: "explore",
+    standbyPool: "true"
+  };
+  const profile = buildDiscoveryProfile(options);
+
+  const reason = rejectReason({
+    artist: "Japanese Nursery Remixes",
+    title: "Akatonbo - Melodic Techno Progressive House Remix",
+    album: "Akatonbo - Melodic Techno Progressive House Remix",
+    label: "Japanese Nursery Remixes",
+    durationMs: 271000,
+    query: "melodic techno progressive house"
+  }, options, profile);
+
+  assert.match(reason, /genre\/remix keywords|catalogue filler/i);
+});
+
+test("generic genre keyword upload titles are rejected as SEO sludge", () => {
+  const options = {
+    request: "Find hypnotic deep progressive house standby tracks",
+    genres: "progressive house, melodic house, melodic techno",
+    mood: "hypnotic deep",
+    scoringMode: "explore",
+    standbyPool: "true"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const examples = [
+    {
+      artist: "Alfred Heinrichs",
+      title: "IAM Melodic Techno",
+      album: "IAM Melodic Techno"
+    },
+    {
+      artist: "Berlin Nox",
+      title: "Deep Melodic Techno (Hypnotic Loop Mix)",
+      album: "DARK BERLIN TECHNO"
+    },
+    {
+      artist: "Skywave",
+      title: "lost woods (zelda melodic techno)",
+      album: "lost woods (zelda melodic techno)"
+    },
+    {
+      artist: "PHASELYN",
+      title: "Underground Bounce (Electro House UK Garage Melodic Techno",
+      album: "Underground Bounce (Electro House UK Garage Melodic Techno"
+    },
+    {
+      artist: "Arcturian, Cosmic Tekkno",
+      title: "Crysis: Background Melodic Techno",
+      album: "Channeling Techno : Contact Arcturus"
+    },
+    {
+      artist: "Arcturian, Cosmic Tekkno",
+      title: "Cyro Chamber: 1 Hour Melodic Techno",
+      album: "Channeling Techno : Contact Arcturus"
+    }
+  ];
+
+  for (const track of examples) {
+    const reason = rejectReason({
+      ...track,
+      label: "",
+      durationMs: 360000,
+      query: "melodic techno progressive house"
+    }, options, profile);
+
+    assert.match(reason, /genre\/style\/version keywords|catalogue upload|SEO/i, track.title);
+  }
+});
+
+test("genre-list artist aliases are rejected as SEO sludge", () => {
+  const options = {
+    request: "Find hypnotic deep progressive house standby tracks",
+    genres: "progressive house, melodic house, melodic techno",
+    scoringMode: "explore",
+    standbyPool: "true"
+  };
+  const profile = buildDiscoveryProfile(options);
+
+  const reason = rejectReason({
+    artist: "Progressive House, Deep Progressive House, Melodic Techno",
+    title: "Resonance",
+    album: "Resonance",
+    durationMs: 360000,
+    query: "progressive house melodic techno"
+  }, options, profile);
+
+  assert.match(reason, /artist name looks like genre\/SEO catalogue filler/i);
+});
+
 test("candidate identity collapses SEO genre parentheticals without collapsing remix titles", () => {
   const base = {
     artist: "Max Oazo, Moonessa",
@@ -153,6 +315,39 @@ test("functional music catalogue results are rejected as SEO sludge", () => {
   for (const track of examples) {
     assert.match(rejectReason(track, options, profile), /functional\/background music/i);
   }
+});
+
+test("audiobook chapters and distributor keyword uploads are rejected as catalogue sludge", () => {
+  const options = {
+    request: "Find me 12 good tracks no matter what genre it is, avoid repeats, surprise me.",
+    years: "2026",
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+
+  const audiobook = rejectReason({
+    artist: "Samantha Tonge",
+    title: "Chapter 101 - The Time of My Life - The BRAND NEW escapist story of new beginnings and second chances from Samantha Tonge for 2026",
+    album: "The Time of My Life - The BRAND NEW escapist story of new beginnings and second chances from Samantha Tonge for 2026 (Unabridged)",
+    label: "Boldwood Books",
+    year: 2026,
+    releaseEvidence: { albumYear: true },
+    durationMs: 181000,
+    query: "new beginnings 2026"
+  }, options, profile);
+  const keywordUpload = rejectReason({
+    artist: "Bapi Bhai",
+    title: "Yeh Pal Humare Official Audio | Hindi Romantic DJ Mix 2026 | New Bollywood Electronic Dance",
+    album: "Yeh Pal Humare Official Audio | Hindi Romantic DJ Mix 2026 | New Bollywood Electronic Dance",
+    label: "13019904 Records DK",
+    year: 2026,
+    releaseEvidence: { albumYear: true },
+    durationMs: 174000,
+    query: "new beginnings electronic 2026"
+  }, options, profile);
+
+  assert.match(audiobook, /audiobook/i);
+  assert.match(keywordUpload, /keyword upload|catalogue filler/i);
 });
 
 test("acid house requests reject generic house without acid evidence", () => {

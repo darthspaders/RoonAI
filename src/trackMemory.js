@@ -2,21 +2,20 @@
 
 const fs = require("fs");
 const path = require("path");
+const { normalizeRating } = require("./feedbackRatings");
+const {
+  normalizedTrackKey,
+  normalizeTrackIdentityText
+} = require("./trackIdentity");
 
-const DEFAULT_MAX_BYTES = 250 * 1024 * 1024;
+const DEFAULT_MAX_BYTES = 0;
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function normalize(value) {
-  return cleanText(value)
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+  return normalizeTrackIdentityText(value);
 }
 
 function splitArtists(value) {
@@ -40,19 +39,22 @@ function titleKeys(value) {
 }
 
 function trackKey(track = {}) {
-  const tidalUrl = cleanText(track.tidal?.tidalUrl || track.tidalUrl);
-  if (tidalUrl) return tidalUrl.toLowerCase();
-  return `${normalize(track.artist)}|${normalize(track.title)}`;
+  return normalizedTrackKey(track);
+}
+
+function normalizeMaxBytes(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
 function feedbackScoreForRating(value = "") {
-  const rating = normalize(value);
+  const rating = normalizeRating(value, { fallback: "" });
   if (rating === "love") return 3;
-  if (rating === "good" || rating === "up") return 1;
-  if (rating === "ok" || rating === "okay") return 0.5;
-  if (rating === "skip" || rating === "down") return -1;
-  if (rating === "never" || rating === "never again" || rating === "never_again") return -3;
-  if (rating === "wrong genre" || rating === "wrong_genre" || rating === "not what i asked for") return -1;
+  if (rating === "good") return 1;
+  if (rating === "ok") return 0.5;
+  if (rating === "skip") return -1;
+  if (rating === "never") return -3;
+  if (rating === "wrong_genre") return -1;
   return 0;
 }
 
@@ -84,7 +86,7 @@ function compactTrack(track = {}) {
     score: track.score || null,
     scoreBreakdown: track.scoreBreakdown || null,
     reason: cleanText(track.reason),
-    why: Array.isArray(track.why) ? track.why.slice(0, 8).map(cleanText).filter(Boolean) : [],
+    why: Array.isArray(track.why) ? track.why.map(cleanText).filter(Boolean) : [],
     discoverySource: cleanText(track.discoverySource),
     discoveryLane: cleanText(track.discoveryLane),
     sourceType: cleanText(track.sourceType),
@@ -93,7 +95,7 @@ function compactTrack(track = {}) {
     playbackSource: track.playbackSource || null,
     tidal: track.tidal || null,
     roon: track.roon || null,
-    statusChecks: Array.isArray(track.statusChecks) ? track.statusChecks.slice(0, 12).map(cleanText).filter(Boolean) : [],
+    statusChecks: Array.isArray(track.statusChecks) ? track.statusChecks.map(cleanText).filter(Boolean) : [],
     verificationSource: cleanText(track.verificationSource),
     tasteScore: Number.isFinite(Number(track.tasteScore)) ? Number(track.tasteScore) : null,
     feedback: cleanText(track.feedback)
@@ -103,7 +105,7 @@ function compactTrack(track = {}) {
 class TrackMemory {
   constructor(options = {}) {
     this.file = options.file || path.join(__dirname, "..", "data", "track-memory.json");
-    this.maxBytes = Number(options.maxBytes || DEFAULT_MAX_BYTES);
+    this.maxBytes = normalizeMaxBytes(options.maxBytes ?? DEFAULT_MAX_BYTES);
     this.entries = new Map();
     this.load();
   }
@@ -129,6 +131,7 @@ class TrackMemory {
   prune(entries = [...this.entries.values()]) {
     let pruned = entries
       .sort((left, right) => Number(right.lastSeenAt || 0) - Number(left.lastSeenAt || 0));
+    if (!this.maxBytes) return pruned;
     while (pruned.length && Buffer.byteLength(this.serialize(pruned), "utf8") > this.maxBytes) {
       pruned = pruned.slice(0, -1);
     }
@@ -207,7 +210,8 @@ class TrackMemory {
       bytes,
       maxBytes: this.maxBytes,
       mb: Number((bytes / 1024 / 1024).toFixed(2)),
-      maxMb: Number((this.maxBytes / 1024 / 1024).toFixed(0))
+      maxMb: this.maxBytes ? Number((this.maxBytes / 1024 / 1024).toFixed(0)) : null,
+      unlimited: !this.maxBytes
     };
   }
 }

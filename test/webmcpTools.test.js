@@ -60,6 +60,7 @@ test("WebMCP registry exposes Rabbit Hole tools when browser support exists", as
   const bridge = {
     getStatus: async () => ({ ok: true }),
     searchRabbitHole: async () => ({ tracks: [] }),
+    verifyTracks: async () => ({ usableCount: 1, checkedCount: 1 }),
     queueDisplayedTracks: async () => ({ queuedCount: 0 }),
     sendDisplayedTracksToTidal: async () => ({ addedCount: 0 }),
     getStandbyPool: async () => ({ count: 0, tracks: [] }),
@@ -81,6 +82,12 @@ test("WebMCP registry exposes Rabbit Hole tools when browser support exists", as
   assert.deepEqual(Array.from(context.window.RabbitHoleWebMcp.registered), [
     "get_rabbit_hole_status",
     "search_rabbit_hole",
+    "verify_tracks",
+    "queue_supplied_tracks",
+    "queue_verified_tracks",
+    "verify_exact_tracks",
+    "send_verified_tracks_to_tidal_playlist",
+    "resolve_verified_tracks_for_roon",
     "queue_rabbit_hole_tracks",
     "send_rabbit_hole_to_tidal_playlist",
     "get_standby_pool",
@@ -93,8 +100,10 @@ test("WebMCP registry exposes Rabbit Hole tools when browser support exists", as
     "explain_last_rejections",
     "inspect_genre_profile"
   ]);
-  assert.equal(registered.length, 13);
+  assert.equal(registered.length, 19);
 
   const output = await registered[0].execute({});
   assert.match(output, /"ok": true/);
+  const verifyOutput = await registered[2].execute({ tracks: [{ artist: "A", title: "B" }] });
+  assert.match(verifyOutput, /"usableCount": 1/);
 });

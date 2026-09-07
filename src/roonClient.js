@@ -1,5 +1,8 @@
 "use strict";
+const roonLookupContext = new (require("node:async_hooks").AsyncLocalStorage)();
+const strictRoonIdentity = (track, item) => require("./roonExactResolution").roonIdentityEvidence(track, item || {});
 
+const directIdentity = require("./directRoonQueue").identity;
 const EventEmitter = require("events");
 const RoonApi = require("node-roon-api");
 const RoonApiBrowse = require("node-roon-api-browse");
@@ -15,6 +18,7 @@ const STATE_UPDATE_DEBOUNCE_MS = 1000;
 const SEEK_UPDATE_EMIT_MS = 2000;
 
 function callRoon(fn) {
+  if (roonLookupContext.getStore()) return exactRoonRpc(fn, roonLookupContext.getStore());
   return new Promise((resolve, reject) => {
     fn((error, body) => {
       if (error) reject(new Error(String(error)));
@@ -23,8 +27,34 @@ function callRoon(fn) {
   });
 }
 
+function exactRoonRpc(fn, signal) {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(Object.assign(new Error("Roon exact lookup timed out."), { code: "ETIMEDOUT" }));
+    signal?.addEventListener("abort", abort, { once: true });
+    try { fn((error, body) => {
+      signal?.removeEventListener("abort", abort);
+      if (signal?.aborted) return;
+      if (error) reject(new Error(String(error))); else resolve(body);
+    }); } catch (error) { signal?.removeEventListener("abort", abort); reject(error); }
+  });
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isStoppedZone(zone = {}) {
+  return String(zone?.state || "").toLowerCase() === "stopped";
+}
+
+function clearStoppedZoneNowPlaying(zone = {}) {
+  if (!zone || typeof zone !== "object") return zone;
+  if (!isStoppedZone(zone) || !Object.prototype.hasOwnProperty.call(zone, "now_playing")) return zone;
+  return {
+    ...zone,
+    now_playing: null
+  };
 }
 
 function isErrorMessage(body) {
@@ -73,7 +103,7 @@ function itemText(item) {
 }
 
 function normalizeLookupText(value) {
-  return String(value || "")
+  return cleanLookupText(value)
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
@@ -82,7 +112,7 @@ function normalizeLookupText(value) {
 }
 
 function cleanLookupText(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
+  return require("./exactTrackVerification").displayText(value).replace(/\s+/g, " ").trim();
 }
 
 function normalizeScoringMode(options = {}) {
@@ -853,6 +883,7 @@ function titleMatchesRequestedArtistVersion(track, item) {
 }
 
 function titleMatchesTrackCandidate(track, item) {
+  if (!hasVersionDescriptor(lookupTrack(track).title) && /\b(?:remix|rework|rerub|dub|edit)\b/i.test(item?.title || '')) return false;
   return titleMatchesExactly(track, item) || titleMatchesRequestedArtistVersion(track, item);
 }
 
@@ -919,8 +950,8 @@ function rankedMatchItems(track, items = [], options = {}) {
   return (items || [])
     .map((item) => ({
       item,
-      score: matchScore(track, item, options),
-      verified: isVerifiedMatch(track, item),
+      score: matchScore(track, item, options) + (options.matchPolicy ? directIdentity(track, item, options.matchPolicy).confidence * 1000 : 0),
+      verified: options.matchPolicy ? directIdentity(track, item, options.matchPolicy).accepted : track.exactVerification || options.exactVerification ? strictRoonIdentity(track, item).accepted : isVerifiedMatch(track, item),
       artistMatched: artistMatchInfo(track, item).matched > 0
     }))
     .sort((left, right) => (
@@ -950,6 +981,8 @@ function sameArtistVersionFallbackMatches(track, item) {
   const lookup = lookupTrack(track);
   if (hasVersionDescriptor(lookup.title)) return false;
   if (!hasVersionDescriptor(item?.title)) return false;
+  // Named remixes/edits are not substitutes for an unqualified requested title.
+  if (/\b(?:remix|rework|rerub|dub|edit)\b/i.test(item?.title || '')) return false;
   return titleBaseMatches(track, item) && artistMatches(track, item);
 }
 
@@ -972,6 +1005,7 @@ function itemLooksLikeTrackResult(item = {}) {
   const title = normalizeLookupText(item.title);
   const hint = normalizeLookupText(item.hint);
   if (/^(?:tracks?|songs?|albums?|artists?|compositions?|playlists?|genres?)$/.test(title)) return false;
+  if (hint === 'action list') return true;
   if (hint && /\b(?:album|artist|list|genre|playlist)\b/.test(hint)) return false;
   return true;
 }
@@ -1002,12 +1036,77 @@ function isPlaybackNavigationItem(item = {}) {
 
 function itemSummary(item) {
   return {
+    artist: item?.artist, album: item?.album, durationMs: item?.durationMs, length: item?.length, version: item?.version, remix: item?.remix, tidalTrackId: item?.tidalTrackId, isrc: item?.isrc,
     title: item?.title,
     subtitle: item?.subtitle,
     imageKey: item?.image_key,
     hint: item?.hint,
     key: item?.item_key || "",
     hasKey: Boolean(item?.item_key)
+  };
+}
+
+function bridgeDiagnosticsForItems(track, items = []) {
+  const { normalize } = require("./exactTrackVerification");
+  const compact = value => normalize(value).replace(/\s/g, "");
+  const wantedTitle = compact(track?.title);
+  const titleLooksRelated = (item = {}) => {
+    const title = compact(item.title);
+    if (!wantedTitle || !title) return false;
+    return title === wantedTitle || title.includes(wantedTitle) || wantedTitle.includes(title);
+  };
+  const rows = (items || [])
+    .filter(item => item && item.title)
+    .slice(0, 60)
+    .map(item => ({
+      ...itemSummary(item),
+      identityEvidence: directIdentity(track, item, "strict"),
+      bridgeIdentityEvidence: bridgeTrustedIdentity(track, item).evidence
+    }));
+  return {
+    items: rows.slice(0, 25),
+    nearMatches: rows.filter(row => row.identityEvidence?.accepted || row.bridgeIdentityEvidence?.accepted || titleLooksRelated(row)).slice(0, 12)
+  };
+}
+
+function bridgeTrustedIdentity(track, item = {}) {
+  const strict = directIdentity(track, item, "strict");
+  if (strict.accepted) return { accepted: true, trusted: false, evidence: strict };
+  if (!strict.titleExact || strict.failureType === "identity_mismatch") return { accepted: false, trusted: false, evidence: strict };
+  const { artists } = require("./exactTrackVerification");
+  const compactArtists = value => artists(value).split("|").filter(Boolean).map(entry => entry.replace(/\s/g, ""));
+  const wanted = compactArtists(track?.artist);
+  const credited = compactArtists(item.artist || String(item.subtitle || "").split(/\s+-\s+/)[0]);
+  const artistOverlap = wanted.length > 0 && credited.some(value => wanted.includes(value));
+  return {
+    accepted: artistOverlap,
+    trusted: artistOverlap,
+    evidence: {
+      ...strict,
+      accepted: artistOverlap,
+      artistOverlap,
+      trustedBridgeIdentity: artistOverlap,
+      method: artistOverlap ? "bridge_verified_title_artist_overlap" : strict.method
+    }
+  };
+}
+
+function bridgeCompilationIdentity(track, item = {}) {
+  const strict = directIdentity(track, item, "strict");
+  if (!strict.titleExact || strict.failureType === "identity_mismatch") {
+    return { accepted: false, evidence: strict };
+  }
+  const credit = item.artist || String(item.subtitle || "").split(/\s+-\s+/)[0];
+  const genericCompilationCredit = /^(?:various(?: artists?)?|v[./ ]?a[./]?|compilation)$/i.test(String(credit || "").trim());
+  return {
+    accepted: genericCompilationCredit,
+    evidence: {
+      ...strict,
+      accepted: genericCompilationCredit,
+      genericCompilationCredit,
+      trustedBridgeIdentity: genericCompilationCredit,
+      method: genericCompilationCredit ? "bridge_verified_title_compilation_credit" : strict.method
+    }
   };
 }
 
@@ -1160,6 +1259,44 @@ function playlistTrackFromItem(item = {}) {
   };
 }
 
+function playlistDeleteActionRank(item = {}) {
+  if (item?.hint !== "action" || !item.item_key) return 0;
+  const title = normalizeLookupText(item.title);
+  const subtitle = normalizeLookupText(item.subtitle);
+  const text = `${title} ${subtitle}`.trim();
+  if (!title || /\b(?:cancel|back|close|dismiss|no)\b/.test(title)) return 0;
+  if (/\b(?:delete|remove)\b.*\b(?:tracks?|songs?|library|favorites?|favourites?)\b/.test(text) && !/\bplaylist\b/.test(text)) return 0;
+  if (/\bdelete\b.*\bplaylist\b/.test(text)) return 110;
+  if (title === "delete") return 100;
+  if (/\bremove\b.*\bplaylist\b/.test(text)) return 90;
+  if (title === "remove" && /\bplaylist\b/.test(subtitle)) return 80;
+  return 0;
+}
+
+function preferredPlaylistDeleteAction(items = []) {
+  return items
+    .map((item) => ({ item, rank: playlistDeleteActionRank(item) }))
+    .filter((candidate) => candidate.rank > 0)
+    .sort((left, right) => right.rank - left.rank)[0]?.item || null;
+}
+
+function playlistDeleteConfirmationRank(item = {}) {
+  if (item?.hint !== "action" || !item.item_key) return 0;
+  const title = normalizeLookupText(item.title);
+  const text = normalizeLookupText(`${item.title || ""} ${item.subtitle || ""}`);
+  if (!title || /\b(?:cancel|back|close|dismiss|no|keep)\b/.test(title)) return 0;
+  if (/^(?:delete|remove|confirm|yes|ok)$/.test(title)) return 100;
+  if (/\b(?:delete|remove|confirm)\b.*\bplaylist\b/.test(text)) return 90;
+  return 0;
+}
+
+function preferredPlaylistDeleteConfirmationAction(items = []) {
+  return items
+    .map((item) => ({ item, rank: playlistDeleteConfirmationRank(item) }))
+    .filter((candidate) => candidate.rank > 0)
+    .sort((left, right) => right.rank - left.rank)[0]?.item || null;
+}
+
 class RoonClient extends EventEmitter {
   constructor() {
     super();
@@ -1211,29 +1348,29 @@ class RoonClient extends EventEmitter {
       if (cmd === "Subscribed") {
         this.zones.clear();
         for (const zone of data.zones || []) {
-          this.zones.set(zone.zone_id, zone);
+          this.zones.set(zone.zone_id, clearStoppedZoneNowPlaying(zone));
           this.subscribeQueue(zone.zone_id);
         }
         contentChanged = true;
       }
       if (cmd === "Changed") {
         for (const zone of data.zones_added || []) {
-          this.zones.set(zone.zone_id, zone);
+          this.zones.set(zone.zone_id, clearStoppedZoneNowPlaying(zone));
           this.subscribeQueue(zone.zone_id);
           contentChanged = true;
         }
         for (const zone of data.zones_changed || []) {
-          this.zones.set(zone.zone_id, {
+          this.zones.set(zone.zone_id, clearStoppedZoneNowPlaying({
             ...(this.zones.get(zone.zone_id) || {}),
             ...zone
-          });
+          }));
           this.subscribeQueue(zone.zone_id);
           contentChanged = true;
         }
         for (const seek of data.zones_seek_changed || []) {
           const zone = this.zones.get(seek.zone_id);
           if (!zone) continue;
-          if (zone.now_playing && Object.prototype.hasOwnProperty.call(seek, "seek_position")) {
+          if (!isStoppedZone(zone) && zone.now_playing && Object.prototype.hasOwnProperty.call(seek, "seek_position")) {
             zone.now_playing.seek_position = seek.seek_position;
           }
           if (Object.prototype.hasOwnProperty.call(seek, "queue_items_remaining")) {
@@ -1310,6 +1447,7 @@ class RoonClient extends EventEmitter {
 
   getState() {
     return {
+      resolverDiagnostics: this.resolverDiagnostics || { roonAlbumFallbackAttempted: 0, roonAlbumFallbackResolved: 0, roonAlbumFallbackFailed: 0 },
       connected: Boolean(this.core),
       core: this.core ? {
         id: this.core.core_id,
@@ -1317,7 +1455,7 @@ class RoonClient extends EventEmitter {
         version: this.core.display_version
       } : null,
       zones: [...this.zones.values()].map((zone) => ({
-        ...zone,
+        ...clearStoppedZoneNowPlaying(zone),
         queue: this.queues.get(zone.zone_id) || null
       }))
     };
@@ -1348,6 +1486,14 @@ class RoonClient extends EventEmitter {
         const signature = queueSignature(items);
         if (signature === this.queueSignatures.get(zoneId)) return;
         this.queueSignatures.set(zoneId, signature);
+        const oldQueueIds = new Set((previous.items || []).map(item => item.id));
+        for (const item of items) {
+          if (!oldQueueIds.has(item.id)) {
+            const suffix=" - "+item.subtitle;
+            const title=item.subtitle && item.title.endsWith(suffix) ? item.title.slice(0,-suffix.length) : item.title;
+            this.emit?.("trackQueued", {artist:item.subtitle||"",title:title||""});
+          }
+        }
         this.queues.set(zoneId, {
           updatedAt: Date.now(),
           response: cmd,
@@ -1506,8 +1652,7 @@ class RoonClient extends EventEmitter {
     };
   }
 
-  async loadPlaylistTracks(itemKey, title = "") {
-    this.requireBrowse();
+  async resolvePlaylistBrowseItem(itemKey, title = "") {
     const key = String(itemKey || "").trim();
     if (!key) throw new Error("Missing playlist key.");
 
@@ -1517,32 +1662,54 @@ class RoonClient extends EventEmitter {
     const freshItem = freshList.playlists.find((playlist) => (
       normalizedTitle && normalizeLookupText(playlist.title) === normalizedTitle
     )) || freshList.playlists.find((playlist) => (
+      playlist.id === key
+    )) || freshList.playlists.find((playlist) => (
       indexMatch && playlist.id.endsWith(`:${indexMatch[1]}`)
     ));
-    const currentKey = freshItem?.id || key;
+    return {
+      item: freshItem || null,
+      key: freshItem?.id || key,
+      list: freshList,
+      session: this.playlistsSession
+    };
+  }
+
+  async browsePlaylistItem(itemKey, title = "", options = {}) {
+    this.requireBrowse();
+    let resolved = await this.resolvePlaylistBrowseItem(itemKey, title);
+    const browseSelected = () => {
+      const payload = {
+        hierarchy: "playlists",
+        multi_session_key: resolved.session,
+        item_key: resolved.key
+      };
+      if (options.zoneOrOutputId) payload.zone_or_output_id = options.zoneOrOutputId;
+      return callRoon((cb) => this.browse.browse(payload, cb));
+    };
 
     let selected;
     try {
-      selected = await callRoon((cb) => this.browse.browse({
-        hierarchy: "playlists",
-        multi_session_key: this.playlistsSession,
-        item_key: currentKey
-      }, cb));
+      selected = await browseSelected();
     } catch (error) {
       if (String(error.message || error) !== "InvalidItemKey") throw error;
-      await this.listPlaylists();
-      selected = await callRoon((cb) => this.browse.browse({
-        hierarchy: "playlists",
-        multi_session_key: this.playlistsSession,
-        item_key: currentKey
-      }, cb));
+      resolved = await this.resolvePlaylistBrowseItem(itemKey, title);
+      selected = await browseSelected();
     }
 
     if (isErrorMessage(selected)) throw new Error(selected.message || "Roon could not open this playlist.");
+    return {
+      ...resolved,
+      selected
+    };
+  }
+
+  async loadPlaylistTracks(itemKey, title = "") {
+    this.requireBrowse();
+    const opened = await this.browsePlaylistItem(itemKey, title);
 
     let loaded = await callRoon((cb) => this.browse.load({
       hierarchy: "playlists",
-      multi_session_key: this.playlistsSession,
+      multi_session_key: opened.session,
       offset: 0,
       count: 500
     }, cb));
@@ -1557,13 +1724,13 @@ class RoonClient extends EventEmitter {
     if (trackContainer && items.filter((item) => playlistTrackFromItem(item)).length < 3) {
       await callRoon((cb) => this.browse.browse({
         hierarchy: "playlists",
-        multi_session_key: this.playlistsSession,
+        multi_session_key: opened.session,
         item_key: trackContainer.item_key
       }, cb));
 
       loaded = await callRoon((cb) => this.browse.load({
         hierarchy: "playlists",
-        multi_session_key: this.playlistsSession,
+        multi_session_key: opened.session,
         offset: 0,
         count: 500
       }, cb));
@@ -1576,10 +1743,91 @@ class RoonClient extends EventEmitter {
       .filter((track) => !/(play|shuffle|edit|delete|add to)/i.test(track.title));
 
     return {
-      title: loaded.list?.title || selected.list?.title || "Selected playlist",
+      title: loaded.list?.title || opened.selected.list?.title || opened.item?.title || "Selected playlist",
       subtitle: loaded.list?.subtitle || "",
       count: tracks.length,
       tracks
+    };
+  }
+
+  async deletePlaylist(itemKey, title = "", options = {}) {
+    this.requireBrowse();
+    const zoneOrOutputId = options.zoneId ? this.zoneOrOutputId(options.zoneId) : "";
+    const opened = await this.browsePlaylistItem(itemKey, title, { zoneOrOutputId });
+    const loaded = await callRoon((cb) => this.browse.load({
+      hierarchy: "playlists",
+      multi_session_key: opened.session,
+      offset: 0,
+      count: 80
+    }, cb));
+    const items = loaded.items || [];
+    const deleteAction = preferredPlaylistDeleteAction(items);
+    const playlist = {
+      id: opened.key,
+      title: title || opened.item?.title || loaded.list?.title || opened.selected.list?.title || ""
+    };
+
+    if (!deleteAction?.item_key) {
+      return {
+        success: false,
+        deleted: false,
+        reason: "Roon did not expose a delete action for this playlist.",
+        playlist,
+        response: opened.selected,
+        actions: items.map(itemSummary)
+      };
+    }
+
+    const deletePayload = {
+      hierarchy: "playlists",
+      multi_session_key: opened.session,
+      item_key: deleteAction.item_key
+    };
+    if (zoneOrOutputId) deletePayload.zone_or_output_id = zoneOrOutputId;
+
+    let response = await callRoon((cb) => this.browse.browse(deletePayload, cb));
+    if (isErrorMessage(response)) throw new Error(response.message || "Roon rejected the playlist delete action.");
+
+    let confirmationAction = null;
+    let finalActions = items;
+    if (response?.action === "list") {
+      const confirmation = await callRoon((cb) => this.browse.load({
+        hierarchy: "playlists",
+        multi_session_key: opened.session,
+        offset: 0,
+        count: 30
+      }, cb));
+      finalActions = confirmation.items || [];
+      confirmationAction = preferredPlaylistDeleteConfirmationAction(finalActions);
+      if (!confirmationAction?.item_key) {
+        return {
+          success: false,
+          deleted: false,
+          reason: "Roon asked for confirmation, but Rabbit Hole could not find the confirm delete action.",
+          playlist,
+          response,
+          actions: finalActions.map(itemSummary)
+        };
+      }
+      const confirmPayload = {
+        hierarchy: "playlists",
+        multi_session_key: opened.session,
+        item_key: confirmationAction.item_key
+      };
+      if (zoneOrOutputId) confirmPayload.zone_or_output_id = zoneOrOutputId;
+      response = await callRoon((cb) => this.browse.browse(confirmPayload, cb));
+      if (isErrorMessage(response)) throw new Error(response.message || "Roon rejected the playlist delete confirmation.");
+    }
+
+    this.playlistsSession = null;
+    return {
+      success: true,
+      deleted: true,
+      action: deleteAction.title || "Delete",
+      confirmationAction: confirmationAction?.title || "",
+      playlist,
+      response,
+      actions: finalActions.map(itemSummary)
     };
   }
 
@@ -1812,7 +2060,7 @@ class RoonClient extends EventEmitter {
     }
 
     const containedTrack = ranked.find((candidate) => (
-      itemMatchesTrackFromContainer(track, candidate.item, container)
+      itemMatchesTrackFromContainer(track, candidate.item, container) && (!options.matchPolicy || directIdentity(track, candidate.item, options.matchPolicy).accepted) && (!(track.exactVerification || options.exactVerification) || strictRoonIdentity(track, candidate.item).accepted)
     ));
     if (containedTrack) {
       return {
@@ -1840,7 +2088,7 @@ class RoonClient extends EventEmitter {
   async findNestedSearchMatch(track, zoneOrOutputId, session, firstLevelItems = [], visibleItems = [], searchedCategory = null, options = {}) {
     const searchedKey = searchedCategory?.item_key || "";
     const categoryCandidates = (firstLevelItems || [])
-      .filter((item) => item.item_key !== searchedKey && itemLooksLikeSearchCategory(item))
+      .filter((item) => item.item_key !== searchedKey && itemLooksLikeSearchCategory(item) && !/^(?:albums?|releases?|eps?|singles?)$/i.test(item.title || ''))
       .slice(0, 5);
 
     for (const category of categoryCandidates) {
@@ -1854,6 +2102,7 @@ class RoonClient extends EventEmitter {
         const key = candidate.item?.item_key || "";
         if (!key || key === searchedKey || seen.has(key)) return false;
         if (!itemCanContainTrackMatch(track, candidate.item)) return false;
+        if (options.albumFallback && !itemLooksLikeTrackResult(candidate.item)) return false;
         seen.add(key);
         return true;
       })
@@ -1865,6 +2114,117 @@ class RoonClient extends EventEmitter {
     }
 
     return null;
+  }
+
+  async findAlbumTrackFallback(track, zoneId, query, options = {}) {
+    const budget = options.albumFallback;
+    if (!budget || budget.albumCandidatesInspected >= 3 || budget.timedOut) return null;
+    const { normalize } = require('./exactTrackVerification');
+    const base = value => normalize(stripVersionDescriptors(value));
+    const plausible = item => isOpenableBrowseItem(item) &&
+      directIdentity(track, item).artistExact &&
+      [base(track.title), normalize(track.album)].filter(Boolean).includes(base(item.title));
+    const session = `album-fallback-${require('node:crypto').randomUUID()}`;
+    const controller = new AbortController();
+    const parent = roonLookupContext.getStore();
+    const abort = () => controller.abort();
+    if (parent?.aborted) parent.throwIfAborted();
+    parent?.addEventListener('abort', abort, { once: true });
+    const timer = setTimeout(abort, Math.max(1, 10000 - budget.elapsedMs));
+    const started = Date.now();
+    const common = { hierarchy: 'search', multi_session_key: session };
+    const browse = args => callRoon(cb => this.browse.browse({ ...common, zone_or_output_id: this.zoneOrOutputId(zoneId), ...args }, cb));
+    const load = count => callRoon(cb => this.browse.load({ ...common, offset: 0, count }, cb));
+    try {
+      return await roonLookupContext.run(controller.signal, async () => {
+        // Re-enter the root in a dedicated session. Keys from the old Tracks page are not reused.
+        const albumList = async () => {
+          await browse({ pop_all: true, input: query });
+          let page = await load(100);
+          const category = (page.items || []).find(item => isOpenableBrowseItem(item) && /^(?:albums?|releases?|eps?|singles?)$/i.test(item.title || ''));
+          if (category) { await browse({ item_key: category.item_key }); page = await load(100); }
+          budget.albumSearchPages ||= [];
+          if (budget.albumSearchPages.length < 3) budget.albumSearchPages.push({ query, category: category?.title || '',
+            items: (page.items || []).slice(0, 10).map(item => ({ title: item.title, artist: item.artist || item.subtitle || '', hint: item.hint, plausible: plausible(item) })) });
+          return (page.items || []).filter(item => plausible(item) && (category || /album|list/i.test(item.hint || '')));
+        };
+        let albums = await albumList();
+        const candidates = albums.slice(0, 3);
+        for (const [index, initial] of candidates.entries()) {
+          if (budget.albumCandidatesInspected >= 3) break;
+          const signature = `${normalize(initial.title)}|${normalize(initial.subtitle || initial.artist)}|${initial.image_key || ''}|${index}`;
+          if (budget.seen.has(signature)) continue;
+          budget.seen.add(signature);
+          if (index) albums = await albumList();
+          const album = albums[index];
+          if (!album || !plausible(album)) continue;
+          budget.roonAlbumFallbackAttempted = 1;
+          budget.albumCandidatesInspected++;
+          const detail = { album: album.title, artist: album.artist || album.subtitle || '', tracks: [], outcome: 'not_found' };
+          budget.albums.push(detail);
+          const opened = await browse({ item_key: album.item_key });
+          if (isErrorMessage(opened) || opened.action === 'message') { detail.outcome = 'browse_unavailable'; continue; }
+          let inspected = 0;
+          const walk = async depth => {
+            if (depth > 2 || inspected >= 100) return null;
+            const page = await load(100 - inspected);
+            const items = page.items || [];
+            detail.pages ||= [];
+            if (detail.pages.length < 4) detail.pages.push({ depth, items: items.slice(0, 12).map(item => ({ title: item.title, subtitle: item.subtitle, hint: item.hint })) });
+            for (const item of items) {
+              if (!itemLooksLikeTrackResult(item)) continue;
+              if (/^(?:play|shuffle|queue|add)\b.*\balbum\b/i.test(item.title || '')) continue;
+              inspected++; budget.tracksInspected++;
+              if (detail.tracks.length < 12) detail.tracks.push({ title: item.title, artist: item.artist || item.subtitle || '' });
+              // Numbered rows are a Roon album presentation detail, not part of track identity.
+              const match = { ...item, title: cleanLookupText(item.title).replace(/^(?:\d{1,3}\.\s+|\d{1,2}-\d{1,3}\s+)/, ''),
+                roonDisplayTitle: item.title, album: item.album || album.title };
+              if (!item.artist && (!item.subtitle || /^\d{1,2}:\d{2}(?::\d{2})?$/.test(item.subtitle))) {
+                match.artist = cleanLookupText(album.artist || album.subtitle);
+                match.artistInheritedFromAlbum = true;
+              }
+              // Album actions themselves are never dispatched. Only an identified track row qualifies.
+              const accepted = options.exactVerification || track.exactVerification
+                ? strictRoonIdentity(track, match).accepted
+                : directIdentity(track, match, options.matchPolicy || 'strict').accepted;
+              if (accepted) return match;
+            }
+            if (depth >= 2 || inspected >= 100) return null;
+            const children = items.filter(item => isOpenableBrowseItem(item) && (
+              /^(?:tracks?|songs?|disc\s*\d+|cd\s*\d+)$/i.test(item.title || '') ||
+              (!itemLooksLikeTrackResult(item) && plausible(item))
+            )).slice(0, 3);
+            for (const child of children) {
+              // Refresh parent handles after returning from a sibling page.
+              const fresh = await load(100 - inspected);
+              const node = (fresh.items || []).find(item => item.title === child.title);
+              if (!node?.item_key) continue;
+              const next = await browse({ item_key: node.item_key });
+              if (isErrorMessage(next) || next.action === 'message') continue;
+              const found = await walk(depth + 1);
+              if (found) return found;
+              await browse({ pop_levels: 1 });
+            }
+            return null;
+          };
+          const match = await walk(0);
+          if (match) {
+            detail.outcome = 'resolved';
+            budget.roonAlbumFallbackResolved = 1;
+            return { match, container: album, session, matchScore: 1000, resolutionMethod: 'album_track_fallback' };
+          }
+        }
+        return null;
+      });
+    } catch (error) {
+      if (parent?.aborted) throw error;
+      budget.timedOut ||= controller.signal.aborted;
+      budget.errors.push(controller.signal.aborted ? 'album_browse_timeout' : error.message);
+      return null;
+    } finally {
+      clearTimeout(timer); parent?.removeEventListener('abort', abort);
+      budget.elapsedMs += Date.now() - started;
+    }
   }
 
   async searchQuery(track, zoneId, query, options = {}) {
@@ -1918,11 +2278,16 @@ class RoonClient extends EventEmitter {
     const ranked = rankedMatchItems(track, items, options);
     let best = ranked[0]?.item || items[0] || null;
     let bestScore = ranked[0]?.score || 0;
-    let verified = ranked[0]?.verified || false;
+    let verified = Boolean(ranked[0]?.verified && itemLooksLikeTrackResult(best));
     let nestedMatch = null;
 
     if (!verified) {
-      nestedMatch = await this.findNestedSearchMatch(track, zoneOrOutputId, session, firstLevelItems, items, trackCategory, options);
+      const hasAlbumSource = firstLevelItems.some(item => isOpenableBrowseItem(item) && (
+        /^(?:albums?|releases?|eps?|singles?)$/i.test(item.title || '') ||
+        (!itemLooksLikeTrackResult(item) && itemCanContainTrackMatch(track, item))
+      ));
+      if (hasAlbumSource) nestedMatch = await this.findAlbumTrackFallback(track, zoneId, query, options);
+      if (!nestedMatch) nestedMatch = await this.findNestedSearchMatch(track, zoneOrOutputId, session, firstLevelItems, items, trackCategory, options);
       if (nestedMatch?.match) {
         best = nestedMatch.match;
         bestScore = nestedMatch.matchScore || bestScore;
@@ -1935,7 +2300,8 @@ class RoonClient extends EventEmitter {
       match: best,
       matchScore: bestScore,
       verified,
-      session,
+      session: nestedMatch?.session || session,
+      resolutionMethod: nestedMatch?.resolutionMethod || '',
       searchedCategory: trackCategory ? itemSummary(trackCategory) : null,
       nestedMatch: nestedMatch?.match ? {
         container: itemSummary(nestedMatch.container),
@@ -1946,6 +2312,16 @@ class RoonClient extends EventEmitter {
   }
 
   async searchWithQueries(track, zoneId, queries, options = {}) {
+    const albumFallback = options.albumFallback || { roonAlbumFallbackAttempted: 0, roonAlbumFallbackResolved: 0, albumCandidatesInspected: 0, tracksInspected: 0, albums: [], seen: new Set(), elapsedMs: 0, timedOut: false, errors: [] };
+    options = { ...options, albumFallback };
+    const finish = result => {
+      const { seen, ...diagnostics } = albumFallback;
+      diagnostics.roonAlbumFallbackFailed = diagnostics.roonAlbumFallbackAttempted && !diagnostics.roonAlbumFallbackResolved ? 1 : 0;
+      this.resolverDiagnostics ||= { roonAlbumFallbackAttempted: 0, roonAlbumFallbackResolved: 0, roonAlbumFallbackFailed: 0 };
+      for (const key of Object.keys(this.resolverDiagnostics)) this.resolverDiagnostics[key] += diagnostics[key] || 0;
+      if (diagnostics.roonAlbumFallbackAttempted || diagnostics.errors.length) console.info('[roon-album-fallback]', JSON.stringify({ artist: track.artist, title: track.title, resolutionMethod: result.resolutionMethod || '', ...diagnostics }));
+      return { ...result, albumFallback: diagnostics };
+    };
     const lookup = lookupTrack(track);
     const attempts = [];
     let bestResult = null;
@@ -1953,6 +2329,7 @@ class RoonClient extends EventEmitter {
     const extendedSearchBudget = preferExtendedMixes ? Math.min(10, queries.length || 0) : 0;
 
     for (const query of queries) {
+      options.onSearchAttempt?.(query);
       const result = await this.searchQuery(lookup, zoneId, query, options);
       attempts.push({
         query,
@@ -1971,15 +2348,15 @@ class RoonClient extends EventEmitter {
       }
 
       if (result.verified && (!preferExtendedMixes || titleHasExtendedMix(result.match?.title) || attempts.length >= extendedSearchBudget)) {
-        return {
+        return finish({
           ...result,
           queries,
           attempts
-        };
+        });
       }
     }
 
-    return {
+    return finish({
       ...(bestResult || {
         query: queries[0] || `${lookup.artist} ${lookup.title}`,
         match: null,
@@ -1991,12 +2368,17 @@ class RoonClient extends EventEmitter {
       }),
       queries,
       attempts
-    };
+    });
   }
 
   async search(track, zoneId, options = {}) {
     const lookup = lookupTrack(track);
-    return this.searchWithQueries(lookup, zoneId, createRoonSearchQueries(lookup, options), options);
+    let queries = createRoonSearchQueries(lookup, options);
+    if (options.matchPolicy) {
+      const { normalize } = require("./exactTrackVerification");
+      queries = [...new Set([`${lookup.artist} ${lookup.title}`, `${normalize(lookup.artist.replace(/\./g, ''))} ${normalize(lookup.title)}`, ...queries])].slice(0, 10);
+    }
+    return this.searchWithQueries(lookup, zoneId, queries, options);
   }
 
   async searchTrackCandidates(query, zoneId, options = {}) {
@@ -2628,7 +3010,7 @@ class RoonClient extends EventEmitter {
       item.hint !== "header" &&
       item.hint !== "action" &&
       !isPlaybackNavigationItem(item) &&
-      (!track || itemCanBeDrilledForPlayback(track, item))
+      (!track || (track.directMatchPolicy ? directIdentity(track, item, track.directMatchPolicy).accepted : track.exactVerification ? strictRoonIdentity(track, item).accepted : itemCanBeDrilledForPlayback(track, item)))
     ));
 
     if (!drillable) return { playable: null, items };
@@ -2648,8 +3030,29 @@ class RoonClient extends EventEmitter {
     const result = Array.isArray(options.queries) && options.queries.length
       ? await this.searchWithQueries(track, zoneId, options.queries, options)
       : await this.search(track, zoneId, options);
+    if (!result.verified && result.albumFallback?.timedOut) return { ...result, success: false, failureType: 'timeout', reason: 'Album traversal deadline reached; the requested version remains unresolved.' };
     if (!result.match?.item_key) {
-      return { ...result, success: false, reason: "No Roon search match." };
+      return { ...result, success: false, failureType: "not_found", reason: "No Roon search match." };
+    }
+    if (options.matchPolicy) {
+      const bestEvidence = directIdentity(track, result.match, options.matchPolicy);
+      const plausible = (result.candidates || []).filter(item => {
+        const evidence = directIdentity(track, item, options.matchPolicy);
+        return evidence.accepted && evidence.confidence >= bestEvidence.confidence;
+      });
+      const recordings = new Set(plausible.map(item => item.isrc || item.tidalTrackId || '').filter(Boolean));
+      if (recordings.size > 1 && !bestEvidence.idMatch && !bestEvidence.isrcMatch) {
+        return { ...result, success: false, failureType: 'ambiguous', reason: 'Multiple equally plausible recording identities; supply album, duration, TIDAL ID or ISRC.' };
+      }
+    }
+    if (options.matchPolicy) {
+      result.identityEvidence = directIdentity(track, result.match, options.matchPolicy);
+      if (!result.identityEvidence.accepted) return { ...result, success: false, failureType: result.identityEvidence.failureType, reason: "Roon metadata does not confirm the requested recording/version." };
+      result.verified = true;
+    }
+    if (options.exactVerification || track.exactVerification) {
+      result.identityEvidence = strictRoonIdentity(track, result.match);
+      if (!result.identityEvidence.accepted) return { ...result, success: false, failureType: result.identityEvidence.failureType || "not_found", reason: "Exact verification forbids substitution: Roon did not resolve the requested artist/title/version." };
     }
     if (!result.verified) {
       return {
@@ -2658,6 +3061,7 @@ class RoonClient extends EventEmitter {
         reason: `Roon did not find an exact artist/title match for ${track.artist} - ${track.title}. Best result was ${result.match.title || "unknown"}${result.match.subtitle ? ` - ${result.match.subtitle}` : ""}.`
       };
     }
+
 
     const zoneOrOutputId = this.zoneOrOutputId(zoneId);
     const selected = await callRoon((cb) => this.browse.browse({
@@ -2685,19 +3089,71 @@ class RoonClient extends EventEmitter {
     return { ...result, success: true, action: playable.title, playable, mode, response: selected, actions: items.map(itemSummary) };
   }
 
+  async resolveDirectAction(track, zoneId, mode, options = {}) {
+    const policy = options.matchPolicy || track.directMatchPolicy;
+    const cached = [...(this.exactQueueActions || new Map()).entries()].find(([token, entry]) =>
+      this.hasVerifiedQueueAction(token) && entry.zoneId === zoneId && (entry.mode || "queue") === mode &&
+      (!entry.policy || entry.policy === policy) && directIdentity(track, { ...entry.track, tidalTrackId: entry.track.tidalTrackId || entry.track.id }, "strict").accepted && directIdentity(track, entry.result.match, policy).accepted);
+    if (cached) return { ...cached[1].result, queueToken: cached[0], resolutionMethod: cached[1].result.resolutionMethod || "cached_roon_action" };
+    let result, timedOut = false;
+    const attempts = [], triedQueries = [];
+    for (let retry = 0; retry < 2; retry++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 20000);
+      try {
+        result = await roonLookupContext.run(controller.signal, () => this.resolveSearchAction(track, zoneId, mode, {
+          ...options, matchPolicy: policy, preferExtendedMixes: false, onSearchAttempt: query => triedQueries.push(query)
+        }));
+        attempts.push(...(result.attempts || []));
+        break;
+      } catch (error) {
+        timedOut ||= controller.signal.aborted;
+        result = { success: false, failureType: controller.signal.aborted ? "timeout" : "error", reason: error.message };
+        if (!controller.signal.aborted) break;
+      } finally { clearTimeout(timer); }
+    }
+    if (!result.success && timedOut) result = { ...result, failureType: 'timeout', reason: 'A bounded Roon lookup timed out; identity remains unresolved and can be retried.' };
+    if (!result.success && options.allowBridge && this.resolveDirectBridge) {
+      const directFailure={failureType:result.failureType,reason:result.reason};
+      try { result={...result,...await this.resolveDirectBridge(track,zoneId,mode,policy),directFailure}; }
+      catch(error){result={...result,success:false,failureType:'bridge_resolution_failed',reason:error.message,directFailure};}
+    }
+    return { ...result, attempts: triedQueries.length ? triedQueries.map(query => attempts.find(attempt => attempt.query === query) || { query }) : attempts,
+      resolutionMethod: result?.resolutionMethod || result?.identityEvidence?.method || "artist_title" };
+  }
+
   async performSearchAction(track, zoneId, mode = "play", options = {}) {
-    const result = await this.resolveSearchAction(track, zoneId, mode, options);
+    let result;
+    if (track.verifiedQueueToken) {
+      const entry = this.exactQueueActions?.get(track.verifiedQueueToken);
+      if (!this.hasVerifiedQueueAction(track.verifiedQueueToken)) throw new Error("Stored Roon action expired; resolve the saved TIDAL identity again.");
+      if (entry.zoneId !== zoneId || mode !== (entry.mode || "queue")) throw new Error("Selected zone differs from the resolved zone, or mode is not append.");
+      if (!(entry.policy ? entry.policy === (options.matchPolicy || track.directMatchPolicy) && directIdentity(track, entry.track, "strict").accepted : strictRoonIdentity(track, { ...entry.track, tidalTrackId: entry.track.id || entry.track.tidalTrackId }).accepted)) throw new Error("Stored Roon action identity differs from the requested track.");
+      result = options.matchPolicy ? { ...entry.result, resolutionMethod: entry.result.resolutionMethod || 'cached_roon_action' } : entry.result;
+      // Consume before dispatch. Never replay an uncertain external queue action automatically.
+      this.exactQueueActions.delete(track.verifiedQueueToken);
+    } else if (options.matchPolicy) {
+      result = await this.resolveDirectAction(track, zoneId, mode, { ...options, allowBridge: options.allowBridge === true });
+      if (result.queueToken) this.exactQueueActions.delete(result.queueToken);
+    } else result = await this.resolveSearchAction(track, zoneId, mode, options);
     if (!result.success || !result.playable?.item_key) return result;
     const zoneOrOutputId = this.zoneOrOutputId(zoneId);
 
-    const played = await callRoon((cb) => this.browse.browse({
-      hierarchy: "search",
+    let played;
+    const controller = new AbortController();
+    const timer = options.matchPolicy ? setTimeout(() => controller.abort(), 15000) : null;
+    try {
+      played = await roonLookupContext.run(options.matchPolicy ? controller.signal : roonLookupContext.getStore(), () => callRoon((cb) => this.browse.browse({
+      hierarchy: result.hierarchy || "search",
       multi_session_key: result.session,
       item_key: result.playable.item_key,
       zone_or_output_id: zoneOrOutputId
-    }, cb));
-
-    if (isErrorMessage(played)) throw new Error(played.message || "Roon rejected the selected action.");
+    }, cb)));
+    } catch (error) {
+      if (!options.matchPolicy) throw error;
+      return { ...result, success: false, resolved: true, failureType: "queue_failed", reason: controller.signal.aborted ? "Queue acknowledgement timed out; outcome unknown. Inspect the queue before retrying." : error.message };
+    } finally { if (timer) clearTimeout(timer); }
+    if (isErrorMessage(played)) return { ...result, success: false, resolved: true, failureType: "queue_failed", reason: played.message || "Roon rejected the selected action." };
 
     const startReset = mode === "play" && /\bplay\b/i.test(result.playable.title || "")
       ? await this.seekToStartWhenReady(zoneId, 4500)
@@ -2707,7 +3163,106 @@ class RoonClient extends EventEmitter {
   }
 
   async canQueueTrack(track, zoneId, options = {}) {
-    return this.resolveSearchAction(track, zoneId, "queue", options);
+    const result = options.matchPolicy ? await this.resolveDirectAction(track, zoneId, "queue", options) : await roonLookupContext.run(options.signal, () => this.resolveSearchAction(track, zoneId, "queue", {
+      ...options, ...(options.query ? { queries: [options.query] } : {})
+    }));
+    options.signal?.throwIfAborted();
+    if (result.success && !result.queueToken && (options.matchPolicy || options.exactVerification || track.exactVerification)) {
+      this.exactQueueActions ||= new Map();
+      for (const [key, entry] of this.exactQueueActions) if (Date.now() - entry.createdAt > 30 * 60_000) this.exactQueueActions.delete(key);
+      while (this.exactQueueActions.size >= 200) this.exactQueueActions.delete(this.exactQueueActions.keys().next().value);
+      result.queueToken = require("node:crypto").randomUUID();
+      this.exactQueueActions.set(result.queueToken, { result, zoneId, track: { ...track }, policy: options.matchPolicy, mode: "queue", createdAt: Date.now(), browse: this.browse });
+    }
+    return result;
+  }
+
+  hasVerifiedQueueAction(token) {
+    const entry = this.exactQueueActions?.get(token);
+    return Boolean(entry && Date.now() - entry.createdAt <= 30 * 60_000 && entry.browse === this.browse);
+  }
+
+  async resolveExactPlaylistAction(track, zoneId, playlistTitle, { timeoutMs = 15000, mode = "queue" } = {}) {
+    const { roonIdentityEvidence } = require("./roonExactResolution");
+    const { normalize } = require("./exactTrackVerification");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const session = `exact-bridge-${require("node:crypto").randomUUID()}`;
+    const common = { hierarchy: "playlists", multi_session_key: session };
+    const browse = args => exactRoonRpc(cb => this.browse.browse({ ...common, zone_or_output_id: this.zoneOrOutputId(zoneId), ...args }, cb), controller.signal);
+    const diagnostics = { playlist: null, pages: [], nearMatches: [] };
+    const recordDiagnostics = (depth, items = []) => {
+      const pageDiagnostics = bridgeDiagnosticsForItems(track, items);
+      diagnostics.pages.push({ depth, items: pageDiagnostics.items });
+      diagnostics.nearMatches.push(...pageDiagnostics.nearMatches);
+      diagnostics.nearMatches = diagnostics.nearMatches
+        .filter((item, index, list) => list.findIndex(other => (other.key || `${other.title}|${other.subtitle}`) === (item.key || `${item.title}|${item.subtitle}`)) === index)
+        .slice(0, 12);
+    };
+    const load = async () => {
+      let first, items=[];const seen=new Set();
+      for(let offset=0;offset<5000;offset+=100){
+        const page=await exactRoonRpc(cb=>this.browse.load({...common,offset,count:100},cb),controller.signal);
+        first ||= page;const rows=page.items||[];
+        const fingerprint=rows.map(i=>i.item_key||i.title).join('|');
+        if(seen.has(fingerprint))break;seen.add(fingerprint);items.push(...rows);
+        if(rows.length<100||(Number.isFinite(page.list?.count)&&items.length>=page.list.count))break;
+      }
+      return {...first,items};
+    };
+    try {
+      await browse({ pop_all: true });
+      await browse({ refresh_list: true });
+      let page = await load();
+      const playlist = (page.items || []).find(item => normalize(item.title) === normalize(playlistTitle));
+      if (!playlist) return { success: false, reason: "Designated TIDAL bridge is not visible in Roon playlists yet.", diagnostics };
+      diagnostics.playlist = itemSummary(playlist);
+      await browse({ item_key: playlist.item_key });
+      await browse({ refresh_list: true });
+      let matched = null;
+      for (let depth = 0; depth < 5; depth++) {
+        page = await load();
+        const items = page.items || [];
+        recordDiagnostics(depth, items);
+        const playable = matched && preferredAction(items, mode);
+        if (playable?.item_key) {
+          const result = { success: true, session, hierarchy: "playlists", playable, match: matched, action: playable.title, diagnostics };
+          const trustedEvidence = bridgeTrustedIdentity(track, matched).evidence;
+          result.identityEvidence = trustedEvidence?.accepted
+            ? trustedEvidence
+            : bridgeCompilationIdentity(track, matched).evidence;
+          result.queueToken = require("node:crypto").randomUUID();
+          this.exactQueueActions ||= new Map();
+          this.exactQueueActions.set(result.queueToken, { result, zoneId, track: { ...track }, createdAt: Date.now(), browse: this.browse, mode });
+          return result;
+        }
+        const trustedChild = items.find(item => item.item_key && !["action","header"].includes(item.hint) && bridgeTrustedIdentity(track, item).accepted);
+        const compilationChildren = trustedChild ? [] : items.filter(item => item.item_key && !["action","header"].includes(item.hint) && bridgeCompilationIdentity(track, item).accepted);
+        const child = trustedChild || (compilationChildren.length === 1 ? compilationChildren[0] : null);
+        const container = !matched && items.find(item => item.item_key && /^(?:tracks?|songs?)$/i.test(item.title || ""));
+        if (!child && !container) return { success: false, reason: "Bridge is visible but the exact artist/title/version is not yet present in Roon.", diagnostics };
+        if (child) matched = child;
+        const response = await browse({ item_key: (child || container).item_key });
+        if (isErrorMessage(response)) throw new Error(response.message || "Roon rejected bridge navigation.");
+      }
+      return { success: false, reason: "Exact bridge track did not expose a queue action within the bounded navigation depth.", diagnostics };
+    } finally { clearTimeout(timer); }
+  }
+
+  async resolveExactSearchAction(track, zoneId, options = {}) {
+    // Compatibility entry point: the bulk resolver is the only search implementation.
+    return roonLookupContext.run(options.signal, () => this.resolveSearchAction({ ...track, exactVerification: true }, zoneId, "queue", {
+      ...options, exactVerification: true, ...(options.query ? { queries: [options.query] } : {})
+    }));
+  }
+
+  async queueVerifiedTrack(queueToken, zoneId, mode = "append") {
+    const entry = this.exactQueueActions?.get(queueToken);
+    if (!entry) throw new Error("Stored Roon action expired; resolve the saved TIDAL identity again.");
+    if (mode !== "append") throw new Error("Stored Roon actions require append mode.");
+    const result = await this.performSearchAction({ ...entry.track, verifiedQueueToken: queueToken }, zoneId, "queue");
+    if (result.success) this.emit?.("trackQueued", entry.track);
+    return result;
   }
 
   async canQueueKnownRoonTrack(track, zoneId, options = {}) {
@@ -2747,8 +3302,12 @@ class RoonClient extends EventEmitter {
     let addNextUsed = false;
     let nextFallbackUsed = false;
     let shuffleDisabled = false;
+    const bulkBridge = Boolean(options.allowBridge && options.matchPolicy && this.resolveDirectBridgeBatch);
+    const bridgePending = [];
     const searchOptions = {
-      preferExtendedMixes: shouldPreferExtendedMixes(options)
+      preferExtendedMixes: shouldPreferExtendedMixes(options),
+      ...(options.matchPolicy ? { matchPolicy: options.matchPolicy } : {}),
+      ...(options.allowBridge && !bulkBridge ? { allowBridge: true } : {})
     };
 
     const zone = this.getZone(zoneId);
@@ -2762,7 +3321,10 @@ class RoonClient extends EventEmitter {
       const { track, isAlternate } = request;
       const mode = options.mode === "next" ? "next" : (appendOnly ? "queue" : (sentAny ? "queue" : "play"));
       try {
+        options.onQueueStart?.(track, index);
+        const lookupStarted = Date.now();
         const result = await this.performSearchAction(track, zoneId, mode, searchOptions);
+        result.elapsedMs = Date.now() - lookupStarted;
         if (result.success) {
           if (mode === "queue" && /add\s+next/i.test(result.action || "")) addNextUsed = true;
           if (mode === "next" && !/(add|play)\s+(to\s+)?next|add\s+after/i.test(result.action || "")) nextFallbackUsed = true;
@@ -2784,23 +3346,131 @@ class RoonClient extends EventEmitter {
             mode,
             isAlternate,
             startReset: result.startReset || null,
+            bridge: result.bridge, directFailure: result.directFailure, identityEvidence: result.identityEvidence, resolutionMethod: result.resolutionMethod, albumFallback: result.albumFallback, attempts: result.attempts, elapsedMs: result.elapsedMs,
             match
           });
+          this.emit?.("trackQueued", {...queued[queued.length-1].track, ...(matchedTitle === requestedTitle ? {tidal:track.tidal,tidalTrackId:track.tidalTrackId} : {})});
           sentAny = true;
           started = started || actionWasPlayback;
+          options.onQueueResult?.(index, true);
         } else {
-          failed.push({
+          const failure = {
             index,
             track,
             isAlternate,
             reason: result.reason || "No usable Roon action.",
+            failureType: result.failureType, resolved: result.resolved, bridge: result.bridge, directFailure: result.directFailure, identityEvidence: result.identityEvidence, resolutionMethod: result.resolutionMethod, albumFallback: result.albumFallback, attempts: result.attempts, elapsedMs: result.elapsedMs,
             match: result.match ? itemSummary(result.match) : null,
             actions: result.actions || []
-          });
+          };
+          const bridgeableStrictFailure = /^(?:not_found|version_mismatch|identity_mismatch|ambiguous)$/i.test(result.failureType || "");
+          if (bulkBridge && !result.success && bridgeableStrictFailure && (track.tidalTrackId || track.tidal?.id || track.isrc)) {
+            bridgePending.push({ index, track, isAlternate, mode, policy: options.matchPolicy, directFailure: failure });
+          } else {
+            failed.push(failure);
+          }
+          options.onQueueResult?.(index, false);
         }
       } catch (error) {
         failed.push({ index, track, reason: error.message });
+        options.onQueueResult?.(index, false);
       }
+    }
+
+    if (bulkBridge && queued.length < targetCount && bridgePending.length) {
+      const pending = bridgePending.filter(entry => !entry.isAlternate || queued.length < targetCount);
+      let bridged = [];
+      try {
+        bridged = await this.resolveDirectBridgeBatch(pending, zoneId, {
+          mode: options.mode === "next" ? "next" : "queue",
+          bridgeSyncDelaysMs: options.bridgeSyncDelaysMs,
+          bridgeLookupTimeoutMs: options.bridgeLookupTimeoutMs
+        });
+      } catch (error) {
+        bridged = pending.map(entry => ({ ...entry, result: { success: false, reason: error.message, failureType: "bridge_resolution_failed" } }));
+      }
+      const byIndex = new Map(bridged.map(entry => [entry.index, entry]));
+      for (const pendingEntry of pending) {
+        if (queued.length >= targetCount) break;
+        const bridgeEntry = byIndex.get(pendingEntry.index);
+        const bridgeResult = bridgeEntry?.result || {};
+        if (!bridgeResult.success || !bridgeResult.queueToken) {
+          failed.push({
+            ...pendingEntry.directFailure,
+            reason: bridgeResult.reason || pendingEntry.directFailure.reason,
+            failureType: bridgeResult.failureType || pendingEntry.directFailure.failureType,
+            bridge: bridgeResult.bridge || pendingEntry.directFailure.bridge || null,
+            directFailure: pendingEntry.directFailure,
+            resolutionMethod: bridgeResult.resolutionMethod || pendingEntry.directFailure.resolutionMethod
+          });
+          continue;
+        }
+        try {
+          const lookupStarted = Date.now();
+          const queuedResult = await this.performSearchAction({ ...pendingEntry.track, verifiedQueueToken: bridgeResult.queueToken }, zoneId, pendingEntry.mode, { matchPolicy: options.matchPolicy });
+          queuedResult.elapsedMs = Date.now() - lookupStarted;
+          if (!queuedResult.success) {
+            failed.push({
+              ...pendingEntry.directFailure,
+              reason: queuedResult.reason || "Roon rejected the selected bridge action.",
+              failureType: queuedResult.failureType || "queue_failed",
+              resolved: queuedResult.resolved,
+              bridge: bridgeResult.bridge || null,
+              directFailure: pendingEntry.directFailure,
+              identityEvidence: bridgeResult.identityEvidence,
+              resolutionMethod: bridgeResult.resolutionMethod,
+              elapsedMs: queuedResult.elapsedMs,
+              match: queuedResult.match ? itemSummary(queuedResult.match) : null,
+              actions: queuedResult.actions || []
+            });
+            continue;
+          }
+          const match = queuedResult.match ? itemSummary(queuedResult.match) : null;
+          const matchedTitle = cleanLookupText(match?.title);
+          const requestedTitle = cleanLookupText(pendingEntry.track.title);
+          queued.push({
+            index: pendingEntry.index,
+            track: {
+              artist: pendingEntry.track.artist,
+              title: matchedTitle || pendingEntry.track.title,
+              requestedTitle: matchedTitle && requestedTitle && normalizeLookupText(matchedTitle) !== normalizeLookupText(requestedTitle) ? pendingEntry.track.title : "",
+              album: pendingEntry.track.album || "",
+              year: pendingEntry.track.year || "",
+              durationMs: pendingEntry.track.durationMs || 0
+            },
+            action: queuedResult.action,
+            mode: pendingEntry.mode,
+            isAlternate: pendingEntry.isAlternate,
+            startReset: queuedResult.startReset || null,
+            bridge: bridgeResult.bridge,
+            directFailure: pendingEntry.directFailure,
+            identityEvidence: bridgeResult.identityEvidence,
+            resolutionMethod: bridgeResult.resolutionMethod,
+            albumFallback: queuedResult.albumFallback || bridgeResult.albumFallback || null,
+            attempts: queuedResult.attempts || [],
+            elapsedMs: queuedResult.elapsedMs,
+            match
+          });
+          this.emit?.("trackQueued", { ...queued[queued.length - 1].track, tidal: pendingEntry.track.tidal, tidalTrackId: pendingEntry.track.tidalTrackId });
+          sentAny = true;
+          started = started || /\bplay\b/i.test(queuedResult.action || "");
+        } catch (error) {
+          failed.push({
+            ...pendingEntry.directFailure,
+            reason: error.message,
+            failureType: "queue_failed",
+            bridge: bridgeResult.bridge || null,
+            directFailure: pendingEntry.directFailure,
+            identityEvidence: bridgeResult.identityEvidence,
+            resolutionMethod: bridgeResult.resolutionMethod
+          });
+        }
+      }
+      for (const entry of bridgePending) {
+        if (!pending.some(item => item.index === entry.index)) failed.push(entry.directFailure);
+      }
+    } else if (bridgePending.length) {
+      failed.push(...bridgePending.map(entry => entry.directFailure));
     }
 
     if (!appendOnly && queued.length && !started) {
@@ -2838,5 +3508,7 @@ class RoonClient extends EventEmitter {
 }
 
 module.exports = {
-  RoonClient
+  RoonClient,
+  clearStoppedZoneNowPlaying,
+  isStoppedZone
 };

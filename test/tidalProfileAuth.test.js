@@ -26,6 +26,7 @@ test("TIDAL profile auth creates PKCE authorization URL and stores callback stat
   assert.equal(url.searchParams.get("response_type"), "code");
   assert.equal(url.searchParams.get("client_id"), "client-id");
   assert.equal(url.searchParams.get("redirect_uri"), "http://127.0.0.1:3777/api/tidal/oauth/callback");
+  assert.match(url.searchParams.get("scope"), /\bcollection\.write\b/);
   assert.equal(url.searchParams.get("code_challenge_method"), "S256");
   assert.ok(url.searchParams.get("code_challenge"));
   assert.ok(url.searchParams.get("state"));
@@ -47,6 +48,38 @@ test("TIDAL profile auth strips legacy scopes from normal OAuth requests", () =>
   const url = new URL(auth.createAuthorizationUrl());
   assert.equal(url.searchParams.get("scope"), "user.read playlists.read recommendations.read");
   assert.equal(auth.status().scopes, "user.read playlists.read recommendations.read");
+});
+
+test("TIDAL profile auth can use the request host callback for mobile login", async () => {
+  const file = tempTokenFile();
+  const calls = [];
+  const auth = new TidalProfileAuth({
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    redirectUri: "http://127.0.0.1:3777/api/tidal/oauth/callback",
+    tokenFile: file,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, body: String(options.body) });
+      return new Response(JSON.stringify({
+        access_token: "access-token",
+        refresh_token: "refresh-token",
+        expires_in: 14400
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+  });
+  const mobileRedirect = "http://192.168.50.119:3777/api/tidal/oauth/callback";
+  const url = new URL(auth.createAuthorizationUrl({ redirectUri: mobileRedirect }));
+
+  assert.equal(url.searchParams.get("redirect_uri"), mobileRedirect);
+  const saved = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(saved.oauthState.redirectUri, mobileRedirect);
+
+  await auth.exchangeAuthorizationCode({
+    code: "auth-code",
+    state: url.searchParams.get("state")
+  });
+
+  assert.match(calls[0].body, /redirect_uri=http%3A%2F%2F192\.168\.50\.119%3A3777%2Fapi%2Ftidal%2Foauth%2Fcallback/);
 });
 
 test("TIDAL profile auth can opt into legacy scopes for manual experiments", () => {
