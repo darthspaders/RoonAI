@@ -80,6 +80,7 @@ const state = {
   beatportCharts: [],
   beatportChartsLoading: false,
   beatportChartsLoaded: false,
+  beatportChartSource: localStorage.getItem("beatportChartSource") || "staff_picks",
   beatportChartLoading: false,
   beatportChartNeedsRefresh: true,
   beatportChartId: localStorage.getItem("beatportChartId") || "901032",
@@ -4925,10 +4926,12 @@ function beatportChartOptionLabel(chart = {}) {
 function renderBeatportChartSelect() {
   const select = $("#beatportChartSelect");
   const input = $("#beatportChartId");
+  const source = $("#beatportChartSource");
   if (!select) return;
+  if (source) source.value = state.beatportChartSource || "staff_picks";
   const selectedId = state.beatportChartId || input?.value || "901032";
   if (state.beatportChartsLoading && !state.beatportCharts.length) {
-    select.innerHTML = "<option value=\"\">Loading Progressive House charts...</option>";
+    select.innerHTML = `<option value="">Loading ${state.beatportChartSource === "staff_picks" ? "Staff Picks" : "Progressive House"} charts...</option>`;
     select.disabled = true;
     return;
   }
@@ -4942,18 +4945,32 @@ function renderBeatportChartSelect() {
   }
   select.innerHTML = options.length
     ? options.join("")
-    : "<option value=\"\">No Progressive House charts found</option>";
+    : `<option value="">No ${state.beatportChartSource === "staff_picks" ? "Staff Picks" : "Progressive House"} charts found</option>`;
   select.disabled = !options.length;
 }
 
 async function refreshBeatportChartList() {
   if (state.beatportChartsLoading) return;
+  const source = $("#beatportChartSource")?.value || state.beatportChartSource || "staff_picks";
+  state.beatportChartSource = source;
+  localStorage.setItem("beatportChartSource", source);
   state.beatportChartsLoading = true;
   renderBeatportChartSelect();
   try {
-    const payload = await getJson("/api/beatport/charts?genre_id=15&per_page=50");
+    const params = new URLSearchParams({
+      genre_id: "15",
+      per_page: "50",
+      source
+    });
+    const payload = await getJson(`/api/beatport/charts?${params.toString()}`);
     state.beatportCharts = Array.isArray(payload?.charts) ? payload.charts : [];
     state.beatportChartsLoaded = true;
+    if (state.beatportCharts.length && !state.beatportCharts.some((chart) => String(chart.id) === String(state.beatportChartId))) {
+      state.beatportChartId = state.beatportCharts[0].id;
+      localStorage.setItem("beatportChartId", state.beatportChartId);
+      const input = $("#beatportChartId");
+      if (input) input.value = state.beatportChartId;
+    }
   } finally {
     state.beatportChartsLoading = false;
     renderBeatportChartSelect();
@@ -6545,6 +6562,18 @@ $("#beatportChartForm")?.addEventListener("submit", (event) => {
   refreshBeatportChart().catch((error) => {
     $("#beatportChartStatus").textContent = error.message;
   });
+});
+
+$("#beatportChartSource")?.addEventListener("change", (event) => {
+  state.beatportChartSource = event.target.value || "staff_picks";
+  state.beatportCharts = [];
+  state.beatportChartsLoaded = false;
+  localStorage.setItem("beatportChartSource", state.beatportChartSource);
+  refreshBeatportChartList()
+    .then(() => refreshBeatportChart())
+    .catch((error) => {
+      $("#beatportChartStatus").textContent = error.message;
+    });
 });
 
 $("#beatportChartSelect")?.addEventListener("change", (event) => {

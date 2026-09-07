@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>The Rabbit Hole</title>
-    <link rel="stylesheet" href="/styles.css?v=20260907-beatport-chart-list">
+    <link rel="stylesheet" href="/styles.css?v=20260907-beatport-staff-picks">
   </head>
   <body>
     <main class="shell">
@@ -399,6 +399,10 @@
             <p id="beatportChartStatus" class="tasteNarrative">Choose a Progressive House chart, then queue through Rabbit Hole's TIDAL/Roon resolver.</p>
           </div>
           <form id="beatportChartForm" class="beatportChartForm">
+            <select id="beatportChartSource" aria-label="Beatport chart source">
+              <option value="staff_picks">Staff Picks page</option>
+              <option value="genre">Latest Progressive House charts</option>
+            </select>
             <select id="beatportChartSelect" aria-label="Progressive House Beatport chart">
               <option value="">Loading Progressive House charts...</option>
             </select>
@@ -481,7 +485,7 @@
       </section>
     </main>
     <button type="button" id="jumpTop" class="jumpTop" hidden>Now Playing</button>
-    <script src="/app.js?v=20260907-beatport-chart-list"></script>
+    <script src="/app.js?v=20260907-beatport-staff-picks"></script>
     <script src="/webmcpTools.js"></script>
   </body>
 </html>

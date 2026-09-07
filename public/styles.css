@@ -1514,9 +1514,9 @@ input {
 
 .beatportChartForm {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(110px, 150px) auto;
+  grid-template-columns: minmax(150px, 190px) minmax(260px, 1fr) minmax(110px, 150px) auto;
   gap: 8px;
-  min-width: min(100%, 720px);
+  min-width: min(100%, 940px);
 }
 
 .beatportChartPanel {

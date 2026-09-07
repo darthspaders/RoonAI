@@ -136,6 +136,53 @@ test("Beatport chart list filters by genre and normalizes chart choices", async 
   assert.equal(calls[0].searchParams.get("genre_id"), "15");
 });
 
+test("Beatport staff picks chart list uses search and keeps progressive staff charts", async () => {
+  const calls = [];
+  const tokenFile = tempTokenFile();
+  new BeatportTokenStore(tokenFile).save({ access_token: "chart-token", expires_in: 3600 });
+  const client = new BeatportClient({
+    enabled: true,
+    tokenFile,
+    requestsPerSecond: 100,
+    fetchImpl: async (url) => {
+      calls.push(new URL(url));
+      return jsonResponse(200, {
+        charts: [{
+          id: 542128,
+          name: "Staff Picks 2018: Progressive House",
+          person: { owner_name: "Beatport" },
+          publish_date: "2018-12-12T03:40:57-07:00",
+          track_count: 49,
+          genres: [{ name: "Progressive House" }]
+        }, {
+          id: 756930,
+          name: "Staff Picks 2022: Progressive House",
+          person: { owner_name: "Beatport" },
+          publish_date: "2022-12-13T00:44:47-07:00",
+          track_count: 97,
+          genres: [{ name: "Melodic House & Techno" }, { name: "Progressive House" }]
+        }, {
+          id: 123,
+          name: "September 2026",
+          person: { owner_name: "Someone" },
+          track_count: 10,
+          genres: [{ name: "Progressive House" }]
+        }]
+      });
+    },
+    logger: null
+  });
+
+  const result = await client.getCharts({ source: "staff_picks" });
+
+  assert.equal(result.pagination.source, "staff_picks");
+  assert.equal(result.charts.length, 2);
+  assert.equal(result.charts[0].id, "756930");
+  assert.equal(result.charts[1].id, "542128");
+  assert.equal(calls[0].pathname, "/v4/catalog/search/");
+  assert.equal(calls[0].searchParams.get("q"), "staff picks progressive house");
+});
+
 test("Beatport chart lookup follows pages and normalizes queueable tracks", async () => {
   const calls = [];
   const tokenFile = tempTokenFile();

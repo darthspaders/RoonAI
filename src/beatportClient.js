@@ -671,17 +671,39 @@ class BeatportClient {
     return null;
   }
 
-  async getCharts({ genreId = 15, page = 1, perPage = 50 } = {}) {
+  async getCharts({ genreId = 15, page = 1, perPage = 50, source = "genre", query = "" } = {}) {
     const normalizedPerPage = Math.max(1, Math.min(100, Number(perPage) || 50));
     const normalizedPage = Math.max(1, Number(page) || 1);
+    const normalizedSource = cleanText(source).toLowerCase();
+    const isStaffPicks = normalizedSource === "staff_picks" || normalizedSource === "staff-picks";
     const params = {
       page: normalizedPage,
       per_page: normalizedPerPage
     };
     const cleanGenreId = cleanText(genreId).replace(/[^0-9]/g, "");
-    if (cleanGenreId) params.genre_id = cleanGenreId;
-    const payload = await this.requestJson("/catalog/charts/", params);
-    const charts = extractBeatportCharts(payload).map(normalizeBeatportChart);
+    let payload = null;
+    if (isStaffPicks) {
+      payload = await this.requestJson("/catalog/search/", {
+        ...params,
+        q: cleanText(query) || "staff picks progressive house"
+      });
+    } else {
+      if (cleanGenreId) params.genre_id = cleanGenreId;
+      payload = await this.requestJson("/catalog/charts/", params);
+    }
+    const charts = extractBeatportCharts(payload)
+      .map(normalizeBeatportChart)
+      .filter((chart) => {
+        if (!isStaffPicks) return true;
+        const haystack = [chart.title, chart.slug, ...(chart.genres || [])].join(" ").toLowerCase();
+        return haystack.includes("staff") && haystack.includes("progressive");
+      })
+      .sort((a, b) => {
+        if (!isStaffPicks) return 0;
+        const bTime = Date.parse(b.publishDate || b.addDate || "") || 0;
+        const aTime = Date.parse(a.publishDate || a.addDate || "") || 0;
+        return bTime - aTime;
+      });
     return {
       charts,
       pagination: {
@@ -689,7 +711,8 @@ class BeatportClient {
         page: cleanText(payload?.page),
         perPage: Number(payload?.per_page || normalizedPerPage) || normalizedPerPage,
         next: cleanText(payload?.next),
-        previous: cleanText(payload?.previous)
+        previous: cleanText(payload?.previous),
+        source: isStaffPicks ? "staff_picks" : "genre"
       },
       diagnostics: this.diagnostics()
     };

@@ -1264,7 +1264,9 @@ async function handleApi(req, res, url) {
       const result = await beatport.getCharts({
         genreId: url.searchParams.get("genre_id") || url.searchParams.get("genreId") || 15,
         page: url.searchParams.get("page") || 1,
-        perPage: url.searchParams.get("per_page") || url.searchParams.get("perPage") || 50
+        perPage: url.searchParams.get("per_page") || url.searchParams.get("perPage") || 50,
+        source: url.searchParams.get("source") || "genre",
+        query: url.searchParams.get("q") || ""
       });
       return sendJson(res, 200, result || {
         charts: [],
