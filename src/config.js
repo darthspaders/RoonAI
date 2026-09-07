@@ -225,10 +225,12 @@ module.exports = {
     timeoutMs: envNumber("BEATPORT_TIMEOUT_MS", 8000),
     maxResults: envNumber("BEATPORT_MAX_RESULTS", 8),
     requestsPerSecond: envNumber("BEATPORT_REQUESTS_PER_SECOND", 2),
-    cacheTtlMs: envNumber("BEATPORT_CACHE_TTL_MS", 86400000),
+    cacheTtlMs: envNumber("BEATPORT_CACHE_TTL_MS", 43200000),
     maxCacheEntries: envNumber("BEATPORT_MAX_CACHE_ENTRIES", 2000),
     maxRetries: envNumber("BEATPORT_MAX_RETRIES", 2),
-    missingRetryMs: envNumber("BEATPORT_MISSING_RETRY_MS", 604800000)
+    missingRetryMs: envNumber("BEATPORT_MISSING_RETRY_MS", 604800000),
+    chartRefreshIntervalMs: envNumber("BEATPORT_CHART_REFRESH_INTERVAL_MS", 43200000),
+    chartRefreshStartDelayMs: envNumber("BEATPORT_CHART_REFRESH_START_DELAY_MS", 60000)
   },
   beatportMemoryBackfill: {
     enabled: envFlag("BEATPORT_MEMORY_BACKFILL", true),

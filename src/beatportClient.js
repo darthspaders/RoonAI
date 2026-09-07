@@ -8,7 +8,7 @@ const DEFAULT_BASE_URL = "https://api.beatport.com/v4";
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_MAX_RESULTS = 8;
 const DEFAULT_REQUESTS_PER_SECOND = 2;
-const DEFAULT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_MAX_CACHE_ENTRIES = 2000;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_BACKOFF_MS = 1000;
@@ -206,6 +206,7 @@ function extractBeatportTracks(payload) {
 function normalizeBeatportChart(raw = {}) {
   return {
     source: "beatport",
+    kind: firstText(raw.kind) || "chart",
     id: firstText(raw.id),
     title: firstText(raw.name, raw.title),
     slug: firstText(raw.slug),
@@ -219,6 +220,30 @@ function normalizeBeatportChart(raw = {}) {
     genres: Array.isArray(raw.genres) ? raw.genres.map(objectName).filter(Boolean) : [],
     imageUrl: firstImageUrl(raw.image),
     price: raw.price || null,
+    rawJson: raw
+  };
+}
+
+function normalizeBeatportRelease(raw = {}) {
+  const label = objectName(raw.label);
+  const genres = Array.isArray(raw.genres) ? raw.genres.map(objectName).filter(Boolean) : [];
+  return {
+    source: "beatport",
+    kind: "release",
+    id: firstText(raw.id),
+    title: firstText(raw.name, raw.title),
+    slug: firstText(raw.slug),
+    description: firstText(raw.description),
+    curator: label,
+    curatorId: firstText(raw.label?.id),
+    addDate: firstText(raw.created, raw.encoded_date),
+    publishDate: firstText(raw.publish_date, raw.release_date, raw.new_release_date),
+    changeDate: firstText(raw.updated, raw.change_date),
+    trackCount: cleanNumber(raw.track_count || raw.tracks_count || raw.track_count_total) || 0,
+    genres,
+    imageUrl: firstImageUrl(raw.image, raw.images),
+    price: raw.price || null,
+    label,
     rawJson: raw
   };
 }
@@ -237,6 +262,73 @@ function extractBeatportCharts(payload) {
     if (Array.isArray(candidate)) return candidate;
   }
   return [];
+}
+
+function extractBeatportReleases(payload) {
+  if (Array.isArray(payload)) return payload;
+  const candidates = [
+    payload?.releases?.data,
+    payload?.releases?.results,
+    payload?.releases,
+    payload?.results?.releases,
+    payload?.results,
+    payload?.data
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate;
+  }
+  return [];
+}
+
+function feedCollection({ id, title, trackCount = 100, description = "", imageUrl = "", source = "beatport" } = {}) {
+  return {
+    source: "beatport",
+    kind: "track_feed",
+    id,
+    title,
+    slug: id,
+    description,
+    curator: source,
+    curatorId: "",
+    addDate: "",
+    publishDate: "",
+    changeDate: "",
+    trackCount,
+    genres: ["Progressive House"],
+    imageUrl,
+    price: null,
+    rawJson: null
+  };
+}
+
+const PROGRESSIVE_EDITORIAL_QUERIES = {
+  staff_picks: "staff picks progressive house",
+  best_curation: "curation best progressive house",
+  shortlists: "progressive house shortlist",
+  after_hours: "after hours essentials progressive house",
+  closing_essentials: "closing essentials progressive house",
+  crate_diggers: "crate diggers progressive house",
+  dancefloor_essentials: "dancefloor essentials progressive house",
+  festival_essentials: "festival essentials progressive house",
+  in_the_remix: "in the remix progressive house",
+  on_our_radar: "on our radar progressive house",
+  secret_weapons: "secret weapons progressive house",
+  warm_up_essentials: "warm-up essentials progressive house"
+};
+
+function progressiveChartSort(a, b) {
+  const bTime = Date.parse(b.publishDate || b.addDate || "") || 0;
+  const aTime = Date.parse(a.publishDate || a.addDate || "") || 0;
+  return bTime - aTime;
+}
+
+function chartLooksProgressive(chart = {}) {
+  const haystack = [chart.title, chart.slug, ...(chart.genres || [])].join(" ").toLowerCase();
+  return haystack.includes("progressive");
+}
+
+function chartHaystack(chart = {}) {
+  return [chart.title, chart.slug, chart.curator, ...(chart.genres || [])].join(" ").toLowerCase();
 }
 
 function normalizedChartTrack(raw = {}, index = 0) {
@@ -674,36 +766,58 @@ class BeatportClient {
   async getCharts({ genreId = 15, page = 1, perPage = 50, source = "genre", query = "" } = {}) {
     const normalizedPerPage = Math.max(1, Math.min(100, Number(perPage) || 50));
     const normalizedPage = Math.max(1, Number(page) || 1);
-    const normalizedSource = cleanText(source).toLowerCase();
-    const isStaffPicks = normalizedSource === "staff_picks" || normalizedSource === "staff-picks";
+    const normalizedSource = cleanText(source).toLowerCase().replace(/-/g, "_");
+    const editorialQuery = PROGRESSIVE_EDITORIAL_QUERIES[normalizedSource] || "";
     const params = {
       page: normalizedPage,
       per_page: normalizedPerPage
     };
     const cleanGenreId = cleanText(genreId).replace(/[^0-9]/g, "");
     let payload = null;
-    if (isStaffPicks) {
+    let charts = [];
+    if (normalizedSource === "top_tracks") {
+      charts = [feedCollection({
+        id: "tracks:top",
+        title: "Top 100 Progressive House Tracks",
+        description: "Current Beatport Progressive House track feed",
+        trackCount: 100,
+        source: "Beatport"
+      })];
+    } else if (normalizedSource === "hype_tracks") {
+      charts = [feedCollection({
+        id: "tracks:hype",
+        title: "Hype Progressive House Tracks",
+        description: "Current Beatport Hype Progressive House track feed",
+        trackCount: 100,
+        source: "Beatport Hype"
+      })];
+    } else if (normalizedSource === "releases" || normalizedSource === "hype_releases") {
+      if (cleanGenreId) params.genre_id = cleanGenreId;
+      if (normalizedSource === "hype_releases") params.is_hype = true;
+      payload = await this.requestJson("/catalog/releases/", params);
+      charts = extractBeatportReleases(payload).map((release) => {
+        const normalized = normalizeBeatportRelease(release);
+        return {
+          ...normalized,
+          id: `release:${normalized.id}`,
+          sourceId: normalized.id
+        };
+      });
+    } else if (editorialQuery) {
       payload = await this.requestJson("/catalog/search/", {
         ...params,
-        q: cleanText(query) || "staff picks progressive house"
+        q: cleanText(query) || editorialQuery
       });
+      charts = extractBeatportCharts(payload)
+        .map(normalizeBeatportChart)
+        .filter(chartLooksProgressive)
+        .filter((chart) => normalizedSource !== "staff_picks" || chartHaystack(chart).includes("staff"))
+        .sort(progressiveChartSort);
     } else {
       if (cleanGenreId) params.genre_id = cleanGenreId;
       payload = await this.requestJson("/catalog/charts/", params);
+      charts = extractBeatportCharts(payload).map(normalizeBeatportChart);
     }
-    const charts = extractBeatportCharts(payload)
-      .map(normalizeBeatportChart)
-      .filter((chart) => {
-        if (!isStaffPicks) return true;
-        const haystack = [chart.title, chart.slug, ...(chart.genres || [])].join(" ").toLowerCase();
-        return haystack.includes("staff") && haystack.includes("progressive");
-      })
-      .sort((a, b) => {
-        if (!isStaffPicks) return 0;
-        const bTime = Date.parse(b.publishDate || b.addDate || "") || 0;
-        const aTime = Date.parse(a.publishDate || a.addDate || "") || 0;
-        return bTime - aTime;
-      });
     return {
       charts,
       pagination: {
@@ -712,25 +826,21 @@ class BeatportClient {
         perPage: Number(payload?.per_page || normalizedPerPage) || normalizedPerPage,
         next: cleanText(payload?.next),
         previous: cleanText(payload?.previous),
-        source: isStaffPicks ? "staff_picks" : "genre"
+        source: normalizedSource
       },
       diagnostics: this.diagnostics()
     };
   }
 
-  async getChart(chartId, { page = 1, perPage = 100, resolveMissingArtwork = true } = {}) {
-    const id = cleanText(chartId).replace(/[^0-9]/g, "");
-    if (!id) throw new Error("Beatport chart ID is required.");
-    const chart = await this.requestJson(`/catalog/charts/${encodeURIComponent(id)}/`);
-    if (!chart) return null;
-
+  async pagedTracks(pathname, { page = 1, perPage = 100, params = {}, maxPages = 100 } = {}) {
     const normalizedPerPage = Math.max(1, Math.min(100, Number(perPage) || 100));
     let currentPage = Math.max(1, Number(page) || 1);
     const tracks = [];
     const pages = [];
     let next = "";
     do {
-      const payload = await this.requestJson(`/catalog/charts/${encodeURIComponent(id)}/tracks/`, {
+      const payload = await this.requestJson(pathname, {
+        ...params,
         page: currentPage,
         per_page: normalizedPerPage
       });
@@ -748,7 +858,70 @@ class BeatportClient {
       });
       next = cleanText(payload.next);
       currentPage += 1;
-    } while (next && currentPage < 100);
+    } while (next && pages.length < Math.max(1, Number(maxPages) || 1) && currentPage < 100);
+    return { tracks, pages, next };
+  }
+
+  async getTrackFeed(feedId, { page = 1, perPage = 100, genreId = 15 } = {}) {
+    const id = cleanText(feedId).toLowerCase();
+    const isHype = id === "tracks:hype" || id === "hype";
+    const cleanGenreId = cleanText(genreId).replace(/[^0-9]/g, "") || "15";
+    const params = { genre_id: cleanGenreId };
+    if (isHype) params.is_hype = true;
+    const { tracks, pages, next } = await this.pagedTracks("/catalog/tracks/", { page, perPage, params, maxPages: 1 });
+    return {
+      chart: feedCollection({
+        id: isHype ? "tracks:hype" : "tracks:top",
+        title: isHype ? "Hype Progressive House Tracks" : "Top 100 Progressive House Tracks",
+        trackCount: pages[0]?.count || tracks.length,
+        source: isHype ? "Beatport Hype" : "Beatport"
+      }),
+      pagination: {
+        count: pages[0]?.count || tracks.length,
+        pageCount: pages.length,
+        complete: !next,
+        next,
+        pages
+      },
+      tracks,
+      diagnostics: this.diagnostics()
+    };
+  }
+
+  async getRelease(releaseId, { page = 1, perPage = 100 } = {}) {
+    const id = cleanText(releaseId).replace(/[^0-9]/g, "");
+    if (!id) throw new Error("Beatport release ID is required.");
+    const release = await this.requestJson(`/catalog/releases/${encodeURIComponent(id)}/`);
+    if (!release) return null;
+    const { tracks, pages, next } = await this.pagedTracks(`/catalog/releases/${encodeURIComponent(id)}/tracks/`, { page, perPage });
+    return {
+      chart: {
+        ...normalizeBeatportRelease(release),
+        id: `release:${id}`,
+        sourceId: id
+      },
+      pagination: {
+        count: pages[0]?.count || tracks.length,
+        pageCount: pages.length,
+        complete: !next,
+        next,
+        pages
+      },
+      tracks,
+      diagnostics: this.diagnostics()
+    };
+  }
+
+  async getChart(chartId, { page = 1, perPage = 100, resolveMissingArtwork = true } = {}) {
+    const requestedId = cleanText(chartId);
+    if (/^tracks:(?:top|hype)$/i.test(requestedId)) return this.getTrackFeed(requestedId, { page, perPage });
+    if (/^release:\d+$/i.test(requestedId)) return this.getRelease(requestedId.split(":").pop(), { page, perPage });
+    const id = requestedId.replace(/[^0-9]/g, "");
+    if (!id) throw new Error("Beatport chart ID is required.");
+    const chart = await this.requestJson(`/catalog/charts/${encodeURIComponent(id)}/`);
+    if (!chart) return null;
+
+    const { tracks, pages, next } = await this.pagedTracks(`/catalog/charts/${encodeURIComponent(id)}/tracks/`, { page, perPage });
 
     if (resolveMissingArtwork) {
       for (const track of tracks) {

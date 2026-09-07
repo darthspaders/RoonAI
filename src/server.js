@@ -327,6 +327,26 @@ const {
   summarizeZoneTrack
 });
 let beatportMemoryBackfillRunning = false;
+const BEATPORT_PROGRESSIVE_PAGE_SOURCES = [
+  "staff_picks",
+  "best_curation",
+  "shortlists",
+  "after_hours",
+  "closing_essentials",
+  "crate_diggers",
+  "dancefloor_essentials",
+  "festival_essentials",
+  "in_the_remix",
+  "on_our_radar",
+  "secret_weapons",
+  "warm_up_essentials",
+  "top_tracks",
+  "hype_tracks",
+  "releases",
+  "hype_releases",
+  "genre"
+];
+
 function scheduleBeatportMemoryBackfill(delayMs = config.beatportMemoryBackfill.startDelayMs) {
   if (!config.beatportMemoryBackfill.enabled || !config.beatport.enabled || !beatport.isConfigured?.() || !musicMemory?.enabled) return;
   const waitMs = Math.max(30_000, Number(delayMs) || 0);
@@ -351,6 +371,30 @@ function scheduleBeatportMemoryBackfill(delayMs = config.beatportMemoryBackfill.
     } finally {
       beatportMemoryBackfillRunning = false;
       scheduleBeatportMemoryBackfill(config.beatportMemoryBackfill.intervalMs);
+    }
+  }, waitMs);
+  timer.unref?.();
+}
+
+let beatportChartRefreshRunning = false;
+function scheduleBeatportChartRefresh(delayMs = config.beatport.chartRefreshStartDelayMs) {
+  if (!config.beatport.enabled || !beatport.isConfigured?.()) return;
+  const waitMs = Math.max(30_000, Number(delayMs) || 0);
+  const timer = setTimeout(async () => {
+    if (beatportChartRefreshRunning) {
+      scheduleBeatportChartRefresh(config.beatport.chartRefreshIntervalMs);
+      return;
+    }
+    beatportChartRefreshRunning = true;
+    try {
+      for (const source of BEATPORT_PROGRESSIVE_PAGE_SOURCES) {
+        await beatport.getCharts({ source, genreId: 15, perPage: 50 });
+      }
+    } catch (error) {
+      console.warn("[beatport-chart-refresh] Failed:", error.message);
+    } finally {
+      beatportChartRefreshRunning = false;
+      scheduleBeatportChartRefresh(config.beatport.chartRefreshIntervalMs);
     }
   }, waitMs);
   timer.unref?.();
@@ -1283,7 +1327,7 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && (pathname === "/api/beatport/chart" || pathname.startsWith("/api/beatport/charts/"))) {
     const chartId = pathname.startsWith("/api/beatport/charts/")
-      ? pathname.split("/").filter(Boolean).at(-1)
+      ? decodeURIComponent(pathname.split("/").filter(Boolean).at(-1) || "")
       : url.searchParams.get("id");
     try {
       const result = await beatport.getChart(chartId, {
@@ -2046,4 +2090,5 @@ server.listen(config.port, config.host, () => {
   console.log("Enable the extension in Roon Settings > Extensions if prompted.");
   scheduleStandbyRefresh(45_000);
   scheduleBeatportMemoryBackfill();
+  scheduleBeatportChartRefresh();
 });

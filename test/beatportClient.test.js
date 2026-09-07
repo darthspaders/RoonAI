@@ -183,6 +183,142 @@ test("Beatport staff picks chart list uses search and keeps progressive staff ch
   assert.equal(calls[0].searchParams.get("q"), "staff picks progressive house");
 });
 
+test("Beatport progressive editorial sources use family-specific chart searches", async () => {
+  const calls = [];
+  const tokenFile = tempTokenFile();
+  new BeatportTokenStore(tokenFile).save({ access_token: "chart-token", expires_in: 3600 });
+  const client = new BeatportClient({
+    enabled: true,
+    tokenFile,
+    requestsPerSecond: 100,
+    fetchImpl: async (url) => {
+      calls.push(new URL(url));
+      return jsonResponse(200, {
+        charts: [{
+          id: 297146,
+          name: "Secret Weapons: Progressive House",
+          publish_date: "2026-08-01T00:00:00-06:00",
+          track_count: 10,
+          genres: [{ name: "Progressive House" }]
+        }, {
+          id: 1,
+          name: "Secret Weapons: Tech House",
+          publish_date: "2026-09-01T00:00:00-06:00",
+          track_count: 10,
+          genres: [{ name: "Tech House" }]
+        }]
+      });
+    },
+    logger: null
+  });
+
+  const result = await client.getCharts({ source: "secret_weapons" });
+
+  assert.equal(result.pagination.source, "secret_weapons");
+  assert.equal(result.charts.length, 1);
+  assert.equal(result.charts[0].title, "Secret Weapons: Progressive House");
+  assert.equal(calls[0].pathname, "/v4/catalog/search/");
+  assert.equal(calls[0].searchParams.get("q"), "secret weapons progressive house");
+});
+
+test("Beatport progressive page track feeds expose queueable collections", async () => {
+  const calls = [];
+  const tokenFile = tempTokenFile();
+  new BeatportTokenStore(tokenFile).save({ access_token: "chart-token", expires_in: 3600 });
+  const client = new BeatportClient({
+    enabled: true,
+    tokenFile,
+    requestsPerSecond: 100,
+    fetchImpl: async (url) => {
+      calls.push(new URL(url));
+      return jsonResponse(200, {
+        next: "page-2",
+        count: 10000,
+        page: "1/100",
+        per_page: 100,
+        results: [{
+          id: 29956219,
+          name: "Bargard",
+          mix_name: "Original Mix",
+          artists: [{ name: "Jean Vayat" }],
+          release: { id: 7432783, name: "Bargard (Remix)", image: { uri: "https://geo-media.beatport.com/bargard.jpg" } },
+          genre: { name: "Progressive House" },
+          bpm: 124
+        }]
+      });
+    },
+    logger: null
+  });
+
+  const choices = await client.getCharts({ source: "top_tracks" });
+  const result = await client.getChart(choices.charts[0].id);
+
+  assert.equal(choices.charts[0].id, "tracks:top");
+  assert.equal(result.chart.kind, "track_feed");
+  assert.equal(result.tracks.length, 1);
+  assert.equal(result.tracks[0].artist, "Jean Vayat");
+  assert.equal(result.pagination.complete, false);
+  assert.equal(calls.filter((url) => url.pathname.endsWith("/catalog/tracks/")).length, 1);
+});
+
+test("Beatport progressive releases expand to release tracks", async () => {
+  const calls = [];
+  const tokenFile = tempTokenFile();
+  new BeatportTokenStore(tokenFile).save({ access_token: "chart-token", expires_in: 3600 });
+  const client = new BeatportClient({
+    enabled: true,
+    tokenFile,
+    requestsPerSecond: 100,
+    fetchImpl: async (url) => {
+      calls.push(new URL(url));
+      if (url.includes("/catalog/releases/7432783/tracks/")) {
+        return jsonResponse(200, {
+          next: null,
+          count: 1,
+          results: [{
+            id: 301,
+            name: "Release Cut",
+            artists: [{ name: "Release Artist" }],
+            release: { id: 7432783, name: "Bargard (Remix)", image: { uri: "https://geo-media.beatport.com/release.jpg" } },
+            genre: { name: "Progressive House" }
+          }]
+        });
+      }
+      if (url.includes("/catalog/releases/7432783/")) {
+        return jsonResponse(200, {
+          id: 7432783,
+          name: "Bargard (Remix)",
+          label: { id: 10, name: "Progressive Label" },
+          publish_date: "2026-09-07",
+          track_count: 1,
+          image: { uri: "https://geo-media.beatport.com/release.jpg" }
+        });
+      }
+      return jsonResponse(200, {
+        count: 1,
+        results: [{
+          id: 7432783,
+          name: "Bargard (Remix)",
+          label: { id: 10, name: "Progressive Label" },
+          publish_date: "2026-09-07",
+          track_count: 1
+        }]
+      });
+    },
+    logger: null
+  });
+
+  const choices = await client.getCharts({ source: "releases" });
+  const result = await client.getChart(choices.charts[0].id);
+
+  assert.equal(choices.charts[0].id, "release:7432783");
+  assert.equal(result.chart.kind, "release");
+  assert.equal(result.chart.id, "release:7432783");
+  assert.equal(result.tracks.length, 1);
+  assert.equal(result.tracks[0].title, "Release Cut");
+  assert.equal(result.tracks[0].imageUrl, "https://geo-media.beatport.com/release.jpg");
+});
+
 test("Beatport chart lookup follows pages and normalizes queueable tracks", async () => {
   const calls = [];
   const tokenFile = tempTokenFile();

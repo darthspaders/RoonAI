@@ -4914,8 +4914,10 @@ async function refreshMusicMemory({ append = false } = {}) {
 }
 
 function beatportChartOptionLabel(chart = {}) {
+  const kind = chart.kind === "release" ? "Release" : chart.kind === "track_feed" ? "Feed" : "Chart";
   const parts = [
     chart.title || `Chart ${chart.id || ""}`.trim(),
+    kind,
     chart.curator || "",
     chart.publishDate ? formatDateTime(Date.parse(chart.publishDate)) : "",
     chart.trackCount ? `${chart.trackCount} tracks` : ""
@@ -4931,7 +4933,7 @@ function renderBeatportChartSelect() {
   if (source) source.value = state.beatportChartSource || "staff_picks";
   const selectedId = state.beatportChartId || input?.value || "901032";
   if (state.beatportChartsLoading && !state.beatportCharts.length) {
-    select.innerHTML = `<option value="">Loading ${state.beatportChartSource === "staff_picks" ? "Staff Picks" : "Progressive House"} charts...</option>`;
+    select.innerHTML = `<option value="">Loading ${beatportChartSourceLabel(state.beatportChartSource)}...</option>`;
     select.disabled = true;
     return;
   }
@@ -4945,8 +4947,30 @@ function renderBeatportChartSelect() {
   }
   select.innerHTML = options.length
     ? options.join("")
-    : `<option value="">No ${state.beatportChartSource === "staff_picks" ? "Staff Picks" : "Progressive House"} charts found</option>`;
+    : `<option value="">No ${beatportChartSourceLabel(state.beatportChartSource)} found</option>`;
   select.disabled = !options.length;
+}
+
+function beatportChartSourceLabel(source = "") {
+  return {
+    staff_picks: "Staff Picks",
+    best_curation: "Best of Curation",
+    shortlists: "The Shortlists",
+    after_hours: "After Hours Essentials",
+    closing_essentials: "Closing Essentials",
+    crate_diggers: "Crate Diggers",
+    dancefloor_essentials: "Dancefloor Essentials",
+    festival_essentials: "Festival Essentials",
+    in_the_remix: "In The Remix",
+    on_our_radar: "On Our Radar",
+    secret_weapons: "Secret Weapons",
+    warm_up_essentials: "Warm-Up Essentials",
+    top_tracks: "Top Tracks",
+    hype_tracks: "Hype Tracks",
+    releases: "New Releases",
+    hype_releases: "Hype Releases",
+    genre: "DJ / latest charts"
+  }[source] || "Beatport collections";
 }
 
 async function refreshBeatportChartList() {
@@ -5085,8 +5109,9 @@ function renderBeatportChart() {
 
 async function refreshBeatportChart() {
   const input = $("#beatportChartId");
-  const chartId = (input?.value || state.beatportChartId || "901032").trim().replace(/[^0-9]/g, "");
-  if (input) input.value = chartId;
+  const manualId = (input?.value || "").trim().replace(/[^0-9]/g, "");
+  const chartId = manualId || state.beatportChartId || "901032";
+  if (input) input.value = /^\d+$/.test(chartId) ? chartId : "";
   if (!chartId) throw new Error("Enter a Beatport chart ID.");
   state.beatportChartLoading = true;
   state.beatportChartId = chartId;
@@ -6577,10 +6602,10 @@ $("#beatportChartSource")?.addEventListener("change", (event) => {
 });
 
 $("#beatportChartSelect")?.addEventListener("change", (event) => {
-  const chartId = String(event.target.value || "").replace(/[^0-9]/g, "");
+  const chartId = String(event.target.value || "").trim();
   if (!chartId) return;
   const input = $("#beatportChartId");
-  if (input) input.value = chartId;
+  if (input) input.value = /^\d+$/.test(chartId) ? chartId : "";
   state.beatportChartId = chartId;
   localStorage.setItem("beatportChartId", chartId);
   refreshBeatportChart().catch((error) => {
