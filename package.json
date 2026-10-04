@@ -1,6 +1,6 @@
 {
   "name": "roon-local-ai",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local music discovery and playback assistant for Roon and Lyrion",
   "main": "src/server.js",
   "scripts": {
