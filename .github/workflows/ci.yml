@@ -28,6 +28,7 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Build source-only image
@@ -54,3 +55,5 @@ jobs:
       - name: Stop smoke container
         if: always()
         run: docker rm -f rabbit-hole-smoke || true
+      - name: Check crash recovery with persistent data and live-owner exclusion
+        run: bash scripts/test-docker-lock-recovery.sh rabbit-hole:ci

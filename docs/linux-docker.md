@@ -92,6 +92,9 @@ along with favorites, ratings, tokens and databases. `.env` remains on the host
 and is supplied to the container. Ordinary rebuilds and container replacements
 retain this state; deleting the named volume removes it.
 
+Run only one Rabbit Hole instance per data volume. The process lock does not
+provide distributed locking between containers with separate PID namespaces.
+
 Back up `.env`, the data volume and any existing `config.json` privately.
 For an existing installation, stop its Rabbit Hole process/container before
 copying SQLite databases or pairing files. Keep LMS/HQPlayer running if they
@@ -117,6 +120,27 @@ such as `/mnt/user/appdata/rabbit-hole/data:/app/data`. Create that directory an
 give UID/GID 1000 read/write access before starting the container. Preserve your
 existing private files when updating. Do not put a private `.env` or data
 directory in the image build context.
+
+## Update and recover after a crash
+
+Version **0.2.1** automatically recovers known stale startup locks after a crash
+or container replacement when their old owner can be identified as no longer
+running. Update the source and rebuild while retaining the existing private
+volume:
+
+```sh
+git pull
+docker compose up -d --build
+```
+
+Keep the same data-volume mapping; do not delete the volume or use
+`docker compose down -v`. Pairing, favorites, tokens and databases stay in it.
+
+An unknown owner or invalid lock record conservatively blocks startup. If manual
+recovery is needed, first stop every Rabbit Hole process/container using that
+volume and confirm no lock owner remains running. Only then remove the stale
+`/app/data/rabbit-hole.app.lock` file from the persistent data and start the app
+again. Preserve the rest of the data.
 
 ## Existing node:22-slim Unraid template
 

@@ -70,6 +70,12 @@ loopback audio relays, and a persistent volume for private data and Roon pairing
 See [Linux, Docker and Unraid setup](docs/linux-docker.md) for LMS authentication,
 network topology, data migration and an existing `node:22-slim` installation.
 
+Version **0.2.1** recovers known stale startup locks after Docker crashes or
+container replacement. Update with `git pull` and `docker compose up -d --build`,
+retaining the existing private data volume. Run one Rabbit Hole instance per
+data volume; the [Docker guide](docs/linux-docker.md#update-and-recover-after-a-crash)
+covers conservative lock recovery when the old owner cannot be verified.
+
 ## Run directly with Node
 
 ```sh
