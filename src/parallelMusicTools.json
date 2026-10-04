@@ -1,0 +1,1131 @@
+[
+  {
+    "name": "lyrion_players",
+    "description": "Discover Lyrion players separately from Roon.",
+    "path": "/api/lyrion/players",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_browse",
+    "description": "Browse a Lyrion source token or local NAS. Without token/source lists sources. Preserve returned actions and exact referenceId; never title-rematch.",
+    "path": "/api/lyrion/browse",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "local"
+          ]
+        },
+        "query": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_search",
+    "description": "Search installed Lyrion sources. SoundCloud source ID is squeezecloud. Inspect duration in seconds and returned errors/categories; paginate browse requests for more. Preserve exact referenceId, URL and soundcloudUrn.",
+    "path": "/api/lyrion/search",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "playerId",
+        "query"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_status",
+    "description": "Read Lyrion now playing and queue independently of Roon.",
+    "path": "/api/lyrion/status",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_playback",
+    "description": "Authorized Lyrion playback only. With token/referenceId/soundcloudTrack use play/add/next on the exact item. Without one use transport. Never retry an uncertain write automatically.",
+    "path": "/api/lyrion/playback",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "referenceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "soundcloudTrack": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact numeric SoundCloud track ID, soundcloud:tracks:URN or soundcloud:// playable URL. No title matching."
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "play",
+            "pause",
+            "next",
+            "previous",
+            "clear",
+            "add",
+            "status"
+          ]
+        }
+      },
+      "required": [
+        "playerId",
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_select_player",
+    "description": "Select the active Lyrion player without changing Roon selection or starting playback.",
+    "path": "/api/lyrion/player",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_sources",
+    "description": "List installed Lyrion sources/services and their browse actions.",
+    "path": "/api/lyrion/sources",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_now_playing",
+    "description": "Read current Lyrion track, exact URL, source, position and duration.",
+    "path": "/api/lyrion/now-playing",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_queue",
+    "description": "Show the Lyrion queue; use offset and limit to page.",
+    "path": "/api/lyrion/queue",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_queue_item",
+    "description": "Append using an exact discovery reference, action-specific token, or SoundCloud URN. Requires user playback/queue authorization. Never title-rematch or retry an uncertain write.",
+    "path": "/api/lyrion/queue",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "referenceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "soundcloudTrack": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact numeric SoundCloud track ID, soundcloud:tracks:URN or soundcloud:// playable URL. No title matching."
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {
+      "action": "add"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_queue_next",
+    "description": "Insert next using an exact discovery reference, action-specific token, or SoundCloud URN. Requires user playback/queue authorization. Never title-rematch or retry an uncertain write.",
+    "path": "/api/lyrion/queue",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "referenceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "soundcloudTrack": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact numeric SoundCloud track ID, soundcloud:tracks:URN or soundcloud:// playable URL. No title matching."
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {
+      "action": "next"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_play_now",
+    "description": "Play now, replacing the current queue using an exact discovery reference, action-specific token, or SoundCloud URN. Requires user playback/queue authorization. Never title-rematch or retry an uncertain write.",
+    "path": "/api/lyrion/queue",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "referenceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "soundcloudTrack": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact numeric SoundCloud track ID, soundcloud:tracks:URN or soundcloud:// playable URL. No title matching."
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {
+      "action": "play"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_play",
+    "description": "Apply play to only the selected Lyrion player. Requires explicit user authorization.",
+    "path": "/api/lyrion/control",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {
+      "action": "play"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_pause",
+    "description": "Apply pause to only the selected Lyrion player. Requires explicit user authorization.",
+    "path": "/api/lyrion/control",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {
+      "action": "pause"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_skip",
+    "description": "Apply skip to only the selected Lyrion player. Requires explicit user authorization.",
+    "path": "/api/lyrion/control",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {
+      "action": "next"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_clear_queue",
+    "description": "Apply clear queue to only the selected Lyrion player. Requires explicit user authorization.",
+    "path": "/api/lyrion/control",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {
+      "action": "clear"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_favorites",
+    "description": "Browse native Lyrion favorites across services; these are separate from Rabbit Hole SiriusXM channel shortcuts.",
+    "path": "/api/lyrion/native-favorites",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_add_favorite",
+    "description": "add the exact saved discovery in native Lyrion favorites, where supported.",
+    "path": "/api/lyrion/native-favorites",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "referenceId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "playerId",
+        "referenceId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {
+      "action": "add"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_remove_favorite",
+    "description": "remove the exact saved discovery in native Lyrion favorites, where supported.",
+    "path": "/api/lyrion/native-favorites",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "referenceId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "playerId",
+        "referenceId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {
+      "action": "remove"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lyrion_recent_discoveries",
+    "description": "Return recent unique exact Lyrion discoveries in newest-first order. source SoundCloud selects SoundCloud only. Does not run a new search.",
+    "path": "/api/lyrion/discoveries",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "soundcloud_connection",
+    "description": "Check whether direct SoundCloud playlist OAuth is configured and connected. Never returns credentials.",
+    "path": "/api/soundcloud/status",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "soundcloud_connect",
+    "description": "Start the configured SoundCloud OAuth connection. Returns an authorization URL for the user; never ask for passwords or secrets in chat.",
+    "path": "/api/soundcloud/connect",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "soundcloud_list_playlists",
+    "description": "List all playlists owned by the connected SoundCloud account.",
+    "path": "/api/soundcloud/playlists",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "soundcloud_find_playlist",
+    "description": "Find an exact owned playlist title, default Synapse Finds. Returns exact identity and tracks; ambiguous names fail.",
+    "path": "/api/soundcloud/playlist",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playlistId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact SoundCloud playlist URN or ID; omit to use the title."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact playlist title; defaults to Synapse Finds."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "soundcloud_playlist_tracks",
+    "description": "List every track in an exact SoundCloud playlist, preserving original URNs and URLs.",
+    "path": "/api/soundcloud/playlist",
+    "method": "GET",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playlistId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact SoundCloud playlist URN or ID; omit to use the title."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact playlist title; defaults to Synapse Finds."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "soundcloud_create_playlist",
+    "description": "Create or reuse an exact-title SoundCloud playlist. Defaults to private Synapse Finds; create only when the user requests it.",
+    "path": "/api/soundcloud/playlists/create",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sharing": {
+          "type": "string",
+          "enum": [
+            "private",
+            "public"
+          ]
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "soundcloud_add_to_playlist",
+    "description": "Add exact SoundCloud tracks, saved Lyrion referenceIds, or recentCount discoveries to Synapse Finds (or specified playlist). Avoids duplicate additions. createIfMissing must only be true when creation is authorized. No title matching. Never retry an uncertain write automatically.",
+    "path": "/api/soundcloud/playlists/add",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playlistId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact SoundCloud playlist URN or ID; omit to use the title."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact playlist title; defaults to Synapse Finds."
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 100
+        },
+        "referenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 100
+        },
+        "recentCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "createIfMissing": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "soundcloud_remove_from_playlist",
+    "description": "Remove only the explicitly specified exact SoundCloud URNs/URLs or referenceIds from a playlist; preserves all other entries. No title matching.",
+    "path": "/api/soundcloud/playlists/remove",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playlistId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact SoundCloud playlist URN or ID; omit to use the title."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact playlist title; defaults to Synapse Finds."
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 100
+        },
+        "referenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxItems": 100
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "siriusxm_search_shows",
+    "description": "Search SiriusXM on-demand shows and episodes. Preserve returned exact type and id for browsing and playback. Does not start audio.",
+    "path": "/api/siriusxm/ondemand/search",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "siriusxm_show_episodes",
+    "description": "List available episodes of an exact SiriusXM show returned by siriusxm_search_shows. Does not start audio.",
+    "path": "/api/siriusxm/ondemand/episodes",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "show",
+            "show-podcast"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "siriusxm_queue_episode",
+    "description": "On explicit playback or queue request, play an exact SiriusXM episode through Lyrion. play replaces the selected player queue; add appends; next inserts after current. Use exact type/id from search or episode browse, never artist/title rematching.",
+    "path": "/api/siriusxm/ondemand/queue",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "episode-audio",
+            "episode-podcast"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "play",
+            "add",
+            "next"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "playerId",
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "siriusxm_search_artist_stations",
+    "description": "Search personalized SiriusXM artist radio stations, not broadcast channels. Preserve exact returned station id.",
+    "path": "/api/siriusxm/ondemand/artist/search",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "siriusxm_library_artist_stations",
+    "description": "List artist stations saved in the SiriusXM account library.",
+    "path": "/api/siriusxm/ondemand/artist/library",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "siriusxm_play_artist_station",
+    "description": "On an explicit request, replace the selected Lyrion queue with a personalized SiriusXM artist station and automatically replenish songs. Use an exact station id returned by search or library.",
+    "path": "/api/siriusxm/ondemand/artist/play",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "siriusxm_stop_artist_station",
+    "description": "Stop automatically adding songs for the selected Lyrion player. Keep already queued tracks and current playback.",
+    "path": "/api/siriusxm/ondemand/artist/stop",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "playerId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "playerId"
+      ],
+      "additionalProperties": false
+    },
+    "defaults": {},
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  }
+]

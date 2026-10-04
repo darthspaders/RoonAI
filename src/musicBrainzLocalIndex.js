@@ -2,10 +2,26 @@
 
 const fs = require("fs");
 const path = require("path");
+const { StringDecoder } = require("string_decoder");
+const { setImmediate: yieldToEventLoop } = require("node:timers/promises");
 
 const INDEX_VERSION = 1;
 const DEFAULT_MAX_RESULTS = 8;
 const MAX_OPEN_BUCKET_STREAMS = 64;
+
+function finishScan(steps) {
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+async function finishScanAsync(steps) {
+  while (true) {
+    await yieldToEventLoop();
+    const step = steps.next();
+    if (step.done) return step.value;
+  }
+}
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -228,21 +244,84 @@ class MusicBrainzLocalIndex {
     }
   }
 
-  readBucket(bucket) {
+  forEachBucketRecord(bucket, visitor) {
+    return finishScan(this.bucketRecordSteps(bucket, visitor));
+  }
+
+  *bucketRecordSteps(bucket, visitor) {
     const file = path.join(this.indexDir, "buckets", `${safeFilePart(bucket)}.jsonl`);
-    if (!fs.existsSync(file)) return [];
+    if (!fs.existsSync(file)) return 0;
+
+    const descriptor = fs.openSync(file, "r");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    const decoder = new StringDecoder("utf8");
+    let remainder = "";
+    let count = 0;
+    let stopped = false;
+    const logger = this.logger;
+
+    const consume = function* (text) {
+      remainder += text;
+      const lines = remainder.split(/\r?\n/);
+      remainder = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          count += 1;
+          if (visitor(JSON.parse(line)) === false) {
+            stopped = true;
+            return;
+          }
+        } catch (error) {
+          logger?.debug?.("MusicBrainz local index malformed bucket row", {
+            bucket,
+            error: error.message
+          });
+        }
+        if (count % 128 === 0) yield;
+      }
+    };
+
     try {
-      return fs.readFileSync(file, "utf8")
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .map((line) => JSON.parse(line));
+      while (!stopped) {
+        const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+        if (!bytesRead) break;
+        yield* consume(decoder.write(buffer.subarray(0, bytesRead)));
+        yield;
+      }
+      if (!stopped) yield* consume(decoder.end());
+      if (!stopped && remainder.trim()) {
+        try {
+          count += 1;
+          visitor(JSON.parse(remainder));
+        } catch (error) {
+          this.logger?.debug?.("MusicBrainz local index malformed bucket row", {
+            bucket,
+            error: error.message
+          });
+        }
+      }
     } catch (error) {
       this.logger?.debug?.("MusicBrainz local index bucket read failed", { bucket, error: error.message });
-      return [];
+    } finally {
+      fs.closeSync(descriptor);
     }
+    return count;
+  }
+
+  readBucket(bucket) {
+    const rows = [];
+    this.forEachBucketRecord(bucket, (recording) => {
+      rows.push(recording);
+    });
+    return rows;
   }
 
   readIsrcRefs(isrc) {
+    return finishScan(this.isrcRefSteps(isrc));
+  }
+
+  *isrcRefSteps(isrc) {
     const clean = cleanIsrc(isrc);
     if (!clean) return [];
     const jsonFile = path.join(this.indexDir, "isrc", `${bucketForIsrc(clean)}.json`);
@@ -252,33 +331,82 @@ class MusicBrainzLocalIndex {
     const jsonlFile = path.join(this.indexDir, "isrc", `${bucketForIsrc(clean)}.jsonl`);
     if (!fs.existsSync(jsonlFile)) return [];
     const refs = [];
+    const descriptor = fs.openSync(jsonlFile, "r");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    const decoder = new StringDecoder("utf8");
+    let remainder = "";
+    let count = 0;
+    const logger = this.logger;
+    const consume = function* (text) {
+      remainder += text;
+      const lines = remainder.split(/\r?\n/);
+      remainder = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const row = JSON.parse(line);
+          if (cleanIsrc(row.isrc) === clean) refs.push(row);
+        } catch (error) {
+          logger?.debug?.("MusicBrainz local index malformed ISRC row", { isrc: clean, error: error.message });
+        }
+        if (++count % 128 === 0) yield;
+      }
+    };
     try {
-      for (const line of fs.readFileSync(jsonlFile, "utf8").split(/\r?\n/)) {
-        if (!line) continue;
-        const row = JSON.parse(line);
-        if (cleanIsrc(row.isrc) === clean) refs.push(row);
+      while (true) {
+        const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+        if (!bytesRead) break;
+        yield* consume(decoder.write(buffer.subarray(0, bytesRead)));
+        yield;
+      }
+      yield* consume(decoder.end());
+      if (remainder.trim()) {
+        try {
+          const row = JSON.parse(remainder);
+          if (cleanIsrc(row.isrc) === clean) refs.push(row);
+        } catch (error) {
+          this.logger?.debug?.("MusicBrainz local index malformed ISRC row", { isrc: clean, error: error.message });
+        }
       }
     } catch (error) {
       this.logger?.debug?.("MusicBrainz local index ISRC read failed", { isrc: clean, error: error.message });
       return [];
+    } finally {
+      fs.closeSync(descriptor);
     }
     return refs;
   }
 
   searchByIsrc(isrc) {
+    return finishScan(this.isrcSearchSteps(isrc));
+  }
+
+  *isrcSearchSteps(isrc) {
     const clean = cleanIsrc(isrc);
     if (!clean) return [];
-    const refs = this.readIsrcRefs(clean);
+    const refs = yield* this.isrcRefSteps(clean);
     const out = [];
     for (const ref of refs) {
-      const bucketRows = this.readBucket(ref.bucket);
-      const match = bucketRows.find((row) => row.id === ref.id && row.title === ref.title);
-      if (match) out.push(match);
+      yield* this.bucketRecordSteps(ref.bucket, (row) => {
+        if (row.id !== ref.id || row.title !== ref.title) return;
+        out.push(row);
+        return false;
+      });
     }
     return out;
   }
 
   searchRecordings(track = {}) {
+    return finishScan(this.recordingSearchSteps(track));
+  }
+
+  // Live enrichment must release the event loop while scanning large title
+  // buckets. Offline imports/evaluators retain the same synchronous results.
+  searchRecordingsAsync(track = {}) {
+    return finishScanAsync(this.recordingSearchSteps(track));
+  }
+
+  *recordingSearchSteps(track = {}) {
     if (!this.isAvailable()) return [];
     const seen = new Set();
     const candidates = [];
@@ -291,13 +419,69 @@ class MusicBrainzLocalIndex {
       if (score > 0) candidates.push({ recording, score });
     };
 
-    for (const recording of this.searchByIsrc(track.isrc)) add(recording);
-    for (const recording of this.readBucket(bucketForTitle(track.title))) add(recording);
+    for (const recording of (yield* this.isrcSearchSteps(track.isrc))) add(recording);
+    yield* this.bucketRecordSteps(bucketForTitle(track.title), add);
 
     return candidates
       .sort((left, right) => right.score - left.score)
       .slice(0, this.maxResults)
       .map((entry) => entry.recording);
+  }
+
+  searchRecordingsBatch(tracks = []) {
+    if (!this.isAvailable()) return tracks.map(() => []);
+    const results = tracks.map(() => []);
+    const grouped = new Map();
+    tracks.forEach((track, index) => {
+      const title = normalizeText(track?.title);
+      if (!title) return;
+      const bucket = bucketForTitle(track.title);
+      const titles = grouped.get(bucket) || new Map();
+      const indexes = titles.get(title) || [];
+      indexes.push(index);
+      titles.set(title, indexes);
+      grouped.set(bucket, titles);
+    });
+
+    // Read each large JSONL title bucket once for the whole batch. The old
+    // per-track path is intentionally retained for callers that need a single
+    // lookup, while bulk enrichment avoids rereading 1+ GB buckets thousands of
+    // times for a mixed library.
+    for (const [bucket, titles] of grouped.entries()) {
+      const candidates = new Map();
+      this.forEachBucketRecord(bucket, (recording) => {
+        const title = normalizeText(recording?.title);
+        const indexes = titles.get(title);
+        if (!indexes) return;
+        for (const index of indexes) {
+          const trackCandidates = candidates.get(index) || [];
+          const score = scoreRecording(tracks[index], recording);
+          if (score > 0) trackCandidates.push({ recording, score });
+          candidates.set(index, trackCandidates);
+        }
+      });
+      for (const [index, entries] of candidates.entries()) {
+        results[index].push(...entries
+          .sort((left, right) => right.score - left.score)
+          .slice(0, this.maxResults)
+          .map((entry) => entry.recording));
+      }
+    }
+
+    // ISRC lookups are already indexed and usually touch only a tiny bucket.
+    // Add them to the title results and deduplicate by recording id.
+    tracks.forEach((track, index) => {
+      if (results[index].length || !cleanIsrc(track?.isrc)) return;
+      const isrcRows = this.searchByIsrc(track?.isrc);
+      if (!isrcRows.length) return;
+      const seen = new Set(results[index].map((row) => row?.id).filter(Boolean));
+      for (const row of isrcRows) {
+        if (!seen.has(row?.id)) results[index].push(row);
+        if (row?.id) seen.add(row.id);
+      }
+      results[index] = results[index].slice(0, this.maxResults);
+    });
+    return results;
   }
 }
 

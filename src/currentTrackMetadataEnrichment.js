@@ -5,7 +5,8 @@ function createCurrentTrackMetadataEnrichment({
   config,
   metadataEnrichment,
   scheduleBroadcast,
-  summarizeZoneTrack
+  summarizeZoneTrack,
+  onLiveTrackObserved = null
 }) {
   function firstMetadataText(...values) {
     for (const value of values.flat()) {
@@ -85,6 +86,8 @@ function createCurrentTrackMetadataEnrichment({
   function metadataLookupTrackFromZone(zone = {}) {
     const now = zone.now_playing || {};
     const radioLookup = now.radio_lookup;
+    const memoryTrack = radioLookup ? {} : (zone.memoryTrack || {});
+    const memoryTidal = memoryTrack.tidal || {};
     if (radioLookup?.catalogEnrichmentAllowed === false) return null;
 
     const base = radioLookup?.artist && radioLookup?.title
@@ -93,15 +96,67 @@ function createCurrentTrackMetadataEnrichment({
     if (!base?.artist || !base?.title) return null;
 
     const existing = roonExistingMetadata(zone);
+    const memoryReleaseYear = firstMetadataYear(
+      memoryTrack.releaseYear,
+      memoryTrack.year,
+      memoryTrack.releaseDate,
+      memoryTidal.releaseYear,
+      memoryTidal.year,
+      memoryTidal.releaseDate
+    );
+    const memoryReleaseDate = firstMetadataText(
+      memoryTrack.releaseDate,
+      memoryTidal.releaseDate
+    );
+    const memoryLabel = firstMetadataText(
+      memoryTrack.label,
+      memoryTidal.label
+    );
+    const memoryGenre = firstMetadataText(
+      memoryTrack.genre,
+      memoryTrack.genres,
+      memoryTidal.genre,
+      memoryTidal.genres
+    );
+    const memoryDurationMs = Number(memoryTrack.durationMs || memoryTidal.durationMs || 0);
+    const tidalId = cleanRadioText(
+      base.tidalId ||
+      base.tidalTrackId ||
+      now.tidal_id ||
+      now.tidalId ||
+      now.metadata?.tidal_id ||
+      now.metadata?.tidalId ||
+      memoryTrack.tidalId ||
+      memoryTrack.tidal_id ||
+      memoryTrack.tidalTrackId ||
+      memoryTidal.id ||
+      memoryTidal.tidalId ||
+      memoryTidal.trackId ||
+      ""
+    );
+    const isrc = cleanRadioText(
+      base.isrc ||
+      now.isrc ||
+      now.metadata?.isrc ||
+      memoryTrack.isrc ||
+      memoryTidal.isrc ||
+      ""
+    );
+    const identityFields = {
+      ...(tidalId ? { tidalId } : {}),
+      ...(isrc ? { isrc } : {}),
+      ...(cleanRadioText(base.roonIdentity || now.item_key || now.itemKey || "") ? { roonIdentity: cleanRadioText(base.roonIdentity || now.item_key || now.itemKey || "") } : {})
+    };
     return {
       artist: cleanRadioText(base.artist),
       title: cleanRadioText(base.title),
-      album: cleanRadioText(base.album || now.three_line?.line3 || ""),
-      durationMs: existing.durationMs,
-      releaseYear: existing.releaseYear,
-      releaseDate: existing.releaseDate,
-      label: existing.label,
-      genre: existing.genre,
+      album: cleanRadioText(base.album || now.three_line?.line3 || memoryTrack.album || memoryTidal.album || ""),
+      ...identityFields,
+      durationMs: existing.durationMs || (Number.isFinite(memoryDurationMs) && memoryDurationMs > 0 ? memoryDurationMs : null),
+      releaseYear: existing.releaseYear || memoryReleaseYear,
+      releaseDate: existing.releaseDate || memoryReleaseDate,
+      label: existing.label || memoryLabel,
+      genre: existing.genre || memoryGenre,
       isRadio: Boolean(radioLookup)
     };
   }
@@ -140,6 +195,14 @@ function createCurrentTrackMetadataEnrichment({
   }
 
   function scheduleMetadataEnrichment(state = {}) {
+    for (const zone of state.zones || []) {
+      const lookup = metadataLookupTrackFromZone(zone);
+      if (lookup) {
+        Promise.resolve(onLiveTrackObserved?.(lookup)).catch(() => {
+          // Live sonic-source bookkeeping must never affect playback state.
+        });
+      }
+    }
     if (!config.metadataEnrichment.enabled) return;
     for (const zone of state.zones || []) {
       const lookup = metadataLookupTrackFromZone(zone);

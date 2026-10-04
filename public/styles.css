@@ -18,6 +18,831 @@
   --holo-border: linear-gradient(135deg, rgba(217, 179, 255, 0.84), rgba(146, 92, 255, 0.48), rgba(255, 115, 216, 0.68), rgba(143, 240, 255, 0.36), rgba(255, 207, 127, 0.3));
 }
 
+/* Sonic Review: one anchor, one listening decision, no playback controls. */
+.sonicReviewShell {
+  display: grid;
+  gap: 14px;
+}
+
+.sonicReviewHeader,
+.sonicReviewAnchorTools,
+.sonicReviewAnchorPanel,
+.sonicReviewWorkspace,
+.sonicReviewUpcoming {
+  min-width: 0;
+}
+
+.sonicReviewHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.sonicReviewIntro {
+  max-width: 700px;
+  margin-top: 7px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.sonicReviewHeaderMeta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.sonicReviewMode,
+.sonicReviewProgress,
+.sonicReviewCandidateBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid rgba(217, 179, 255, .2);
+  border-radius: 999px;
+  background: rgba(8, 4, 17, .46);
+}
+
+.sonicReviewProgress {
+  color: var(--accent-3);
+}
+
+.sonicReviewAnchorTools {
+  display: grid;
+  gap: 12px;
+  padding: 15px 18px;
+}
+
+.sonicReviewAnchorToolsHead,
+.sonicReviewUpcomingHead,
+.sonicReviewCandidateHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sonicReviewAnchorToolsHead .muted {
+  max-width: 760px;
+  margin-top: 4px;
+  line-height: 1.45;
+}
+
+.sonicReviewAnchorForm {
+  display: grid;
+  gap: 6px;
+}
+
+.sonicReviewAnchorForm label,
+.sonicReviewNotes label {
+  color: rgba(238, 228, 252, .75);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.sonicReviewAnchorRow {
+  display: flex;
+  gap: 8px;
+}
+
+.sonicReviewAnchorRow input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+}
+
+.sonicReviewAnchorRow button,
+.sonicReviewAnchorToolsHead button,
+.sonicReviewState button {
+  min-height: 44px;
+}
+
+.sonicReviewAnchorCurrent {
+  overflow-wrap: anywhere;
+  color: rgba(238, 228, 252, .72);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sonicReviewAnchorCurrent strong {
+  color: var(--text);
+}
+
+.sonicReviewAnchorCurrent span {
+  color: rgba(238, 228, 252, .5);
+}
+
+.sonicReviewLayout {
+  display: grid;
+  grid-template-columns: minmax(220px, .72fr) minmax(0, 1.48fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.sonicReviewAnchorPanel {
+  min-height: 228px;
+}
+
+.sonicReviewAnchorPanel h3 {
+  max-width: 30ch;
+  margin-top: 12px;
+  font-size: clamp(22px, 2.3vw, 32px);
+  line-height: 1.08;
+}
+
+.sonicReviewAnchorMeta {
+  margin-top: 10px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.sonicReviewRule {
+  height: 1px;
+  margin: 24px 0 14px;
+  background: linear-gradient(90deg, rgba(217, 179, 255, .38), transparent);
+}
+
+.sonicReviewDiagnostics {
+  display: grid;
+  gap: 4px;
+  margin-top: 16px;
+  color: rgba(238, 228, 252, .62);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.sonicReviewDiagnostics span {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.sonicReviewWorkspace {
+  min-height: 390px;
+}
+
+.sonicReviewCandidateHead {
+  align-items: center;
+  padding-bottom: 13px;
+  border-bottom: 1px solid rgba(217, 179, 255, .14);
+}
+
+.sonicReviewCandidateHint {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sonicReviewCandidateBadge {
+  flex: 0 0 auto;
+  color: var(--accent-3);
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.sonicReviewCandidate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 28px 0 24px;
+}
+
+.sonicReviewCandidateText {
+  min-width: 0;
+}
+
+.sonicReviewCandidateText h3 {
+  font-size: clamp(24px, 3vw, 38px);
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+}
+
+.sonicReviewCandidateText p {
+  margin-top: 10px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.sonicReviewTidalButton {
+  flex: 0 0 auto;
+  min-height: 44px;
+  align-content: center;
+}
+
+.sonicReviewNoLink {
+  flex: 0 0 auto;
+  max-width: 150px;
+  color: rgba(238, 228, 252, .52);
+  font-size: 11px;
+  text-align: right;
+}
+
+.sonicReviewNotes {
+  display: grid;
+  grid-template-columns: minmax(130px, .65fr) minmax(0, 1.4fr);
+  align-items: center;
+  gap: 8px 10px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(217, 179, 255, .1);
+}
+
+.sonicReviewNotes label:nth-of-type(2) {
+  grid-column: 1;
+}
+
+.sonicReviewNotes input,
+.sonicReviewNotes textarea {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+.sonicReviewNotes textarea {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.sonicReviewNotes label span {
+  color: rgba(238, 228, 252, .45);
+  font-weight: 600;
+  text-transform: none;
+}
+
+.sonicReviewActions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.sonicReviewAction {
+  min-height: 48px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.sonicReviewActionKeep {
+  border-color: rgba(143, 240, 255, .42);
+  color: #c8fbff;
+}
+
+.sonicReviewActionGenre,
+.sonicReviewActionDifferent {
+  border-color: rgba(255, 115, 216, .35);
+}
+
+.sonicReviewKeyboardHint {
+  margin-top: 12px;
+  color: rgba(238, 228, 252, .48);
+  font-size: 11px;
+  text-align: right;
+}
+
+.sonicReviewStatus {
+  min-height: 20px;
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sonicReviewState {
+  display: grid;
+  place-items: center;
+  min-height: 300px;
+  gap: 9px;
+  padding: 28px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.sonicReviewState strong {
+  color: var(--text);
+  font-size: 18px;
+}
+
+.sonicReviewState p {
+  max-width: 48ch;
+  line-height: 1.55;
+}
+
+.sonicReviewState.isError strong {
+  color: #ffd1dc;
+}
+
+.sonicReviewState.isComplete strong {
+  color: #c8fbff;
+}
+
+.sonicReviewPulse {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(143, 240, 255, .35);
+  border-top-color: var(--accent-3);
+  border-radius: 50%;
+  animation: sonicReviewSpin 900ms linear infinite;
+}
+
+@keyframes sonicReviewSpin {
+  to { transform: rotate(360deg); }
+}
+
+.sonicReviewUpcoming {
+  display: grid;
+  gap: 8px;
+}
+
+.sonicReviewUpcomingHead {
+  align-items: center;
+  padding-bottom: 3px;
+}
+
+.sonicReviewNeighbor {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 7px 0;
+  border-top: 1px solid rgba(217, 179, 255, .1);
+}
+
+.sonicReviewNeighborIndex {
+  color: rgba(217, 179, 255, .55);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+}
+
+.sonicReviewNeighborBody {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.sonicReviewNeighborBody strong,
+.sonicReviewNeighborBody span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sonicReviewNeighborBody span,
+.sonicReviewNeighborReview,
+.sonicReviewNeighborLink {
+  color: rgba(238, 228, 252, .58);
+  font-size: 11px;
+}
+
+.sonicReviewNeighborLink {
+  color: var(--accent);
+}
+
+.sonicReviewNeighborLink.isMuted {
+  color: rgba(238, 228, 252, .4);
+}
+
+.sonicReviewNeighborReview {
+  color: var(--accent-3);
+  text-transform: capitalize;
+}
+
+.sonicProfileEditor {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+}
+
+.nowSonicProfile .sonicProfileEditor {
+  padding: 13px 15px;
+  border-color: rgba(217, 179, 255, .18);
+  background: rgba(8, 4, 17, .42);
+  box-shadow: inset 0 1px 0 rgba(255, 235, 255, .06);
+}
+
+.sonicProfileEditorHead,
+.sonicProfileFormFooter,
+.sonicReviewQueueTools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.sonicProfileEditorHead h3,
+.sonicReviewQueueTools h3 {
+  margin-top: 4px;
+  font-size: 17px;
+}
+
+.sonicProfileEditorIntro,
+.sonicReviewQueueCopy {
+  color: rgba(238, 228, 252, .64);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sonicProfileForm {
+  display: grid;
+  gap: 12px;
+}
+
+.sonicProfileGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.sonicProfileGrid label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: rgba(238, 228, 252, .72);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.sonicProfileGrid input,
+.sonicProfileGrid textarea {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  resize: vertical;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.sonicProfileGrid textarea {
+  min-height: 58px;
+}
+
+.sonicProfileWide {
+  grid-column: span 2;
+}
+
+.sonicProfileHint {
+  color: rgba(238, 228, 252, .4);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.sonicProfileSave,
+.sonicProfileReviewButton,
+.sonicReviewQueueButton {
+  min-height: 42px;
+  padding: 0 14px;
+  border-color: rgba(143, 240, 255, .35);
+  color: #c8fbff;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.sonicProfileStatus {
+  min-width: 0;
+  color: rgba(238, 228, 252, .58);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.sonicProfileStatus.isError {
+  color: #ffd1dc;
+}
+
+.sonicReviewQueueTools {
+  padding: 15px 18px;
+  border-color: rgba(143, 240, 255, .22);
+  background: linear-gradient(135deg, rgba(19, 34, 48, .52), rgba(12, 6, 24, .76));
+}
+
+.sonicReviewQueueTools > div {
+  min-width: 0;
+}
+
+.sonicReviewQueueButton {
+  flex: 0 0 auto;
+  min-width: 190px;
+}
+
+@media (max-width: 760px) {
+  .sonicReviewHeader,
+  .sonicReviewAnchorToolsHead,
+  .sonicReviewCandidate {
+    display: grid;
+  }
+
+  .sonicReviewHeaderMeta {
+    justify-content: flex-start;
+  }
+
+  .sonicReviewAnchorRow {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .sonicReviewLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .sonicReviewAnchorPanel {
+    min-height: 0;
+  }
+
+  .sonicReviewTidalButton,
+  .sonicReviewNoLink {
+    justify-self: start;
+  }
+
+  .sonicReviewNotes {
+    grid-template-columns: 1fr;
+  }
+
+  .sonicReviewNotes label:nth-of-type(2),
+  .sonicReviewNotes textarea {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .sonicReviewActions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sonicProfileGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sonicProfileWide {
+    grid-column: span 2;
+  }
+
+  .sonicReviewQueueTools,
+  .sonicProfileEditorHead,
+  .sonicProfileFormFooter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sonicReviewQueueButton,
+  .sonicProfileSave,
+  .sonicProfileReviewButton {
+    width: 100%;
+  }
+
+  .sonicProfileStatus {
+    text-align: left;
+  }
+}
+
+@media (max-width: 460px) {
+  .sonicReviewActions {
+    grid-template-columns: 1fr;
+  }
+
+  .sonicProfileGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sonicProfileWide {
+    grid-column: auto;
+  }
+
+  .sonicReviewNeighbor {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+  }
+
+  .sonicReviewNeighborReview {
+    grid-column: 2 / -1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sonicReviewPulse {
+    animation: none;
+  }
+}
+
+/* TIDAL Library: one collection surface for playlists, mixes, and export. */
+#tidalLibraryView.isActive {
+  display: grid;
+  gap: 16px;
+}
+
+.tidalLibraryHero {
+  align-items: center;
+}
+
+.tidalLibraryToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 16px;
+}
+
+.tidalLibraryFilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tidalLibraryFilters button {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid rgba(217, 179, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(7, 3, 14, 0.36);
+  color: rgba(238, 228, 252, 0.72);
+  box-shadow: none;
+}
+
+.tidalLibraryFilters button.active {
+  border-color: rgba(217, 179, 255, 0.44);
+  background: rgba(167, 124, 255, 0.18);
+  color: #fff;
+}
+
+.tidalLibraryCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  gap: 14px;
+}
+
+.tidalLibraryCard {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(217, 179, 255, 0.15);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(18, 9, 31, 0.88), rgba(5, 3, 13, 0.72));
+  box-shadow: var(--inner-light), 0 14px 30px rgba(2, 0, 8, 0.22);
+}
+
+.tidalLibraryArt {
+  display: grid;
+  grid-row: span 2;
+  place-items: center;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid rgba(217, 179, 255, 0.18);
+  border-radius: 12px;
+  background: rgba(13, 7, 24, 0.8);
+  color: rgba(217, 179, 255, 0.76);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.tidalLibraryArt img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tidalLibraryBody {
+  min-width: 0;
+}
+
+.tidalLibraryType {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tidalLibraryBody h3 {
+  margin: 5px 0 4px;
+  color: #fff;
+  font-size: 17px;
+  line-height: 1.15;
+}
+
+.tidalLibraryBody p,
+.tidalLibraryBody small {
+  display: block;
+  color: rgba(238, 228, 252, 0.64);
+  line-height: 1.35;
+}
+
+.tidalLibraryBody p {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 13px;
+}
+
+.tidalLibraryBody small {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.tidalLibraryActions {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.tidalLibraryActions :is(button, .buttonLink) {
+  min-height: 44px;
+  min-width: 0;
+  padding-inline: 10px;
+  text-align: center;
+}
+
+.tidalLibraryActions .tidalLibraryExport {
+  border-color: rgba(255, 115, 216, 0.34);
+  color: #ffd4f4;
+}
+
+.tidalLibraryActions .tidalLibraryExport.isLoading {
+  cursor: wait;
+  opacity: 0.68;
+  pointer-events: none;
+}
+
+.tidalLibraryEmpty {
+  padding: 28px 20px;
+  border: 1px dashed rgba(217, 179, 255, 0.2);
+  border-radius: 14px;
+  color: rgba(238, 228, 252, 0.68);
+  text-align: center;
+}
+
+@media (min-width: 1100px) {
+  .viewTabs.primaryNav {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 699px) {
+  body:not(.playerFullWindow):not(.playerMaximized) .viewTabs.primaryNav button {
+    padding-inline: 4px;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  .tidalLibraryToolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tidalLibraryFilters {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .tidalLibraryFilters button {
+    padding-inline: 6px;
+  }
+
+  .tidalLibraryCards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tidalLibraryCard {
+    grid-template-columns: 76px minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .tidalLibraryActions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tidalLibraryCard,
+  .tidalLibraryActions :is(button, .buttonLink) {
+    transition: none;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -405,49 +1230,10 @@ h2 {
 }
 
 #connection,
-#phoneAccess,
 #nowSubtitle,
 #nowSourceFormat,
 .muted {
   color: var(--muted);
-}
-
-.phoneAccess {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  max-width: 260px;
-  min-height: 42px;
-  margin: 0;
-  padding: 0 14px;
-  border: 1px solid rgba(217, 179, 255, 0.18);
-  border-radius: 999px;
-  background: rgba(5, 2, 11, 0.54);
-  box-shadow: var(--inner-light), inset 0 -18px 32px rgba(0, 0, 0, 0.12);
-  font-size: 13px;
-  line-height: 1;
-}
-
-.phoneAccess:empty {
-  display: none;
-}
-
-.phoneLabel {
-  flex: 0 0 auto;
-  color: rgba(217, 179, 255, 0.72);
-  font-size: 10px;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-
-.phoneAccess a {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  color: #eadcff;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 select,
@@ -658,6 +1444,7 @@ select:focus option,
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
     "feedback badge"
+    "profile profile"
     "actions actions"
     "playlist playlist";
   align-items: start;
@@ -673,6 +1460,11 @@ select:focus option,
   grid-area: feedback;
   flex: 1 1 360px;
   margin-top: 0;
+}
+
+.nowSonicProfile {
+  grid-area: profile;
+  min-width: 0;
 }
 
 .nowDiscoveryActions {
@@ -3367,6 +4159,146 @@ input {
   margin-top: 2px;
 }
 
+.queueGestureHint {
+  margin: -6px 0 6px;
+  color: rgba(224, 207, 255, 0.64);
+  font-size: 13px;
+}
+
+.queueActionStatus {
+  min-height: 20px;
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.liveQueue li {
+  display: block;
+}
+
+.queueItemButton,
+.queueItemStatic {
+  display: grid;
+  grid-template-columns: 26px 38px minmax(0, 1fr) 22px;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.queueItemButton {
+  border-color: rgba(217, 179, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(10, 4, 20, 0.46);
+  box-shadow: inset 0 1px 0 rgba(255, 235, 255, 0.06), 0 7px 18px rgba(4, 0, 14, 0.18);
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.queueItemButton:hover {
+  border-color: rgba(217, 179, 255, 0.34);
+  background: rgba(45, 19, 70, 0.62);
+  box-shadow: inset 0 1px 0 rgba(255, 235, 255, 0.1), 0 10px 22px rgba(4, 0, 14, 0.26);
+  transform: none;
+}
+
+.queueItemButton:active {
+  transform: translateY(1px);
+}
+
+.queueItemPosition {
+  color: rgba(224, 207, 255, 0.46);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.queueItemActionHint {
+  color: rgba(224, 207, 255, 0.64);
+  font-size: 22px;
+  line-height: 1;
+  text-align: center;
+}
+
+.queueItemStatic {
+  color: rgba(224, 207, 255, 0.72);
+}
+
+.queueActionMenu {
+  position: fixed;
+  z-index: 1000;
+  width: min(320px, calc(100vw - 24px));
+  padding: 14px;
+  border: 1px solid rgba(217, 179, 255, 0.28);
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(16, 7, 29, 0.98), rgba(35, 12, 54, 0.97));
+  box-shadow: inset 0 1px 0 rgba(255, 235, 255, 0.1), 0 18px 46px rgba(0, 0, 0, 0.58), 0 0 24px rgba(183, 109, 255, 0.12);
+}
+
+.queueActionMenu[hidden] {
+  display: none;
+}
+
+.queueActionMenuHead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  gap: 10px;
+  align-items: start;
+  margin-bottom: 10px;
+}
+
+.queueActionMenuHead strong {
+  display: block;
+  margin-top: 4px;
+  color: #fff;
+  font-size: 15px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.queueActionMenu button {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 8px;
+  text-align: left;
+}
+
+.queueActionMenu button:hover {
+  transform: none;
+}
+
+.queueActionMenu .queueActionClose {
+  width: 44px;
+  min-height: 44px;
+  margin-top: 0;
+  padding: 0;
+  border-radius: 8px;
+  color: rgba(250, 246, 255, 0.82);
+  font-size: 22px;
+  line-height: 1;
+  text-align: center;
+}
+
+.queueActionMenu [data-queue-action="remove"] {
+  opacity: 0.56;
+}
+
+.queueActionHelp {
+  margin: 8px 2px 0;
+  color: rgba(224, 207, 255, 0.62);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.queueActionMenu .queueActionCancel {
+  border-color: rgba(217, 179, 255, 0.2);
+  background: transparent;
+  color: rgba(238, 228, 252, 0.78);
+  text-align: center;
+}
+
 .statusChip {
   display: inline-flex;
   align-items: center;
@@ -3420,6 +4352,7 @@ input {
   box-shadow: var(--inner-light), 0 0 24px rgba(255, 83, 170, 0.24);
 }
 
+.feedbackButton.like.active,
 .feedbackButton.good.active,
 .feedbackButton.up.active {
   background:
@@ -3442,12 +4375,13 @@ input {
   box-shadow: var(--inner-light), 0 0 24px rgba(255, 178, 64, 0.22);
 }
 
+.feedbackButton.dislike.active,
 .feedbackButton.skip.active,
 .feedbackButton.down.active {
   background:
-    linear-gradient(135deg, rgba(107, 188, 255, 0.95), rgba(64, 96, 255, 0.7)) padding-box,
-    linear-gradient(135deg, rgba(176, 225, 255, 0.95), rgba(100, 105, 255, 0.56)) border-box;
-  box-shadow: var(--inner-light), 0 0 24px rgba(93, 157, 255, 0.22);
+    linear-gradient(135deg, rgba(255, 166, 118, 0.95), rgba(197, 62, 69, 0.74)) padding-box,
+    linear-gradient(135deg, rgba(255, 222, 196, 0.95), rgba(255, 107, 110, 0.56)) border-box;
+  box-shadow: var(--inner-light), 0 0 24px rgba(255, 117, 104, 0.22);
 }
 
 .feedbackButton.never.active {
@@ -3590,7 +4524,6 @@ button:disabled:hover {
     justify-content: stretch;
   }
 
-  .phoneAccess,
   .aiModeControls,
   .zonePicker {
     flex: 1 1 280px;
@@ -3768,7 +4701,6 @@ button:disabled:hover {
     border-radius: 22px;
   }
 
-  .phoneAccess,
   .zonePicker {
     width: 100%;
     min-width: 0;
@@ -3804,6 +4736,7 @@ button:disabled:hover {
     grid-template-areas:
       "feedback"
       "badge"
+      "profile"
       "actions"
       "playlist";
     align-items: center;
@@ -4211,7 +5144,6 @@ textarea {
 label,
 .advanced summary,
 #connection,
-#phoneAccess,
 #nowSubtitle,
 #nowSourceFormat,
 .muted,
@@ -4464,11 +5396,6 @@ a,
     max-width: none;
   }
 
-  .phoneAccess {
-    flex: 0 1 300px;
-    max-width: 300px;
-  }
-
   .zonePicker {
     flex: 1 1 360px;
     min-width: 320px;
@@ -4510,6 +5437,7 @@ a,
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       "feedback badge"
+      "profile profile"
       "actions actions"
       "playlist playlist";
     align-items: start;
@@ -4788,6 +5716,7 @@ body.playerMaximized {
   grid-template-areas:
     "feedback"
     "badge"
+    "profile"
     "actions"
     "playlist";
   gap: 14px;
@@ -4878,6 +5807,7 @@ body.playerMaximized {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       "feedback badge"
+      "profile profile"
       "actions actions"
       "playlist playlist";
     align-items: center;
@@ -5158,6 +6088,7 @@ body.playerMaximized {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       "feedback badge"
+      "profile profile"
       "actions actions"
       "playlist playlist";
     align-items: start;
@@ -5487,6 +6418,7 @@ body.playerFullWindow {
     grid-template-areas:
       "badge"
       "feedback"
+      "profile"
       "actions"
       "playlist";
     align-items: stretch;
@@ -5701,6 +6633,7 @@ body.playerFullWindow {
     grid-template-areas:
       "feedback"
       "badge"
+      "profile"
       "actions"
       "playlist";
     gap: 8px;
@@ -5976,5 +6909,5381 @@ body.playerFullWindow {
   }
   .bridgeSyncPopup button {
     width: 100%;
+  }
+}
+
+/* Theater readability pass: calmer chrome, stronger hierarchy, denser tablet cards. */
+:root {
+  --now-artwork-backdrop: none;
+  --theater-panel: rgba(6, 2, 14, 0.56);
+  --theater-panel-strong: rgba(8, 3, 18, 0.72);
+  --theater-line: rgba(191, 136, 255, 0.14);
+  --theater-line-soft: rgba(191, 136, 255, 0.09);
+  --theater-muted: rgba(232, 218, 250, 0.7);
+  --theater-shadow: 0 18px 48px rgba(1, 0, 6, 0.5);
+}
+
+body {
+  background:
+    linear-gradient(118deg, rgba(48, 17, 88, 0.16), transparent 24%, rgba(89, 20, 83, 0.04) 52%, rgba(35, 12, 70, 0.18) 76%, rgba(143, 240, 255, 0.012)),
+    radial-gradient(circle at 50% 4%, rgba(88, 45, 160, 0.17), transparent 25%),
+    linear-gradient(180deg, #030107 0%, #070211 48%, #020105 100%);
+}
+
+body::before {
+  opacity: 0.52;
+}
+
+body::after {
+  opacity: 0.1;
+}
+
+body.hasNowArtwork::before {
+  background:
+    linear-gradient(90deg, rgba(3, 1, 7, 0.92), rgba(6, 2, 14, 0.68) 34%, rgba(8, 2, 16, 0.76) 68%, rgba(3, 1, 7, 0.94)),
+    radial-gradient(circle at 24% 42%, rgba(120, 68, 190, 0.2), transparent 34%),
+    var(--now-artwork-backdrop) center / cover no-repeat;
+  filter: blur(34px) saturate(1.18) brightness(0.48);
+  opacity: 0.8;
+  transform: scale(1.08);
+}
+
+body.hasNowArtwork::after {
+  background:
+    linear-gradient(180deg, rgba(3, 1, 7, 0.58), rgba(3, 1, 7, 0.42) 45%, rgba(2, 1, 5, 0.74)),
+    radial-gradient(circle at 54% 16%, rgba(80, 32, 145, 0.18), transparent 42%);
+  opacity: 1;
+  mask-image: none;
+}
+
+.shell {
+  width: min(1460px, calc(100vw - 28px));
+  padding-top: 12px;
+}
+
+.topChrome {
+  grid-template-columns: minmax(260px, 1fr) minmax(300px, 460px) minmax(260px, 1fr);
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.brandBanner {
+  width: min(420px, 34vw);
+  max-height: 104px;
+}
+
+.brandMark span {
+  opacity: 0.72;
+}
+
+.systemTag,
+.statusPill,
+.viewTabs,
+.topControls {
+  border-color: var(--theater-line);
+  background: rgba(4, 1, 10, 0.52);
+  box-shadow: var(--inner-light), 0 10px 26px rgba(2, 0, 8, 0.34);
+}
+
+.systemTag {
+  padding: 7px 13px;
+  color: rgba(238, 228, 252, 0.7);
+  font-size: 10px;
+}
+
+.statusStack {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, max-content));
+  gap: 7px;
+  justify-content: end;
+}
+
+.statusPill {
+  min-height: 29px;
+  max-width: 270px;
+  padding: 0 10px;
+  overflow: hidden;
+  color: rgba(238, 228, 252, 0.8);
+  font-size: 11px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusPill::before {
+  flex: 0 0 auto;
+}
+
+.topbar {
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 5px;
+  border-radius: 22px;
+}
+
+.viewTabs {
+  flex: 0 1 auto;
+  gap: 2px;
+  padding: 2px;
+}
+
+.viewTabs button {
+  min-height: 34px;
+  padding: 0 14px;
+  color: rgba(238, 228, 252, 0.7);
+  font-size: 10px;
+  line-height: 1.05;
+}
+
+.viewTabs button.active {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.17), 0 0 18px rgba(143, 240, 255, 0.1);
+}
+
+.topControls {
+  gap: 5px;
+  margin-left: auto;
+  padding: 3px;
+}
+
+.aiModeControls label,
+.aiModeControls button,
+.zonePicker {
+  min-height: 34px;
+  background: rgba(4, 1, 10, 0.48);
+}
+
+.aiModeControls label {
+  gap: 6px;
+  padding-left: 10px;
+}
+
+.aiModeControls select,
+.aiModeControls input {
+  min-height: 29px;
+}
+
+.aiModeControls input {
+  width: min(176px, 18vw);
+}
+
+.aiModeControls button {
+  min-height: 36px;
+}
+
+.zonePicker {
+  min-width: min(100%, 330px);
+  padding-left: 12px;
+}
+
+.zonePicker select {
+  min-height: 30px;
+}
+
+.panel,
+.metricCard,
+.playlistBrowserCard,
+.radioStation,
+.musicMemoryCard,
+.beatportChartTrack,
+.reportRow,
+.signalGroup,
+.tidalMixCard {
+  border-color: var(--theater-line-soft);
+  box-shadow: var(--inner-light), var(--theater-shadow);
+}
+
+.panel {
+  background:
+    linear-gradient(145deg, rgba(23, 9, 45, 0.46), rgba(67, 20, 70, 0.045) 38%, var(--theater-panel-strong)) padding-box,
+    linear-gradient(135deg, rgba(217, 179, 255, 0.34), rgba(255, 115, 216, 0.18), rgba(143, 240, 255, 0.12)) border-box;
+  padding: 16px;
+  backdrop-filter: blur(20px) saturate(1.22);
+  -webkit-backdrop-filter: blur(20px) saturate(1.22);
+}
+
+.panel::before {
+  opacity: 0.24;
+}
+
+.layout {
+  gap: 16px;
+}
+
+.player {
+  flex: 0 0 46%;
+}
+
+.composer {
+  flex: 1 1 52%;
+}
+
+.player > .now {
+  gap: 18px;
+  align-items: flex-start;
+}
+
+.cover {
+  width: 128px;
+  height: 128px;
+  box-shadow: inset 0 1px 0 rgba(255, 235, 255, 0.18), 0 18px 36px rgba(2, 0, 8, 0.5), 0 0 28px rgba(217, 179, 255, 0.16);
+}
+
+.nowInfo .eyebrow,
+.formHead .eyebrow,
+.reportHero .eyebrow,
+.playlistHero .eyebrow,
+.radioHero .eyebrow,
+.musicMemoryHero .eyebrow,
+.beatportChartHero .eyebrow,
+.tidalMixHero .eyebrow {
+  color: rgba(217, 179, 255, 0.86);
+  font-size: 11px;
+}
+
+#nowTitle {
+  font-size: clamp(24px, 2.7vw, 38px);
+  line-height: 0.98;
+}
+
+#nowSubtitle {
+  margin-top: 3px;
+  color: rgba(238, 228, 252, 0.82);
+  font-size: clamp(15px, 1.5vw, 21px);
+  line-height: 1.15;
+}
+
+.nowSourceFormat {
+  max-width: min(100%, 560px);
+  margin-top: 8px;
+  padding: 6px 11px;
+  border-radius: 16px;
+  color: rgba(250, 246, 255, 0.9);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.nowSourceFormat .sourcePrimary {
+  white-space: normal;
+}
+
+.feedbackButtons {
+  gap: 8px;
+}
+
+.feedbackButtons button,
+.nowDiscoveryActions button,
+.controls button,
+.playlistButtons button,
+.quickActions button,
+.resultActions button,
+.resultActions .buttonLink {
+  min-height: 32px;
+  border-color: rgba(217, 179, 255, 0.18);
+  background:
+    linear-gradient(135deg, rgba(29, 10, 56, 0.42), rgba(78, 24, 82, 0.07) 52%, rgba(4, 1, 10, 0.62)) padding-box,
+    linear-gradient(135deg, rgba(217, 179, 255, 0.34), rgba(255, 115, 216, 0.15), rgba(143, 240, 255, 0.1)) border-box;
+  box-shadow: var(--inner-light), 0 8px 22px rgba(4, 0, 14, 0.24);
+}
+
+.feedbackButtons button {
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.nowDiscoveryActions button,
+.controls button {
+  font-size: 14px;
+}
+
+.controls {
+  gap: 10px;
+}
+
+.liveQueue {
+  max-height: 142px;
+}
+
+.liveQueue li {
+  padding: 6px 8px;
+}
+
+.composer .formHead h2,
+.reportHero h2,
+.playlistHero h2,
+.radioHero h2,
+.musicMemoryHero h2,
+.beatportChartHero h2,
+.tidalMixHero h2 {
+  color: #fff;
+  font-size: clamp(20px, 2.1vw, 31px);
+  line-height: 1;
+}
+
+textarea {
+  min-height: 134px;
+  color: rgba(250, 246, 255, 0.92);
+  font-size: 17px;
+  line-height: 1.42;
+}
+
+.quickActions,
+.playlistButtons,
+.resultActions {
+  gap: 8px;
+}
+
+.playlistSeed,
+.playlistSeedSource {
+  border-color: rgba(217, 179, 255, 0.12);
+  background: rgba(3, 1, 8, 0.34);
+}
+
+.tasteNarrative {
+  max-width: 1060px;
+  color: rgba(250, 246, 255, 0.88);
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+.reportHero {
+  align-items: start;
+}
+
+.historyMetrics {
+  gap: 10px;
+}
+
+.metricCard {
+  min-height: 82px;
+  padding: 12px;
+  background:
+    linear-gradient(145deg, rgba(12, 4, 25, 0.56), rgba(5, 2, 12, 0.68)) padding-box,
+    linear-gradient(135deg, rgba(217, 179, 255, 0.18), rgba(143, 240, 255, 0.08), rgba(255, 115, 216, 0.12)) border-box;
+}
+
+.metricCard span {
+  color: rgba(238, 228, 252, 0.7);
+  font-size: 10px;
+}
+
+.metricCard strong {
+  margin-top: 7px;
+  font-size: 29px;
+}
+
+.metricCard p {
+  color: rgba(238, 228, 252, 0.64);
+}
+
+.historyGrid {
+  gap: 12px;
+}
+
+.historyPanel {
+  min-height: 0;
+}
+
+.reportRow {
+  grid-template-columns: 46px minmax(0, 1fr);
+  min-height: 58px;
+  padding: 9px 10px;
+  background: rgba(3, 1, 8, 0.46);
+}
+
+.reportRow img,
+.rowIndex {
+  width: 38px;
+  height: 38px;
+}
+
+.reportRow strong {
+  font-size: 14px;
+}
+
+.reportRow span {
+  color: rgba(238, 228, 252, 0.7);
+}
+
+.playlistBrowserCards,
+.radioGrid,
+.musicMemoryResults {
+  gap: 12px;
+}
+
+.playlistBrowserCard,
+.musicMemoryCard {
+  background:
+    linear-gradient(145deg, rgba(12, 4, 26, 0.54), rgba(5, 2, 12, 0.72)) padding-box,
+    linear-gradient(135deg, rgba(217, 179, 255, 0.22), rgba(143, 240, 255, 0.1), rgba(255, 115, 216, 0.14)) border-box;
+}
+
+.playlistBrowserCard {
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 11px;
+  padding: 12px;
+}
+
+.playlistBrowserArt {
+  width: 78px;
+}
+
+.playlistBrowserBody {
+  gap: 4px;
+}
+
+.playlistBrowserBody h3 {
+  font-size: 17px;
+}
+
+.playlistBrowserBody p,
+.playlistBrowserBody small {
+  color: rgba(238, 228, 252, 0.74);
+}
+
+.playlistBrowserActions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.playlistBrowserActions button,
+.playlistBrowserActions .buttonLink {
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.radioGrid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 310px), 1fr));
+}
+
+.radioStation {
+  grid-template-columns: 70px minmax(0, 1fr) auto;
+  gap: 11px;
+  min-height: 94px;
+  padding: 11px;
+  background: rgba(4, 1, 10, 0.58);
+}
+
+.radioStationArt {
+  width: 64px;
+}
+
+.radioStation h3 {
+  font-size: 15px;
+  line-height: 1.14;
+}
+
+.radioStation p {
+  color: rgba(238, 228, 252, 0.68);
+}
+
+.radioStationActions {
+  gap: 7px;
+}
+
+.radioStationActions button {
+  min-width: 70px;
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.radioStationArtEmpty {
+  color: rgba(250, 246, 255, 0.82);
+  background:
+    radial-gradient(circle at 42% 34%, rgba(217, 179, 255, 0.28), transparent 38%),
+    linear-gradient(135deg, rgba(77, 42, 126, 0.64), rgba(12, 5, 23, 0.88)),
+    url("/assets/rabbit-hole-fallback.jpg") center / cover;
+  font-size: 18px;
+  font-weight: 900;
+  box-shadow: inset 0 0 0 1px rgba(217, 179, 255, 0.14), 0 0 20px rgba(217, 179, 255, 0.08);
+}
+
+.beatportChartHero {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.55fr) minmax(520px, 1fr);
+  align-items: end;
+}
+
+.beatportChartForm {
+  grid-template-columns: minmax(150px, 190px) minmax(260px, 1fr) minmax(96px, 130px) auto;
+  min-width: 0;
+}
+
+.beatportChartPanel .formHead {
+  align-items: start;
+}
+
+.beatportChartTracks {
+  gap: 8px;
+}
+
+.beatportChartTrack {
+  grid-template-columns: 40px 70px minmax(0, 1fr);
+  gap: 12px;
+  padding: 9px 10px;
+  background: rgba(4, 1, 10, 0.58);
+}
+
+.beatportChartArt {
+  width: 70px;
+}
+
+.beatportChartBody {
+  gap: 2px;
+}
+
+.beatportChartBody h3 {
+  font-size: 16px;
+}
+
+.beatportChartBody p {
+  color: rgba(250, 246, 255, 0.88);
+  font-size: 13px;
+}
+
+.beatportChartBody small {
+  color: rgba(238, 228, 252, 0.66);
+  font-size: 11px;
+}
+
+.musicMemorySearch {
+  grid-template-columns: minmax(260px, 1fr) minmax(155px, auto) minmax(145px, auto) auto;
+}
+
+.musicMemoryResults {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 390px), 1fr));
+}
+
+.musicMemoryCard {
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 11px;
+  padding: 12px;
+}
+
+.musicMemoryArt {
+  width: 82px;
+}
+
+.musicMemoryTitleRow h3 {
+  font-size: 16px;
+}
+
+.musicMemoryMeta {
+  color: rgba(238, 228, 252, 0.76);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.musicMemoryBadge {
+  font-size: 9px;
+}
+
+.tidalMixHero,
+.playlistHero,
+.radioHero,
+.musicMemoryHero {
+  min-height: 90px;
+}
+
+.playlistBrowserEmpty,
+.tidalMixEmpty {
+  border-color: rgba(217, 179, 255, 0.12);
+  background: rgba(3, 1, 8, 0.34);
+}
+
+@media (min-width: 1100px) and (max-width: 1370px) {
+  .shell {
+    width: min(100vw - 24px, 1320px);
+  }
+
+  .topChrome {
+    grid-template-columns: minmax(230px, 1fr) minmax(280px, 360px) minmax(250px, 1fr);
+  }
+
+  .brandBanner {
+    width: min(360px, 30vw);
+  }
+
+  .viewTabs button {
+    padding: 0 10px;
+    font-size: 9px;
+  }
+
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+    border-radius: 18px;
+  }
+
+  .viewTabs {
+    display: grid;
+    grid-template-columns: minmax(84px, 1.2fr) repeat(7, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .viewTabs a,
+  .viewTabs button {
+    min-width: 0;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .topControls {
+    display: grid;
+    grid-template-columns: minmax(155px, 0.22fr) minmax(420px, 0.46fr) minmax(310px, 0.32fr);
+    align-items: center;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .aiModeControls {
+    display: grid;
+    grid-template-columns: minmax(112px, 0.75fr) minmax(132px, 1fr) auto;
+  }
+
+  .aiModeControls input {
+    width: 100%;
+  }
+
+  .zonePicker {
+    min-width: 0;
+  }
+
+  .statusPill {
+    max-width: 235px;
+  }
+
+  .player {
+    flex-basis: 49%;
+  }
+
+  .composer {
+    flex-basis: 51%;
+  }
+
+  .cover {
+    width: 116px;
+    height: 116px;
+  }
+
+  #nowTitle {
+    font-size: 24px;
+  }
+
+  #nowSubtitle {
+    font-size: 16px;
+  }
+
+  .feedbackButtons button {
+    padding: 0 10px;
+    font-size: 13px;
+  }
+
+  .beatportChartHero {
+    grid-template-columns: minmax(240px, 0.42fr) minmax(500px, 1fr);
+  }
+
+  .historyMetrics {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1099px) {
+  .statusStack {
+    grid-template-columns: 1fr;
+  }
+
+  .beatportChartHero {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 699px) {
+  .topChrome {
+    grid-template-columns: 1fr;
+  }
+
+  .brandBanner {
+    width: min(520px, 74vw);
+  }
+
+  .statusStack {
+    justify-content: stretch;
+  }
+
+  .statusPill {
+    max-width: none;
+  }
+
+  .playlistBrowserActions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .radioStation {
+    grid-template-columns: 62px minmax(0, 1fr);
+  }
+
+  .radioStationActions {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Now Playing mode system: shared glass language, isolated mode geometry. */
+.player:is(.player--regular, .player--maximized, .player--fullscreen) {
+  --rh-rail-surface: linear-gradient(180deg, rgba(8, 3, 16, 0.72), rgba(3, 1, 8, 0.82));
+  --rh-rail-border: rgba(217, 179, 255, 0.11);
+  --rh-control-surface: rgba(4, 1, 10, 0.28);
+  --rh-control-border: rgba(217, 179, 255, 0.13);
+  --rh-section-rule: rgba(217, 179, 255, 0.1);
+  color: #f8f1ff;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(115, 44, 160, 0.16), transparent 42%) padding-box,
+    linear-gradient(112deg, rgba(8, 2, 17, 0.96), rgba(20, 5, 34, 0.82) 48%, rgba(4, 1, 9, 0.97)) padding-box,
+    linear-gradient(135deg, rgba(217, 179, 255, 0.28), rgba(255, 115, 216, 0.12), rgba(143, 240, 255, 0.08)) border-box;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 22px 58px rgba(0, 0, 0, 0.54);
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen)::before {
+  background:
+    radial-gradient(circle at 50% 46%, rgba(178, 91, 226, 0.1), transparent 44%),
+    linear-gradient(90deg, rgba(2, 1, 6, 0.22), transparent 30% 70%, rgba(2, 1, 6, 0.32));
+  opacity: 1;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > * {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .playerViewControls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 8;
+  gap: 8px;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .playerViewControls button {
+  min-height: 34px;
+  padding: 0 14px;
+  border-color: var(--rh-control-border);
+  background: rgba(4, 1, 10, 0.38);
+  color: rgba(248, 239, 255, 0.86);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 8px 18px rgba(0, 0, 0, 0.2);
+  font-size: 12px;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .now,
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .nowDiscoveryTools {
+  height: 100%;
+  padding: 24px;
+  overflow: hidden;
+  border: 1px solid var(--rh-rail-border);
+  border-radius: 7px;
+  background: var(--rh-rail-surface);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025), 0 14px 32px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .now {
+  display: block;
+  padding-right: 24px;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowInfo {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  height: 100%;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowInfo .eyebrow,
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowFeedback::before,
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowDiscoveryActions::before,
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowTidalPlaylistGroup::before,
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .pcTempOverlay::before {
+  color: rgba(217, 179, 255, 0.68);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) #nowTitle {
+  margin-top: 5px;
+  color: #fff;
+  font-size: clamp(24px, 2.1vw, 32px);
+  line-height: 1.02;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) #nowSubtitle {
+  margin-top: 8px;
+  color: rgba(226, 198, 242, 0.82);
+  font-size: clamp(15px, 1.45vw, 20px);
+  font-weight: 650;
+  line-height: 1.18;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowSourceFormat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+  width: 100%;
+  max-width: none;
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: rgba(246, 233, 255, 0.92);
+  font-size: 13px;
+  line-height: 1.15;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowSourceFormat[hidden] {
+  display: none;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .sourceRow {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  width: 100%;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .sourceLabel {
+  overflow: hidden;
+  color: rgba(225, 205, 242, 0.64);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .sourceValue {
+  color: rgba(249, 240, 255, 0.92);
+  font-weight: 750;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .sourceTechnical :is(.sourceLabel, .sourceValue) {
+  color: rgba(218, 190, 236, 0.55);
+  font-size: 11px;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .sourceRow.sourcePrimary {
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .artStack {
+  position: relative;
+  container-type: size;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  isolation: isolate;
+  background: rgba(3, 1, 8, 0.2);
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .artStack::before {
+  content: "";
+  position: absolute;
+  inset: -13%;
+  z-index: 0;
+  background: var(--now-artwork-backdrop) center / cover no-repeat;
+  filter: blur(9px) saturate(1.08) brightness(0.5);
+  opacity: 0.8;
+  transform: scale(1.16);
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .artStack::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: radial-gradient(circle at 50% 48%, transparent 42%, rgba(3, 1, 8, 0.3) 100%);
+  pointer-events: none;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .cover {
+  position: relative;
+  z-index: 2;
+  width: min(100cqw, 100cqh);
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 1;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0;
+  background-color: rgba(8, 3, 15, 0.78);
+  background-position: center;
+  background-size: cover;
+  opacity: 0.7;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.48), 0 0 34px rgba(184, 110, 244, 0.09);
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .nowDiscoveryBadge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  pointer-events: none;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .nowDiscoveryBadge:empty {
+  display: none;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowDiscoveryBadge .scoreBadge {
+  min-width: min(100%, 210px);
+  min-height: 32px;
+  justify-content: center;
+  padding: 0 18px;
+  border: 1px solid rgba(217, 179, 255, 0.58);
+  border-radius: 999px;
+  background: rgba(24, 8, 38, 0.44);
+  color: #f0d5ff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 14px rgba(186, 113, 244, 0.12);
+  font-size: 13px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .nowDiscoveryTools {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  margin: 0;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .nowDiscoveryTools[hidden] {
+  display: none;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowFeedback {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+  margin: 0;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowFeedback::before {
+  content: "Rating";
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .feedbackRail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) :is(.feedbackButton, .nowDiscoveryActions button, .nowTidalPlaylistCreate button, .controls button) {
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 10px;
+  border-color: var(--rh-control-border) !important;
+  border-radius: 4px;
+  background: var(--rh-control-surface) !important;
+  color: rgba(248, 239, 255, 0.86) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025) !important;
+  font-size: 13px;
+  font-weight: 780;
+  line-height: 1.05;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .feedbackButton.active,
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .feedbackButton[aria-pressed="true"] {
+  border-color: rgba(225, 165, 255, 0.48) !important;
+  background: rgba(79, 27, 105, 0.2) !important;
+  color: #fff !important;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowDiscoveryActions,
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowTidalPlaylistGroup {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  width: 100%;
+  padding-top: 7px;
+  border-top: 1px solid var(--rh-section-rule);
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowDiscoveryActions {
+  margin-top: 10px;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowDiscoveryActions::before {
+  content: "Actions";
+  margin-bottom: 3px;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowTidalPlaylistGroup {
+  margin-top: 10px;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowTidalPlaylistGroup::before {
+  content: "Playlists";
+  margin-bottom: 3px;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowTidalPlaylistTargets,
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowTidalPlaylistCreate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  width: 100%;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowTidalPlaylistTarget {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .extraTidalPlaylist {
+  display: grid;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) :is(.nowTidalPlaylistTarget select, .nowTidalPlaylistCreate input, .nowTidalPlaylistCreate button) {
+  width: 100%;
+  min-width: 0;
+  min-height: 26px;
+  padding: 0 9px;
+  border-color: var(--rh-control-border) !important;
+  border-radius: 3px;
+  background: rgba(4, 1, 10, 0.3) !important;
+  color: rgba(239, 218, 250, 0.76) !important;
+  font-size: 12px;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowTidalPlaylistStatus {
+  min-height: 0;
+  max-height: 34px;
+  overflow: hidden;
+  color: rgba(220, 190, 239, 0.68);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .pcTempOverlay {
+  position: static;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, max-content));
+  gap: 7px 16px;
+  align-items: center;
+  width: 100%;
+  margin-top: 24px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rh-section-rule);
+  pointer-events: auto;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .pcTempOverlay[hidden] {
+  display: none !important;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .pcTempOverlay::before {
+  content: "System";
+  grid-column: 1 / -1;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .pcTempChip {
+  display: inline-flex;
+  justify-content: flex-start;
+  gap: 12px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .pcTempChip span,
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .pcTempChip strong {
+  color: rgba(235, 218, 247, 0.74);
+  font-size: 14px;
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .fullscreenConnectionStatus {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .fullscreenConnectionStatus .statusStack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+  justify-content: stretch;
+  width: 100%;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .fullscreenConnectionStatus .statusPill {
+  position: relative;
+  display: block;
+  min-height: 0;
+  max-width: none;
+  padding: 0 0 0 14px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: rgba(229, 204, 242, 0.72);
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .fullscreenConnectionStatus .statusPill::before {
+  position: absolute;
+  top: 0.42em;
+  left: 0;
+  width: 6px;
+  height: 6px;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .controls {
+  margin: 0;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .controls button[data-control="previous"] { grid-area: prev; }
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .controls button[data-control="playpause"] { grid-area: play; }
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .controls button[data-control="next"] { grid-area: next; }
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .controls button[data-control="stop"] { grid-area: stop; }
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .seekBlock {
+  display: grid;
+  grid-template-rows: auto 10px auto;
+  gap: 1px;
+  width: 100%;
+  margin: 0;
+  padding: 4px 0 0;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .playerMeta,
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .seekTimes {
+  min-height: 16px;
+  color: rgba(226, 196, 242, 0.8);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.15;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) #playState,
+.player:is(.player--regular, .player--maximized, .player--fullscreen) #queueInfo {
+  color: #e2b6ff;
+  font-size: 16px;
+  font-weight: 850;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) #seekSlider {
+  min-height: 10px;
+  margin: 0;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > :is(.liveQueue, .outputs, .rabbitHolePanel) {
+  display: none !important;
+}
+
+/* Regular browser geometry. The Journey/Playlist Builder is deliberately below it. */
+#playerView .layout:has(> .player.player--regular:not(.isMaximized):not(.isFullWindow)) {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) {
+  --rh-left-rail: clamp(256px, 21.5vw, 270px);
+  --rh-right-rail: clamp(280px, 23.25vw, 292px);
+  --rh-rail-gap: clamp(22px, 2vw, 26px);
+  display: grid;
+  grid-template-columns: var(--rh-left-rail) minmax(0, 1fr) var(--rh-right-rail);
+  grid-template-rows: 46px minmax(540px, auto) 60px 46px;
+  column-gap: var(--rh-rail-gap);
+  row-gap: 0;
+  width: 100%;
+  min-height: 738px;
+  padding: 26px;
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .now {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryBadge {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) .nowSourceFormat {
+  margin-top: 24px;
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  display: grid;
+  grid-template-columns: var(--rh-left-rail) minmax(0, 1fr) var(--rh-right-rail);
+  grid-template-areas: "prev . next" "play . stop";
+  gap: 6px var(--rh-rail-gap);
+  padding-top: 6px;
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock {
+  grid-column: 1 / -1;
+  grid-row: 4;
+}
+
+#playerView .layout:has(> .player.player--regular:not(.isMaximized):not(.isFullWindow)) > .composer {
+  flex: none;
+  width: 100%;
+}
+
+/* Regular browser header: remove the redundant masthead and give navigation room. */
+body:has(#playerView.isActive > .layout > .player.player--regular:not(.isMaximized):not(.isFullWindow)) .topChrome {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  body:has(#playerView.isActive > .layout > .player.player--regular:not(.isMaximized):not(.isFullWindow)) .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    margin-top: 0;
+    margin-bottom: 16px;
+    padding: 8px;
+    border-radius: 24px;
+  }
+
+  body:has(#playerView.isActive > .layout > .player.player--regular:not(.isMaximized):not(.isFullWindow)) .viewTabs {
+    display: grid;
+    grid-template-columns: minmax(150px, 1.25fr) repeat(7, minmax(0, 1fr));
+    gap: 4px;
+    width: 100%;
+    padding: 4px;
+  }
+
+  body:has(#playerView.isActive > .layout > .player.player--regular:not(.isMaximized):not(.isFullWindow)) .viewTabs :is(a, button) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 12px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 850;
+    line-height: 1.1;
+    text-transform: uppercase;
+  }
+
+  body:has(#playerView.isActive > .layout > .player.player--regular:not(.isMaximized):not(.isFullWindow)) .topControls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  body:has(#playerView.isActive > .layout > .player.player--regular:not(.isMaximized):not(.isFullWindow)) .aiModeControls,
+  body:has(#playerView.isActive > .layout > .player.player--regular:not(.isMaximized):not(.isFullWindow)) .zonePicker {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* Pass 6 follow-up: keep the standalone Synapse Memory route in the same desktop system. */
+@media (min-width: 1100px) {
+  main[data-memory-item="synapse-memory"] {
+    width: min(1320px, calc(100vw - 48px));
+    max-width: none;
+    margin: 0 auto;
+    padding: 24px 0 48px;
+  }
+
+  main[data-memory-item="synapse-memory"] > a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 38px;
+    margin-bottom: 18px;
+    padding: 0 12px;
+    border: 1px solid var(--rh-desktop-line-soft);
+    border-radius: 8px;
+    background: var(--rh-desktop-card);
+    color: var(--rh-desktop-muted);
+    text-decoration: none;
+  }
+
+  main[data-memory-item="synapse-memory"] > a:hover {
+    border-color: rgba(217, 179, 255, 0.38);
+    color: #fff;
+    box-shadow: 0 0 20px rgba(217, 179, 255, 0.08);
+  }
+
+  main[data-memory-item="synapse-memory"] > h1 {
+    margin-bottom: 8px;
+    color: #fff;
+    font-size: clamp(28px, 3vw, 42px);
+    letter-spacing: -0.03em;
+    line-height: 1;
+  }
+
+  main[data-memory-item="synapse-memory"] > :is(p, #stats) {
+    color: var(--rh-desktop-muted);
+    line-height: 1.45;
+  }
+
+  main[data-memory-item="synapse-memory"] > section {
+    display: grid;
+    gap: 12px;
+    margin-top: var(--rh-desktop-gap);
+    padding: 20px;
+    border: 1px solid var(--rh-desktop-line);
+    border-radius: var(--rh-desktop-radius);
+    background: var(--rh-desktop-surface);
+    box-shadow:
+      inset 0 1px 0 rgba(244, 232, 255, 0.08),
+      0 18px 48px rgba(0, 0, 0, 0.48),
+      0 0 24px rgba(255, 255, 255, 0.035);
+  }
+
+  main[data-memory-item="synapse-memory"] section h2 {
+    margin: 0;
+    color: #fff;
+    font-size: 22px;
+    letter-spacing: -0.02em;
+    line-height: 1.06;
+  }
+
+  main[data-memory-item="synapse-memory"] section > p {
+    color: var(--rh-desktop-muted);
+    line-height: 1.4;
+  }
+
+  main[data-memory-item="synapse-memory"] article {
+    margin: 0;
+    padding: 14px;
+    border: 1px solid var(--rh-desktop-line-soft);
+    border-radius: var(--rh-desktop-radius);
+    background: var(--rh-desktop-card);
+    box-shadow: inset 0 1px 0 rgba(244, 232, 255, 0.06), 0 14px 34px rgba(0, 0, 0, 0.34);
+  }
+
+  main[data-memory-item="synapse-memory"] label {
+    color: var(--rh-desktop-muted);
+  }
+
+  main[data-memory-item="synapse-memory"] :is(button, input, select, textarea) {
+    border-radius: 8px;
+  }
+
+  main[data-memory-item="synapse-memory"] button {
+    min-height: 38px;
+  }
+}
+
+/* Pass 6 follow-up: regular desktop visual-system consistency. */
+@media (min-width: 1100px) {
+  :root {
+    --rh-desktop-surface: linear-gradient(145deg, rgba(12, 13, 17, 0.94), rgba(3, 4, 7, 0.97));
+    --rh-desktop-card: linear-gradient(145deg, rgba(19, 20, 24, 0.84), rgba(7, 8, 12, 0.94));
+    --rh-desktop-line: rgba(255, 255, 255, 0.11);
+    --rh-desktop-line-soft: rgba(255, 255, 255, 0.075);
+    --rh-desktop-muted: rgba(231, 231, 238, 0.7);
+    --rh-desktop-radius: 10px;
+    --rh-desktop-gap: 18px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) {
+    background:
+      linear-gradient(120deg, rgba(255, 255, 255, 0.018), transparent 34%, rgba(217, 179, 255, 0.028) 68%, transparent),
+      radial-gradient(circle at 70% 8%, rgba(255, 255, 255, 0.045), transparent 32%),
+      linear-gradient(180deg, #07080b 0%, #0b0c11 48%, #030407 100%);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized)::before {
+    background:
+      radial-gradient(circle at 50% 34%, rgba(217, 179, 255, 0.055), transparent 42%),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.025), transparent 16% 84%, rgba(217, 179, 255, 0.025));
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized)::after {
+    opacity: 0.12;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(.appHeader, .topbar, .secondaryNav) {
+    border-color: var(--rh-desktop-line-soft);
+    background: var(--rh-desktop-surface);
+    box-shadow:
+      inset 0 1px 0 rgba(244, 232, 255, 0.08),
+      0 16px 38px rgba(0, 0, 0, 0.38),
+      0 0 24px rgba(255, 255, 255, 0.035);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNavItems button {
+    border-color: var(--rh-desktop-line-soft);
+    background: rgba(6, 7, 10, 0.34);
+    color: var(--rh-desktop-muted);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNavItems button.active {
+    border-color: rgba(217, 179, 255, 0.42);
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(217, 179, 255, 0.1), rgba(255, 255, 255, 0.04)) padding-box,
+      linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(217, 179, 255, 0.24), rgba(255, 255, 255, 0.1)) border-box;
+    color: #fff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 0 18px rgba(217, 179, 255, 0.08);
+  }
+
+  :is(
+    #queueView,
+    #discoverView,
+    #standbyView,
+    #historyView,
+    #musicMemoryView,
+    #beatportChartsView,
+    #radioView,
+    #playlistView,
+    #tidalView,
+    #connectionsView,
+    #aiView,
+    #diagnosticsView,
+    #settingsView
+  ).isActive .panel {
+    border-color: var(--rh-desktop-line);
+    border-radius: var(--rh-desktop-radius);
+    background: var(--rh-desktop-surface);
+    box-shadow:
+      inset 0 1px 0 rgba(244, 232, 255, 0.08),
+      0 18px 48px rgba(0, 0, 0, 0.48),
+      0 0 24px rgba(255, 255, 255, 0.035);
+  }
+
+  :is(
+    #discoverView,
+    #standbyView,
+    #historyView,
+    #musicMemoryView,
+    #beatportChartsView,
+    #radioView,
+    #playlistView,
+    #tidalView,
+    #connectionsView,
+    #aiView,
+    #diagnosticsView
+  ).isActive :is(
+    .playlistSeed,
+    .track,
+    .standbyTrack,
+    .metricCard,
+    .musicMemoryCard,
+    .beatportChartTrack,
+    .radioStation,
+    .playlistBrowserCard,
+    .tidalMixCard,
+    .systemScopeItem,
+    .healthCard,
+    .intentDebugCard,
+    .poolDiagnosticsCard,
+    .sourceReportCard,
+    .rejectedDebugCard,
+    .scoreBox,
+    .reasonBlock
+  ) {
+    border-color: var(--rh-desktop-line-soft);
+    border-radius: var(--rh-desktop-radius);
+    background: var(--rh-desktop-card);
+    box-shadow:
+      inset 0 1px 0 rgba(244, 232, 255, 0.06),
+      0 14px 34px rgba(0, 0, 0, 0.34),
+      0 0 20px rgba(255, 255, 255, 0.025);
+  }
+
+  :is(
+    #discoverView,
+    #standbyView,
+    #historyView,
+    #musicMemoryView,
+    #beatportChartsView,
+    #radioView,
+    #playlistView,
+    #tidalView,
+    #connectionsView,
+    #aiView,
+    #diagnosticsView
+  ).isActive :is(
+    .track,
+    .standbyTrack,
+    .metricCard,
+    .musicMemoryCard,
+    .beatportChartTrack,
+    .radioStation,
+    .playlistBrowserCard,
+    .tidalMixCard,
+    .systemScopeItem
+  ):hover,
+  :is(
+    #discoverView,
+    #standbyView,
+    #historyView,
+    #musicMemoryView,
+    #beatportChartsView,
+    #radioView,
+    #playlistView,
+    #tidalView,
+    #connectionsView,
+    #aiView,
+    #diagnosticsView
+  ).isActive :is(
+    .track,
+    .standbyTrack,
+    .metricCard,
+    .musicMemoryCard,
+    .beatportChartTrack,
+    .radioStation,
+    .playlistBrowserCard,
+    .tidalMixCard,
+    .systemScopeItem
+  ):focus-within {
+    border-color: rgba(217, 179, 255, 0.38);
+    box-shadow:
+      inset 0 1px 0 rgba(244, 232, 255, 0.1),
+      0 16px 38px rgba(0, 0, 0, 0.4),
+      0 0 24px rgba(217, 179, 255, 0.08);
+  }
+
+  :is(
+    #queueView,
+    #discoverView,
+    #standbyView,
+    #historyView,
+    #musicMemoryView,
+    #beatportChartsView,
+    #radioView,
+    #playlistView,
+    #tidalView,
+    #connectionsView,
+    #aiView,
+    #diagnosticsView,
+    #settingsView
+  ).isActive :is(.formHead, .queueViewHeader, .systemViewHeader, .settingsHeader, .playlistBrowserHeader, .tidalSectionTitle) {
+    gap: 8px;
+  }
+
+  :is(
+    #queueView,
+    #discoverView,
+    #standbyView,
+    #historyView,
+    #musicMemoryView,
+    #beatportChartsView,
+    #radioView,
+    #playlistView,
+    #tidalView,
+    #connectionsView,
+    #aiView,
+    #diagnosticsView,
+    #settingsView
+  ).isActive :is(.formHead h2, .queueViewHeader h2, .systemViewHeader h2, .settingsHeader h2, .playlistBrowserHeader h3, .tidalSectionTitle h3) {
+    color: #fff;
+    letter-spacing: -0.025em;
+    line-height: 1.06;
+    text-shadow: 0 0 16px rgba(255, 255, 255, 0.08), 0 0 24px rgba(217, 179, 255, 0.08);
+  }
+
+  :is(
+    #queueView,
+    #discoverView,
+    #standbyView,
+    #historyView,
+    #musicMemoryView,
+    #beatportChartsView,
+    #radioView,
+    #playlistView,
+    #tidalView,
+    #connectionsView,
+    #aiView,
+    #diagnosticsView,
+    #settingsView
+  ).isActive :is(.muted, .tasteNarrative, .musicMemoryMeta, .musicMemoryIds, .musicMemoryProvider, .radioStationText p, .playlistBrowserBody p, .playlistBrowserBody small, .tidalMixBody p, .tidalMixBody small, .beatportChartBody small, .systemScopeItem span) {
+    color: var(--rh-desktop-muted);
+  }
+
+  :is(
+    #queueView,
+    #discoverView,
+    #standbyView,
+    #historyView,
+    #musicMemoryView,
+    #beatportChartsView,
+    #radioView,
+    #playlistView,
+    #tidalView,
+    #connectionsView,
+    #aiView,
+    #diagnosticsView,
+    #settingsView
+  ).isActive :is(.resultActions button, .resultActions .buttonLink, .quickActions button, .playlistButtons button, .standbyActions button, .radioStationActions button, .tidalMixActions button, .playlistBrowserActions button, .playlistBrowserActions .buttonLink, .beatportChartPanel .resultActions button, .settingsPanel .topControls button):not(.scoringModeCard) {
+    min-height: 38px;
+    border-radius: 8px;
+    border-color: rgba(255, 255, 255, 0.14);
+    background:
+      linear-gradient(145deg, rgba(23, 24, 29, 0.86), rgba(5, 6, 9, 0.95)) padding-box,
+      linear-gradient(135deg, rgba(255, 255, 255, 0.2), rgba(217, 179, 255, 0.16), rgba(255, 255, 255, 0.08)) border-box;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 24px rgba(0, 0, 0, 0.34);
+  }
+
+  :is(
+    #musicMemoryView,
+    #beatportChartsView,
+    #radioView,
+    #playlistView,
+    #tidalView
+  ).isActive :is(.musicMemoryArt, .beatportChartArt, .radioStationArt, .playlistBrowserArt, .tidalMixArt) {
+    border-color: rgba(217, 179, 255, 0.24);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 12px 28px rgba(0, 0, 0, 0.32), 0 0 16px rgba(217, 179, 255, 0.05);
+  }
+
+  :is(
+    #musicMemoryView,
+    #beatportChartsView,
+    #radioView,
+    #playlistView,
+    #tidalView
+  ).isActive :is(.musicMemoryBadge, .tidalPinnedBadge, .playlistBrowserType, .tidalMixType, .beatportChartPosition) {
+    color: var(--accent);
+    text-shadow: 0 0 12px rgba(217, 179, 255, 0.12);
+  }
+}
+
+/* Maximized player geometry. */
+body.playerMaximized.hasNowArtwork::before {
+  background: none;
+  filter: none;
+  opacity: 0;
+  transform: none;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) {
+  --rh-left-rail: clamp(320px, 26vw, 352px);
+  --rh-right-rail: clamp(320px, 25vw, 344px);
+  --rh-rail-gap: clamp(18px, 1.6vw, 20px);
+  --rh-rail-surface: transparent;
+  --rh-rail-border: rgba(217, 179, 255, 0.12);
+  position: fixed;
+  inset: 8px;
+  z-index: 80;
+  display: grid;
+  grid-template-columns: var(--rh-left-rail) minmax(0, 1fr) var(--rh-right-rail);
+  grid-template-rows: 46px minmax(0, 1fr) 14px 64px 46px;
+  column-gap: var(--rh-rail-gap);
+  row-gap: 0;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  padding: 26px 26px 8px;
+  overflow: hidden;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow)::before {
+  z-index: 0;
+  inset: -2.5%;
+  background:
+    linear-gradient(90deg, rgba(3, 1, 8, 0.78), rgba(8, 3, 16, 0.2) 30% 70%, rgba(3, 1, 8, 0.82)),
+    var(--now-artwork-backdrop) center / cover no-repeat;
+  filter: blur(28px) saturate(1.08) brightness(0.4);
+  opacity: 0.76;
+  transform: none;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .now {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .artStack {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .nowDiscoveryBadge {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .playerViewControls {
+  position: relative;
+  top: auto;
+  right: auto;
+  left: auto;
+  grid-column: 3;
+  grid-row: 1;
+  align-self: center;
+  justify-self: center;
+  justify-content: center;
+  width: max-content;
+  max-width: 100%;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .nowDiscoveryTools {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > :is(.now, .nowDiscoveryTools) {
+  height: 100%;
+  min-height: 0;
+  overflow: visible;
+  border-color: var(--rh-rail-border);
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .artStack {
+  background: transparent;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .artStack::before {
+  display: none;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .artStack::after {
+  background: none;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .cover {
+  width: min(calc(100cqw - 8px), calc(100cqh - 8px));
+  max-width: calc(100% - 8px);
+  max-height: calc(100% - 8px);
+  background-color: transparent;
+  opacity: 0.75;
+  box-shadow: none;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .nowDiscoveryTools {
+  padding: 18px 22px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .now {
+  padding: 26px 24px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowDiscoveryActions {
+  width: calc(100% - 32px);
+  align-self: center;
+  margin-top: 8px;
+  gap: 4px;
+  padding-top: 5px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowTidalPlaylistGroup {
+  width: calc(100% - 32px);
+  align-self: center;
+  margin-top: 8px;
+  gap: 4px;
+  padding-top: 5px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) :is(.feedbackButton, .nowDiscoveryActions button) {
+  min-height: 34px;
+  font-size: 14px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) :is(.feedbackButton, .nowDiscoveryActions button, .nowTidalPlaylistCreate button, .controls button) {
+  color: var(--accent) !important;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) :is(.nowTidalPlaylistTarget select, .nowTidalPlaylistCreate input, .nowTidalPlaylistCreate button) {
+  min-height: 28px;
+  font-size: 13px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowSourceFormat {
+  flex: 0 0 auto;
+  margin-top: 18px;
+  gap: 4px;
+  font-size: 12px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowInfo {
+  height: auto;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) #nowTitle {
+  font-size: clamp(20px, 1.7vw, 25px);
+  line-height: 1.06;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) #nowSubtitle {
+  margin-top: 8px;
+  font-size: clamp(14px, 1.25vw, 18px);
+  line-height: 1.2;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .now .sourceRow {
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 10px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .now .sourceLabel {
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .now .sourceValue {
+  font-size: 13px;
+  overflow-wrap: normal;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .now .sourceTechnical {
+  white-space: nowrap;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .pcTempOverlay {
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "system-heading"
+    "cpu"
+    "gpu"
+    "connections";
+  row-gap: 5px;
+  column-gap: 0;
+  margin-top: 18px;
+  padding-top: 12px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .pcTempOverlay::before {
+  grid-area: system-heading;
+  font-size: 11px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .pcTempChipCpu {
+  grid-area: cpu;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .pcTempChipGpu {
+  grid-area: gpu;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .pcTempChip {
+  gap: 8px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .pcTempChip :is(span, strong) {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .fullscreenConnectionStatus {
+  grid-area: connections;
+  grid-column: 1;
+  margin-top: 3px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .fullscreenConnectionStatus .statusStack {
+  gap: 2px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .fullscreenConnectionStatus .statusPill {
+  padding-left: 12px;
+  font-size: 13px;
+  line-height: 1.15;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowFeedback {
+  gap: 3px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowFeedback::before {
+  width: calc(100% - 32px);
+  justify-self: center;
+  margin-bottom: 0;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowFeedback .feedbackRail {
+  width: calc(100% - 32px);
+  justify-self: center;
+  gap: 2px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowDiscoveryActions::before {
+  width: 100%;
+  margin-bottom: 0;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowTidalPlaylistTargets,
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowTidalPlaylistCreate {
+  gap: 4px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowTidalPlaylistTarget {
+  grid-template-columns: 20px minmax(0, 1fr);
+  min-height: 28px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowTidalPlaylistTarget input {
+  min-height: 28px;
+  height: 20px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .feedbackButton:is(.active, [aria-pressed="true"]) {
+  border-color: rgba(210, 210, 218, 0.24) !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) :is(#addNowToTidalPlaylist, #openRabbitHole, #createNowTidalPlaylist, .controls button).actionAcknowledged {
+  border-color: rgba(210, 210, 218, 0.28) !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .controls {
+  grid-column: 1 / -1;
+  grid-row: 4;
+  display: grid;
+  grid-template-columns: var(--rh-left-rail) minmax(0, 1fr) var(--rh-right-rail);
+  grid-template-areas: "prev . next" "play . stop";
+  gap: 7px var(--rh-rail-gap);
+  padding-top: 0;
+  transform: translateY(-18px);
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .controls button {
+  justify-self: center;
+  width: calc(100% - 12px);
+  min-height: 28px;
+  font-size: 13px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock {
+  grid-column: 1 / -1;
+  grid-row: 5;
+  position: relative;
+  grid-template-rows: 18px 4px 16px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock .playerMeta {
+  display: grid;
+  grid-template-columns: var(--rh-left-rail) minmax(0, 1fr) var(--rh-right-rail);
+  column-gap: var(--rh-rail-gap);
+  align-items: center;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock #playState {
+  grid-column: 1;
+  color: var(--accent);
+  text-align: left;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock #queueInfo {
+  grid-column: 2;
+  width: 100%;
+  color: var(--accent);
+  justify-self: center;
+  text-align: center;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock .seekTimes {
+  position: absolute;
+  top: 4px;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  color: var(--accent);
+  width: max-content;
+  gap: 0;
+  z-index: 2;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock #seekPosition::after {
+  content: " — ";
+  margin: 0 5px;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock #seekSlider {
+  --seek-progress: 0%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  min-height: 4px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--accent) 0 var(--seek-progress), rgba(217, 179, 255, 0.22) var(--seek-progress) 100%);
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock #seekSlider::-webkit-slider-runnable-track {
+  height: 4px;
+  border: 0;
+  background: transparent;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock #seekSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0;
+  height: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock #seekSlider::-moz-range-track {
+  height: 4px;
+  border: 0;
+  background: rgba(217, 179, 255, 0.22);
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock #seekSlider::-moz-range-progress {
+  height: 4px;
+  background: var(--accent);
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock #seekSlider::-moz-range-thumb {
+  width: 0;
+  height: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow),
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) *,
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) *::before,
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) *::after {
+  color: var(--accent) !important;
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) ::placeholder {
+  color: var(--accent) !important;
+  opacity: 0.72;
+}
+
+body.playerMaximized #playerView .layout > :not(.player) {
+  display: none !important;
+}
+
+/* True fullscreen geometry. */
+body.playerFullWindow.hasNowArtwork::before {
+  background: none;
+  filter: none;
+  opacity: 0;
+  transform: none;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow,
+.player.player--fullscreen:fullscreen,
+.player.player--fullscreen:-webkit-full-screen {
+  --rh-left-rail: clamp(372px, 29vw, 416px);
+  --rh-right-rail: clamp(348px, 28.25vw, 362px);
+  --rh-rail-gap: clamp(20px, 1.75vw, 22px);
+  --rh-stage-shift: 58px;
+  --rh-rail-surface: linear-gradient(180deg, rgba(9, 9, 12, 0.98), rgba(3, 3, 6, 0.99));
+  --rh-rail-border: rgba(255, 255, 255, 0.075);
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  grid-template-columns: var(--rh-left-rail) minmax(0, 1fr) var(--rh-right-rail);
+  grid-template-rows: 46px minmax(0, 1fr) 12px 104px 46px;
+  column-gap: var(--rh-rail-gap);
+  row-gap: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  padding: 10px 15px 9px;
+  overflow: hidden;
+  border-radius: 0;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow::before,
+.player.player--fullscreen:fullscreen::before,
+.player.player--fullscreen:-webkit-full-screen::before {
+  z-index: 0;
+  inset: -2.5%;
+  background:
+    radial-gradient(circle at 50% 46%, rgba(112, 48, 156, 0.12), transparent 38%),
+    linear-gradient(90deg, rgba(3, 1, 8, 0.86), rgba(8, 3, 16, 0.2) 28% 72%, rgba(3, 1, 8, 0.9)),
+    var(--now-artwork-backdrop) center / cover no-repeat;
+  filter: blur(6px) saturate(0.92) brightness(0.56);
+  opacity: 0.6;
+  transform: none;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .now,
+.player.player--fullscreen:fullscreen > .now,
+.player.player--fullscreen:-webkit-full-screen > .now {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .artStack,
+.player.player--fullscreen:fullscreen > .artStack,
+.player.player--fullscreen:-webkit-full-screen > .artStack {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .nowDiscoveryBadge,
+.player.player--fullscreen:fullscreen > .nowDiscoveryBadge,
+.player.player--fullscreen:-webkit-full-screen > .nowDiscoveryBadge {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .playerViewControls,
+.player.player--fullscreen:fullscreen > .playerViewControls,
+.player.player--fullscreen:-webkit-full-screen > .playerViewControls {
+  position: relative;
+  top: auto;
+  right: auto;
+  left: auto;
+  grid-column: 3;
+  grid-row: 1;
+  align-self: center;
+  justify-self: center;
+  justify-content: center;
+  width: max-content;
+  max-width: 100%;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .nowDiscoveryTools,
+.player.player--fullscreen:fullscreen > .nowDiscoveryTools,
+.player.player--fullscreen:-webkit-full-screen > .nowDiscoveryTools {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > :is(.now, .nowDiscoveryTools),
+.player.player--fullscreen:fullscreen > :is(.now, .nowDiscoveryTools),
+.player.player--fullscreen:-webkit-full-screen > :is(.now, .nowDiscoveryTools) {
+  align-self: start;
+  height: auto;
+  margin-top: calc(10px + var(--rh-stage-shift));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025), 0 14px 32px rgba(0, 0, 0, 0.38);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .nowInfo,
+.player.player--fullscreen:fullscreen .nowInfo,
+.player.player--fullscreen:-webkit-full-screen .nowInfo {
+  height: auto;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .now,
+.player.player--fullscreen:fullscreen > .now,
+.player.player--fullscreen:-webkit-full-screen > .now {
+  padding: 16px 16px 14px;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow #nowTitle,
+.player.player--fullscreen:fullscreen #nowTitle,
+.player.player--fullscreen:-webkit-full-screen #nowTitle {
+  font-size: clamp(25px, 2vw, 30px);
+  line-height: 1.08;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow #nowSubtitle,
+.player.player--fullscreen:fullscreen #nowSubtitle,
+.player.player--fullscreen:-webkit-full-screen #nowSubtitle {
+  font-size: clamp(18px, 1.5vw, 21px);
+  line-height: 1.24;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .now .sourceRow,
+.player.player--fullscreen:fullscreen .now .sourceRow,
+.player.player--fullscreen:-webkit-full-screen .now .sourceRow {
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 12px;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .now .sourceLabel,
+.player.player--fullscreen:fullscreen .now .sourceLabel,
+.player.player--fullscreen:-webkit-full-screen .now .sourceLabel {
+  font-size: 15px;
+  line-height: 1.25;
+  text-align: left;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .now .sourceValue,
+.player.player--fullscreen:fullscreen .now .sourceValue,
+.player.player--fullscreen:-webkit-full-screen .now .sourceValue {
+  font-size: 16px;
+  line-height: 1.3;
+  text-align: left;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .now .sourceTechnical :is(.sourceLabel, .sourceValue),
+.player.player--fullscreen:fullscreen .now .sourceTechnical :is(.sourceLabel, .sourceValue),
+.player.player--fullscreen:-webkit-full-screen .now .sourceTechnical :is(.sourceLabel, .sourceValue) {
+  font-size: 14px;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .now,
+.player.player--fullscreen:fullscreen > .now,
+.player.player--fullscreen:-webkit-full-screen > .now,
+body.playerFullWindow .player.player--fullscreen.isFullWindow .nowInfo,
+.player.player--fullscreen:fullscreen .nowInfo,
+.player.player--fullscreen:-webkit-full-screen .nowInfo,
+body.playerFullWindow .player.player--fullscreen.isFullWindow .nowSourceFormat,
+.player.player--fullscreen:fullscreen .nowSourceFormat,
+.player.player--fullscreen:-webkit-full-screen .nowSourceFormat {
+  text-align: left;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .artStack,
+.player.player--fullscreen:fullscreen > .artStack,
+.player.player--fullscreen:-webkit-full-screen > .artStack {
+  z-index: 1;
+  overflow: hidden;
+  background: transparent;
+  transform: translateY(var(--rh-stage-shift));
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .artStack::before,
+.player.player--fullscreen:fullscreen > .artStack::before,
+.player.player--fullscreen:-webkit-full-screen > .artStack::before {
+  display: none;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .artStack::after,
+.player.player--fullscreen:fullscreen > .artStack::after,
+.player.player--fullscreen:-webkit-full-screen > .artStack::after {
+  display: none;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .cover,
+.player.player--fullscreen:fullscreen .cover,
+.player.player--fullscreen:-webkit-full-screen .cover {
+  width: min(calc(98cqw - 8px), calc(98cqh - 8px));
+  max-width: calc(98% - 8px);
+  max-height: calc(98% - 8px);
+  overflow: hidden;
+  background-color: transparent;
+  background-image: none !important;
+  opacity: 1;
+  box-shadow: none;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .cover::before,
+.player.player--fullscreen:fullscreen .cover::before,
+.player.player--fullscreen:-webkit-full-screen .cover::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: var(--now-artwork-backdrop), url("/assets/rabbit-hole-fallback.jpg");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  filter: none;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .nowDiscoveryBadge,
+.player.player--fullscreen:fullscreen > .nowDiscoveryBadge,
+.player.player--fullscreen:-webkit-full-screen > .nowDiscoveryBadge {
+  transform: translateY(calc(clamp(8px, 1.5vh, 12px) + var(--rh-stage-shift)));
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .nowDiscoveryTools,
+.player.player--fullscreen:fullscreen > .nowDiscoveryTools,
+.player.player--fullscreen:-webkit-full-screen > .nowDiscoveryTools {
+  padding: 28px 28px 14px;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .nowInfo .nowSourceFormat,
+.player.player--fullscreen:fullscreen .nowInfo .nowSourceFormat,
+.player.player--fullscreen:-webkit-full-screen .nowInfo .nowSourceFormat {
+  margin-top: clamp(56px, 7vh, 68px);
+  margin-left: 0;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .pcTempOverlay,
+.player.player--fullscreen:fullscreen .pcTempOverlay,
+.player.player--fullscreen:-webkit-full-screen .pcTempOverlay {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "system-heading"
+    "cpu"
+    "gpu"
+    "connections";
+  row-gap: 14px;
+  column-gap: 0;
+  margin-top: clamp(24px, 3.5vh, 30px);
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .pcTempOverlay::before,
+.player.player--fullscreen:fullscreen .pcTempOverlay::before,
+.player.player--fullscreen:-webkit-full-screen .pcTempOverlay::before {
+  grid-area: system-heading;
+  font-size: 12px;
+  text-align: left;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .pcTempChipCpu,
+.player.player--fullscreen:fullscreen .pcTempChipCpu,
+.player.player--fullscreen:-webkit-full-screen .pcTempChipCpu {
+  grid-area: cpu;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .pcTempChipGpu,
+.player.player--fullscreen:fullscreen .pcTempChipGpu,
+.player.player--fullscreen:-webkit-full-screen .pcTempChipGpu {
+  grid-area: gpu;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .pcTempChip :is(span, strong),
+.player.player--fullscreen:fullscreen .pcTempChip :is(span, strong),
+.player.player--fullscreen:-webkit-full-screen .pcTempChip :is(span, strong) {
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .pcTempChip,
+.player.player--fullscreen:fullscreen .pcTempChip,
+.player.player--fullscreen:-webkit-full-screen .pcTempChip,
+body.playerFullWindow .player.player--fullscreen.isFullWindow .fullscreenConnectionStatus,
+.player.player--fullscreen:fullscreen .fullscreenConnectionStatus,
+.player.player--fullscreen:-webkit-full-screen .fullscreenConnectionStatus,
+body.playerFullWindow .player.player--fullscreen.isFullWindow .fullscreenConnectionStatus .statusPill,
+.player.player--fullscreen:fullscreen .fullscreenConnectionStatus .statusPill,
+.player.player--fullscreen:-webkit-full-screen .fullscreenConnectionStatus .statusPill {
+  text-align: left;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .fullscreenConnectionStatus,
+.player.player--fullscreen:fullscreen .fullscreenConnectionStatus,
+.player.player--fullscreen:-webkit-full-screen .fullscreenConnectionStatus {
+  grid-area: connections;
+  grid-column: 1;
+  margin-top: 7px;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .fullscreenConnectionStatus .statusStack,
+.player.player--fullscreen:fullscreen .fullscreenConnectionStatus .statusStack,
+.player.player--fullscreen:-webkit-full-screen .fullscreenConnectionStatus .statusStack {
+  gap: 8px;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .fullscreenConnectionStatus .statusPill,
+.player.player--fullscreen:fullscreen .fullscreenConnectionStatus .statusPill,
+.player.player--fullscreen:-webkit-full-screen .fullscreenConnectionStatus .statusPill {
+  padding-left: 16px;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .nowDiscoveryActions,
+.player.player--fullscreen:fullscreen .nowDiscoveryActions,
+.player.player--fullscreen:-webkit-full-screen .nowDiscoveryActions {
+  align-self: center;
+  width: calc(100% - 24px);
+  gap: 8px;
+  margin-top: clamp(22px, 3vh, 28px);
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .nowFeedback .feedbackRail,
+.player.player--fullscreen:fullscreen .nowFeedback .feedbackRail,
+.player.player--fullscreen:-webkit-full-screen .nowFeedback .feedbackRail {
+  justify-self: center;
+  width: calc(100% - 24px);
+  gap: 8px;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .nowFeedback::before,
+.player.player--fullscreen:fullscreen .nowFeedback::before,
+.player.player--fullscreen:-webkit-full-screen .nowFeedback::before {
+  margin-left: 12px;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .feedbackButton:is(.active, [aria-pressed="true"]),
+.player.player--fullscreen:fullscreen .feedbackButton:is(.active, [aria-pressed="true"]),
+.player.player--fullscreen:-webkit-full-screen .feedbackButton:is(.active, [aria-pressed="true"]) {
+  border-color: rgba(210, 210, 218, 0.24) !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow :is(#addNowToTidalPlaylist, #openRabbitHole, #createNowTidalPlaylist, .controls button).actionAcknowledged,
+.player.player--fullscreen:fullscreen :is(#addNowToTidalPlaylist, #openRabbitHole, #createNowTidalPlaylist, .controls button).actionAcknowledged,
+.player.player--fullscreen:-webkit-full-screen :is(#addNowToTidalPlaylist, #openRabbitHole, #createNowTidalPlaylist, .controls button).actionAcknowledged {
+  border-color: rgba(210, 210, 218, 0.28) !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .nowTidalPlaylistGroup,
+.player.player--fullscreen:fullscreen .nowTidalPlaylistGroup,
+.player.player--fullscreen:-webkit-full-screen .nowTidalPlaylistGroup {
+  margin-top: 10px;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow :is(.feedbackButton, .nowDiscoveryActions button),
+.player.player--fullscreen:fullscreen :is(.feedbackButton, .nowDiscoveryActions button),
+.player.player--fullscreen:-webkit-full-screen :is(.feedbackButton, .nowDiscoveryActions button) {
+  min-height: 38px;
+  font-size: 15px;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow :is(.nowTidalPlaylistTarget select, .nowTidalPlaylistCreate input, .nowTidalPlaylistCreate button),
+.player.player--fullscreen:fullscreen :is(.nowTidalPlaylistTarget select, .nowTidalPlaylistCreate input, .nowTidalPlaylistCreate button),
+.player.player--fullscreen:-webkit-full-screen :is(.nowTidalPlaylistTarget select, .nowTidalPlaylistCreate input, .nowTidalPlaylistCreate button) {
+  min-height: 28px;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .controls,
+.player.player--fullscreen:fullscreen > .controls,
+.player.player--fullscreen:-webkit-full-screen > .controls {
+  grid-column: 1 / -1;
+  grid-row: 4;
+  display: grid;
+  grid-template-columns: var(--rh-left-rail) minmax(0, 1fr) var(--rh-right-rail);
+  grid-template-areas: "prev . next" "play . stop";
+  gap: 8px var(--rh-rail-gap);
+  align-content: start;
+  padding-top: 0;
+  transform: translateY(-33px);
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .controls button,
+.player.player--fullscreen:fullscreen > .controls button,
+.player.player--fullscreen:-webkit-full-screen > .controls button {
+  justify-self: center;
+  width: calc(var(--rh-right-rail) - 80px);
+  min-height: 38px;
+  font-size: 15px;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .seekBlock,
+.player.player--fullscreen:fullscreen > .seekBlock,
+.player.player--fullscreen:-webkit-full-screen > .seekBlock {
+  grid-column: 1 / -1;
+  grid-row: 5;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 16px 10px 16px;
+  transform: translateY(-16px);
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .seekBlock .playerMeta,
+.player.player--fullscreen:fullscreen > .seekBlock .playerMeta,
+.player.player--fullscreen:-webkit-full-screen > .seekBlock .playerMeta {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .seekBlock #seekSlider,
+.player.player--fullscreen:fullscreen > .seekBlock #seekSlider,
+.player.player--fullscreen:-webkit-full-screen > .seekBlock #seekSlider {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow > .seekBlock .seekTimes,
+.player.player--fullscreen:fullscreen > .seekBlock .seekTimes,
+.player.player--fullscreen:-webkit-full-screen > .seekBlock .seekTimes {
+  display: flex;
+  grid-column: 1;
+  grid-row: 3;
+  align-items: center;
+  justify-self: end;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow #seekPosition::after,
+.player.player--fullscreen:fullscreen #seekPosition::after,
+.player.player--fullscreen:-webkit-full-screen #seekPosition::after {
+  content: " — ";
+  margin: 0 5px;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow #queueInfo,
+.player.player--fullscreen:fullscreen #queueInfo,
+.player.player--fullscreen:-webkit-full-screen #queueInfo {
+  position: absolute;
+  top: -42px;
+  left: calc(var(--rh-left-rail) + var(--rh-rail-gap));
+  right: calc(var(--rh-right-rail) + var(--rh-rail-gap));
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow #seekSlider,
+.player.player--fullscreen:fullscreen #seekSlider,
+.player.player--fullscreen:-webkit-full-screen #seekSlider {
+  --seek-progress: 0%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  min-height: 4px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--accent) 0 var(--seek-progress), rgba(217, 179, 255, 0.22) var(--seek-progress) 100%);
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow #seekSlider::-webkit-slider-runnable-track,
+.player.player--fullscreen:fullscreen #seekSlider::-webkit-slider-runnable-track,
+.player.player--fullscreen:-webkit-full-screen #seekSlider::-webkit-slider-runnable-track {
+  height: 4px;
+  border: 0;
+  background: transparent;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow #seekSlider::-webkit-slider-thumb,
+.player.player--fullscreen:fullscreen #seekSlider::-webkit-slider-thumb,
+.player.player--fullscreen:-webkit-full-screen #seekSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0;
+  height: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow #seekSlider::-moz-range-track,
+.player.player--fullscreen:fullscreen #seekSlider::-moz-range-track,
+.player.player--fullscreen:-webkit-full-screen #seekSlider::-moz-range-track {
+  height: 4px;
+  border: 0;
+  background: rgba(217, 179, 255, 0.22);
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow #seekSlider::-moz-range-progress,
+.player.player--fullscreen:fullscreen #seekSlider::-moz-range-progress,
+.player.player--fullscreen:-webkit-full-screen #seekSlider::-moz-range-progress {
+  height: 4px;
+  background: var(--accent);
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow #seekSlider::-moz-range-thumb,
+.player.player--fullscreen:fullscreen #seekSlider::-moz-range-thumb,
+.player.player--fullscreen:-webkit-full-screen #seekSlider::-moz-range-thumb {
+  width: 0;
+  height: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow,
+body.playerFullWindow .player.player--fullscreen.isFullWindow *,
+body.playerFullWindow .player.player--fullscreen.isFullWindow *::before,
+body.playerFullWindow .player.player--fullscreen.isFullWindow *::after,
+.player.player--fullscreen:fullscreen,
+.player.player--fullscreen:fullscreen *,
+.player.player--fullscreen:fullscreen *::before,
+.player.player--fullscreen:fullscreen *::after,
+.player.player--fullscreen:-webkit-full-screen,
+.player.player--fullscreen:-webkit-full-screen *,
+.player.player--fullscreen:-webkit-full-screen *::before,
+.player.player--fullscreen:-webkit-full-screen *::after {
+  color: var(--accent) !important;
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow ::placeholder,
+.player.player--fullscreen:fullscreen ::placeholder,
+.player.player--fullscreen:-webkit-full-screen ::placeholder {
+  color: var(--accent) !important;
+  opacity: 0.72;
+}
+
+@media (max-width: 1040px) and (orientation: landscape) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow),
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) {
+    --rh-left-rail: 244px;
+    --rh-right-rail: 274px;
+    --rh-rail-gap: 18px;
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  body.playerFullWindow .player.player--fullscreen.isFullWindow,
+  .player.player--fullscreen:fullscreen,
+  .player.player--fullscreen:-webkit-full-screen {
+    --rh-left-rail: 250px;
+    --rh-right-rail: 280px;
+    --rh-rail-gap: 18px;
+  }
+
+  .player:is(.player--regular, .player--maximized, .player--fullscreen) > .now,
+  .player:is(.player--regular, .player--maximized, .player--fullscreen) > .nowDiscoveryTools {
+    padding: 18px;
+  }
+
+  .player:is(.player--regular, .player--maximized, .player--fullscreen) .sourceRow {
+    grid-template-columns: 108px minmax(0, 1fr);
+    gap: 9px;
+  }
+}
+
+@media (max-width: 899px), (orientation: portrait) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 46px auto minmax(280px, 72vw) auto auto auto;
+    gap: 12px;
+    min-height: 0;
+    padding: 18px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .now { grid-column: 1; grid-row: 2; height: auto; }
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryBadge { grid-column: 1; grid-row: 1; }
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack { grid-column: 1; grid-row: 3; }
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools { grid-column: 1; grid-row: 4; height: auto; }
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    grid-column: 1;
+    grid-row: 5;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-areas: "prev play stop next";
+  }
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock { grid-column: 1; grid-row: 6; }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow),
+  body.playerFullWindow .player.player--fullscreen.isFullWindow,
+  .player.player--fullscreen:fullscreen,
+  .player.player--fullscreen:-webkit-full-screen {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 46px auto minmax(250px, 52vh) auto auto auto;
+    gap: 10px;
+    padding: 14px;
+    overflow-y: auto;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .now,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .now,
+  .player.player--fullscreen:fullscreen > .now,
+  .player.player--fullscreen:-webkit-full-screen > .now { grid-column: 1; grid-row: 2; height: auto; }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .nowDiscoveryBadge,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .nowDiscoveryBadge,
+  .player.player--fullscreen:fullscreen > .nowDiscoveryBadge,
+  .player.player--fullscreen:-webkit-full-screen > .nowDiscoveryBadge { grid-column: 1; grid-row: 1; }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .artStack,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .artStack,
+  .player.player--fullscreen:fullscreen > .artStack,
+  .player.player--fullscreen:-webkit-full-screen > .artStack { grid-column: 1; grid-row: 3; }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .nowDiscoveryTools,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .nowDiscoveryTools,
+  .player.player--fullscreen:fullscreen > .nowDiscoveryTools,
+  .player.player--fullscreen:-webkit-full-screen > .nowDiscoveryTools { grid-column: 1; grid-row: 4; height: auto; overflow: visible; }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .controls,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .controls,
+  .player.player--fullscreen:fullscreen > .controls,
+  .player.player--fullscreen:-webkit-full-screen > .controls {
+    grid-column: 1;
+    grid-row: 5;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-areas: "prev play stop next";
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .seekBlock,
+  .player.player--fullscreen:fullscreen > .seekBlock,
+  .player.player--fullscreen:-webkit-full-screen > .seekBlock { grid-column: 1; grid-row: 6; }
+
+  .player:is(.player--regular, .player--maximized, .player--fullscreen) .nowSourceFormat {
+    margin-top: 22px !important;
+  }
+}
+
+/* Pass 1 navigation shell: compact identity, four primary groups, old content targets. */
+.appHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 48px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border: 1px solid rgba(217, 179, 255, 0.14);
+  border-radius: 16px;
+  background: rgba(9, 5, 17, 0.64);
+  box-shadow: var(--inner-light), 0 14px 34px rgba(2, 0, 8, 0.28);
+  backdrop-filter: blur(18px) saturate(1.35);
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+}
+
+.appIdentity {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.appIdentityName {
+  flex: 0 0 auto;
+  color: #fff;
+  font-size: clamp(18px, 2vw, 24px);
+  font-weight: 850;
+  letter-spacing: -0.03em;
+  text-shadow: 0 0 18px rgba(217, 179, 255, 0.22);
+}
+
+.appIdentity .systemTag {
+  max-width: min(48vw, 460px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: rgba(238, 228, 252, 0.58);
+  font-size: 10px;
+}
+
+.primaryNav {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.primaryNav button {
+  text-transform: none;
+  letter-spacing: -0.01em;
+}
+
+.secondaryNav {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin: 0 0 16px;
+  padding: 7px 10px;
+  border: 1px solid rgba(217, 179, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(7, 3, 14, 0.48);
+  box-shadow: var(--inner-light), 0 12px 28px rgba(2, 0, 8, 0.24);
+  backdrop-filter: blur(16px) saturate(1.25);
+  -webkit-backdrop-filter: blur(16px) saturate(1.25);
+}
+
+.secondaryNavShell {
+  display: none;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.secondaryNavShell.isActive {
+  display: flex;
+}
+
+.secondaryNavShell[hidden] {
+  display: none;
+}
+
+.secondaryNavLabel {
+  flex: 0 0 auto;
+  color: rgba(217, 179, 255, 0.72);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.secondaryNavItems {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.secondaryNavItems button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(217, 179, 255, 0.12);
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: none;
+  color: rgba(238, 228, 252, 0.68);
+  font-size: 12px;
+  font-weight: 750;
+  text-transform: none;
+}
+
+.secondaryNavItems button.active {
+  border-color: rgba(217, 179, 255, 0.34);
+  background: rgba(167, 124, 255, 0.14);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+/* System keeps connection, AI, and diagnostic surfaces separate from playback. */
+.systemView.isActive {
+  display: grid;
+  gap: 16px;
+}
+
+.systemPanel,
+.diagnosticsPanel {
+  min-width: 0;
+}
+
+.systemViewHeader {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.systemViewHeader h2 {
+  color: #fff;
+  font-size: clamp(20px, 2.1vw, 31px);
+  line-height: 1;
+}
+
+.systemViewHeader .muted {
+  max-width: 820px;
+}
+
+.systemScopeList {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.systemScopeItem {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(217, 179, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(5, 2, 12, 0.32);
+}
+
+.systemScopeItem strong {
+  color: rgba(250, 246, 255, 0.94);
+  font-size: 13px;
+}
+
+.systemScopeItem span {
+  color: rgba(213, 192, 238, 0.7);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.diagnosticsPanel {
+  display: grid;
+  gap: 18px;
+}
+
+.diagnosticsPanel .systemHealth {
+  margin-top: 0;
+}
+
+.diagnosticSurfaces {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+/* Discover > Rabbit Hole keeps the existing discovery surfaces in one view. */
+.discoverView.isActive {
+  display: grid;
+  gap: 16px;
+}
+
+.discoverView > .composer {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Playback > Queue gives the live Roon queue its own regular-view surface. */
+.queuePanel {
+  min-width: 0;
+}
+
+.queueViewHeader {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.queuePanel > .liveQueue {
+  max-height: min(68vh, 720px);
+  overflow: auto;
+}
+
+/* System > Settings keeps configuration out of the global navigation row. */
+.settingsPanel {
+  display: grid;
+  gap: 18px;
+}
+
+.settingsHeader {
+  display: grid;
+  gap: 6px;
+}
+
+.settingsHeader h2 {
+  color: #fff;
+}
+
+.settingsPanel > .topControls {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  align-items: stretch;
+  width: 100%;
+  max-width: none;
+  justify-content: stretch;
+  border-radius: 16px;
+}
+
+.settingsPanel > .topControls .aiModeControls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) auto;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settingsPanel > .topControls .aiModeControls label,
+.settingsPanel > .topControls .zonePicker {
+  min-width: 0;
+  width: 100%;
+}
+
+.settingsPanel > .topControls .aiModeControls select,
+.settingsPanel > .topControls .aiModeControls input,
+.settingsPanel > .topControls .zonePicker select {
+  min-width: 0;
+  width: 100%;
+}
+
+.settingsSection {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid rgba(217, 179, 255, 0.18);
+  border-radius: 14px;
+  background: rgba(23, 11, 42, 0.48);
+}
+
+.sonicCoverageSettings {
+  --coverage-gap: 16px;
+  --coverage-column: 160px;
+  --coverage-target: 44px;
+}
+.sonicCoverageCounts, .sonicCoverageLimits {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--coverage-column)), 1fr));
+  gap: var(--coverage-gap);
+  margin: 0;
+}
+.sonicCoverageCounts dt { color: var(--muted); }
+.sonicCoverageCounts dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 650; }
+.sonicCoverageActions { display: flex; flex-wrap: wrap; gap: var(--coverage-gap); }
+.sonicCoverageSettings button, .sonicCoverageLimits input[type="number"] { min-height: var(--coverage-target); }
+.sonicCoverageSettings progress { width: 100%; accent-color: var(--accent); }
+.sonicCoverageLimits { margin-top: var(--coverage-gap); }
+.sonicCoverageLimits label { display: grid; gap: calc(var(--coverage-gap) / 2); min-width: 0; }
+.sonicCoverageLimits input { max-width: 100%; }
+.sonicCoverageLimits .sonicCoverageToggle { display: flex; align-items: flex-start; }
+.sonicCoverageToggle input[type="checkbox"] { flex: 0 0 20px; width: 20px; height: 20px; min-height: 20px; margin: 0; padding: 0; }
+.sonicCoverageSettings summary { cursor: pointer; min-height: var(--coverage-target); }
+.sonicCoverageSettings li { overflow-wrap: anywhere; }
+.sonicCoverageSettings [hidden] { display: none; }
+
+.settingsSectionHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.settingsSectionHeader > div {
+  min-width: 0;
+}
+
+.settingsSectionHeader h3 {
+  margin: 0;
+  color: #fff;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.settingsSectionHeader .muted {
+  max-width: 72ch;
+  margin-top: 6px;
+}
+
+.sonicProductionStatus {
+  flex: 0 0 auto;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid rgba(217, 179, 255, 0.24);
+  border-radius: 999px;
+  color: rgba(247, 239, 255, 0.9);
+  background: rgba(53, 27, 94, 0.46);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.sonicProductionStatus[data-mode="blend"] {
+  border-color: rgba(217, 179, 255, 0.5);
+  color: #fff;
+}
+
+.sonicProductionStatus[data-mode="observe"] {
+  border-color: rgba(143, 240, 255, 0.42);
+  color: #d7f9ff;
+}
+
+.sonicProductionField {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  align-items: center;
+  gap: 16px;
+}
+
+.sonicProductionField > span {
+  color: rgba(247, 239, 255, 0.92);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.sonicProductionField select {
+  width: 100%;
+  min-height: 44px;
+  min-width: 0;
+}
+
+@media (max-width: 700px) {
+  .settingsSectionHeader {
+    display: grid;
+    gap: 12px;
+  }
+
+  .sonicProductionStatus {
+    justify-self: start;
+  }
+
+  .sonicProductionField {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+}
+
+@media (min-width: 900px) {
+  .viewTabs.primaryNav {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .viewTabs.primaryNav :is(a, button) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+  }
+}
+
+/* Pass 6: regular desktop readability and proportion polish. */
+@media (min-width: 900px) {
+  .pageHero {
+    min-height: 92px;
+    padding: 18px 20px;
+    gap: 24px;
+  }
+
+  .pageHero > :first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .pageHero h2 {
+    color: #fff;
+    font-size: clamp(22px, 2vw, 30px);
+    line-height: 1.04;
+    letter-spacing: -0.02em;
+  }
+
+  .pageHero .tasteNarrative {
+    max-width: 72ch;
+    margin-top: 6px;
+    font-size: 15px;
+    line-height: 1.4;
+  }
+
+  .pageHero > .resultActions,
+  .pageHero > form {
+    flex: 0 1 auto;
+    align-self: center;
+  }
+
+  .pageHero > .resultActions {
+    justify-content: flex-end;
+  }
+
+  #historyView.isActive,
+  #musicMemoryView.isActive,
+  #beatportChartsView.isActive,
+  #radioView.isActive,
+  #playlistView.isActive,
+  #tidalView.isActive {
+    display: grid;
+    gap: 16px;
+  }
+
+  #historyView .historyMetrics,
+  #beatportChartsView .beatportChartPanel,
+  #discoverView.isActive > .results {
+    margin-top: 0;
+  }
+
+  #historyView .historyGrid,
+  #musicMemoryView .musicMemoryResults,
+  #radioView .radioGrid,
+  #playlistView .playlistBrowserGrid,
+  #tidalView .tidalMixGrid {
+    gap: 16px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    grid-template-rows: 42px clamp(470px, 58vh, 540px) 58px 44px;
+    min-height: 0;
+    padding: 22px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .nowDiscoveryTools) {
+    padding: 20px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .now {
+    overflow: auto;
+    scrollbar-gutter: stable;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowInfo {
+    height: auto;
+    min-height: 100%;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowInfo #nowTitle {
+    font-size: clamp(22px, 1.9vw, 30px);
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowInfo #nowSubtitle {
+    font-size: clamp(14px, 1.25vw, 18px);
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowSourceFormat {
+    margin-top: 18px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools {
+    overflow: auto;
+  }
+}
+
+/* Pass 6 correction: regular player inherits the approved maximized artwork language. */
+@media (min-width: 700px) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    --rh-rail-surface: transparent;
+    --rh-rail-border: rgba(255, 255, 255, 0.075);
+    --rh-control-surface: rgba(4, 4, 7, 0.34);
+    --rh-control-border: rgba(255, 255, 255, 0.14);
+    --rh-section-rule: rgba(255, 255, 255, 0.1);
+    background:
+      linear-gradient(90deg, rgba(3, 3, 6, 0.8), rgba(10, 10, 14, 0.24) 30% 70%, rgba(3, 3, 6, 0.84)) padding-box,
+      linear-gradient(135deg, rgba(255, 255, 255, 0.14), rgba(217, 179, 255, 0.18), rgba(143, 240, 255, 0.08)) border-box;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow)::before {
+    z-index: 0;
+    inset: -2.5%;
+    background:
+      linear-gradient(90deg, rgba(3, 1, 8, 0.78), rgba(8, 3, 16, 0.2) 30% 70%, rgba(3, 1, 8, 0.82)),
+      var(--now-artwork-backdrop) center / cover no-repeat;
+    filter: blur(28px) saturate(1.08) brightness(0.4);
+    opacity: 0.76;
+    transform: none;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .nowDiscoveryTools) {
+    border-color: var(--rh-rail-border);
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack {
+    background: transparent;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack::before,
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack::after {
+    display: none;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .cover {
+    background-color: transparent;
+    opacity: 0.75;
+    box-shadow: none;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) :is(.feedbackButton, .nowDiscoveryActions button, .nowTidalPlaylistCreate button, .controls button) {
+    background: rgba(6, 7, 10, 0.36) !important;
+    border-color: rgba(255, 255, 255, 0.12) !important;
+    color: rgba(246, 244, 248, 0.88) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .feedbackButton:is(.active, [aria-pressed="true"]) {
+    border-color: rgba(217, 179, 255, 0.3) !important;
+    background: rgba(217, 179, 255, 0.1) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+  }
+}
+
+/* Pass 6: regular desktop seek consistency and width/readability polish. */
+@media (min-width: 1100px) {
+  body:not(.playerFullWindow):not(.playerMaximized) .shell {
+    width: min(1760px, calc(100vw - 32px));
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(.pageHero h2, .formHead h2, .queueViewHeader h2, .systemViewHeader h2, .settingsHeader h2, .playlistBrowserHeader h3, .tidalSectionTitle h3) {
+    font-size: clamp(24px, 2vw, 34px);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .pageHero .tasteNarrative {
+    font-size: 16px;
+    line-height: 1.45;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider {
+    --seek-progress: 0%;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    min-height: 6px;
+    border: 0;
+    border-radius: 999px;
+    background: linear-gradient(to right, var(--accent) 0 var(--seek-progress), rgba(217, 179, 255, 0.22) var(--seek-progress) 100%);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.035), 0 0 18px rgba(217, 179, 255, 0.12);
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-webkit-slider-runnable-track {
+    height: 6px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    margin-top: -5px;
+    border: 2px solid rgba(248, 241, 255, 0.94);
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(217, 179, 255, 0.12), 0 0 14px rgba(217, 179, 255, 0.32);
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-moz-range-track {
+    height: 6px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(217, 179, 255, 0.22);
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-moz-range-progress {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--accent);
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(248, 241, 255, 0.94);
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(217, 179, 255, 0.12), 0 0 14px rgba(217, 179, 255, 0.32);
+  }
+}
+
+@media (min-width: 1440px) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    --rh-left-rail: clamp(300px, 19vw, 348px);
+    --rh-right-rail: clamp(320px, 20vw, 372px);
+    --rh-rail-gap: clamp(24px, 1.8vw, 30px);
+    grid-template-rows: 46px clamp(500px, 62vh, 620px) 68px 50px;
+    padding: clamp(22px, 1.8vw, 32px);
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .nowDiscoveryTools) {
+    padding: 24px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowInfo #nowTitle {
+    font-size: clamp(24px, 2vw, 34px);
+    line-height: 1.04;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowInfo #nowSubtitle {
+    font-size: clamp(15px, 1.35vw, 20px);
+    line-height: 1.22;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowSourceFormat {
+    gap: 7px;
+    margin-top: 22px;
+    font-size: 14px;
+    line-height: 1.3;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .sourceRow {
+    grid-template-columns: 132px minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .sourceLabel {
+    font-size: 12.5px;
+    line-height: 1.3;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .sourceValue {
+    font-size: 13.5px;
+    line-height: 1.3;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .sourceTechnical :is(.sourceLabel, .sourceValue) {
+    font-size: 11.5px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) :is(.feedbackButton, .nowDiscoveryActions button, .nowTidalPlaylistCreate button, .controls button) {
+    min-height: 36px;
+    padding: 0 12px;
+    font-size: 14px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) :is(.nowTidalPlaylistTarget select, .nowTidalPlaylistCreate input) {
+    min-height: 40px;
+    font-size: 14px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .playerMeta,
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .seekTimes {
+    font-size: 13px;
+  }
+}
+
+/* Pass 6 correction: use the full desktop viewport and restore a dedicated transport band. */
+@media (min-width: 1440px) {
+  body:not(.playerFullWindow):not(.playerMaximized) .shell {
+    width: min(2200px, calc(100vw - 48px));
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    --rh-left-rail: clamp(340px, 20vw, 420px);
+    --rh-right-rail: clamp(360px, 21vw, 460px);
+    --rh-rail-gap: clamp(28px, 1.8vw, 36px);
+    grid-template-rows: 46px clamp(500px, 64vh, 700px) 82px 28px 70px;
+    padding: clamp(24px, 1.7vw, 36px);
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .now,
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack,
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools {
+    grid-row: 2;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    grid-row: 3;
+    align-self: start;
+    padding-top: 10px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock {
+    grid-row: 5;
+    align-self: end;
+    padding-top: 10px;
+    padding-bottom: 4px;
+  }
+}
+
+/* Pass 6 correction: final desktop expansion and exact fullscreen seek treatment for regular mode. */
+@media (min-width: 1440px) {
+  body:not(.playerFullWindow):not(.playerMaximized) .shell {
+    width: min(2400px, calc(100vw - 32px));
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    --rh-left-rail: clamp(350px, 20vw, 440px);
+    --rh-right-rail: clamp(370px, 21vw, 480px);
+    --rh-rail-gap: clamp(30px, 1.8vw, 40px);
+    grid-template-rows: 46px clamp(520px, 66vh, 740px) 88px 32px 76px;
+    padding: clamp(24px, 1.6vw, 36px);
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider {
+    height: 4px;
+    min-height: 4px;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-webkit-slider-runnable-track {
+    height: 4px;
+    border: 0;
+    background: transparent;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-webkit-slider-thumb {
+    width: 0;
+    height: 0;
+    margin-top: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-moz-range-track {
+    height: 4px;
+    border: 0;
+    background: rgba(217, 179, 255, 0.22);
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-moz-range-progress {
+    height: 4px;
+    background: var(--accent);
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-moz-range-thumb {
+    width: 0;
+    height: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
+/* Pass 6 cleanup: regular desktop iridescent navigation and restrained control surfaces. */
+@media (min-width: 1100px) {
+  :root {
+    --rh-desktop-control-surface: linear-gradient(145deg, rgba(22, 23, 28, 0.86), rgba(5, 6, 9, 0.95));
+    --rh-desktop-control-border: rgba(255, 255, 255, 0.13);
+    --rh-desktop-control-text: rgba(246, 244, 248, 0.9);
+    --rh-desktop-control-focus: rgba(217, 179, 255, 0.42);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .viewTabs.primaryNav button.active {
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background:
+      linear-gradient(112deg, rgba(143, 240, 255, 0.16), rgba(24, 25, 38, 0.7) 46%, rgba(255, 115, 216, 0.14)) padding-box,
+      linear-gradient(112deg, rgba(143, 240, 255, 0.42), rgba(167, 124, 255, 0.3), rgba(255, 115, 216, 0.32)) border-box;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      inset 0 -8px 18px rgba(2, 3, 8, 0.18),
+      0 0 24px rgba(143, 240, 255, 0.09),
+      0 8px 18px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(12px) saturate(1.18);
+    -webkit-backdrop-filter: blur(12px) saturate(1.18);
+    color: #fff;
+    text-shadow: 0 1px 10px rgba(0, 0, 0, 0.32);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),
+    select,
+    textarea
+  ) {
+    border: 1px solid var(--rh-desktop-control-border);
+    border-radius: 8px;
+    background:
+      var(--rh-desktop-control-surface) padding-box,
+      linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(217, 179, 255, 0.14), rgba(255, 255, 255, 0.07)) border-box;
+    color: var(--rh-desktop-control-text);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.07),
+      0 8px 20px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(14px) saturate(1.08);
+    -webkit-backdrop-filter: blur(14px) saturate(1.08);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),
+    select
+  ) {
+    min-height: 42px;
+    padding: 0 12px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) textarea {
+    padding: 12px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),
+    select,
+    textarea
+  ):focus {
+    border-color: var(--rh-desktop-control-focus);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.1),
+      0 0 0 2px rgba(217, 179, 255, 0.08),
+      0 0 20px rgba(217, 179, 255, 0.1);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),
+    textarea
+  )::placeholder {
+    color: rgba(231, 231, 238, 0.52);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(button, .buttonLink):not(.viewTabs button):not(.secondaryNavItems button) {
+    min-height: 38px;
+    border: 1px solid var(--rh-desktop-control-border);
+    border-radius: 8px;
+    background:
+      var(--rh-desktop-control-surface) padding-box,
+      linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(217, 179, 255, 0.14), rgba(255, 255, 255, 0.07)) border-box;
+    color: var(--rh-desktop-control-text);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.07),
+      0 8px 20px rgba(0, 0, 0, 0.24);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(button, .buttonLink):not(.viewTabs button):not(.secondaryNavItems button):hover {
+    border-color: rgba(217, 179, 255, 0.34);
+    background:
+      linear-gradient(145deg, rgba(31, 32, 39, 0.9), rgba(7, 8, 12, 0.96)) padding-box,
+      linear-gradient(135deg, rgba(255, 255, 255, 0.22), rgba(217, 179, 255, 0.26), rgba(255, 255, 255, 0.1)) border-box;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.1),
+      0 10px 24px rgba(0, 0, 0, 0.32),
+      0 0 18px rgba(217, 179, 255, 0.08);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(button, .buttonLink):not(.viewTabs button):not(.secondaryNavItems button):is(.active, [aria-pressed="true"]) {
+    border-color: rgba(217, 179, 255, 0.3);
+    background:
+      linear-gradient(145deg, rgba(37, 30, 48, 0.78), rgba(8, 9, 13, 0.94)) padding-box,
+      linear-gradient(135deg, rgba(217, 179, 255, 0.28), rgba(255, 255, 255, 0.12)) border-box;
+  }
+}
+
+/* Pass 6 correction: align regular transport metadata to the player seek band and fit desktop height. */
+@media (min-width: 1100px) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    --rh-regular-stage-height: clamp(440px, min(60vh, calc(100vh - 400px)), 660px);
+    grid-template-rows: 40px var(--rh-regular-stage-height) 70px 18px 62px;
+    min-height: 0;
+    padding-top: 20px;
+    padding-bottom: 18px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .nowDiscoveryTools) {
+    padding-top: 18px;
+    padding-bottom: 18px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    grid-row: 3;
+    gap: 5px var(--rh-rail-gap);
+    padding-top: 4px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock {
+    grid-row: 5;
+    position: relative;
+    grid-template-rows: 18px 4px 16px;
+    gap: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock .playerMeta {
+    display: grid;
+    grid-template-columns: var(--rh-left-rail) minmax(0, 1fr) var(--rh-right-rail);
+    column-gap: var(--rh-rail-gap);
+    align-items: center;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #playState {
+    grid-column: 1;
+    color: var(--accent);
+    text-align: left;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #queueInfo {
+    grid-column: 2;
+    width: 100%;
+    color: var(--accent);
+    justify-self: center;
+    text-align: center;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock .seekTimes {
+    position: absolute;
+    top: 4px;
+    right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    width: max-content;
+    gap: 0;
+    color: var(--accent);
+    z-index: 2;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekPosition::after {
+    content: " — ";
+    margin: 0 5px;
+  }
+}
+
+/* Pass 7: tablet layout — reflow regular surfaces without changing phone or player modes. */
+@media (min-width: 700px) and (max-width: 1099px),
+  (min-width: 700px) and (pointer: coarse) and (hover: none) {
+  body:not(.playerFullWindow):not(.playerMaximized) {
+    overflow-x: hidden;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .shell {
+    width: min(1180px, calc(100vw - 24px));
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .appHeader {
+    gap: 12px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .statusStack {
+    grid-template-columns: repeat(2, minmax(0, max-content));
+    gap: 6px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .topbar {
+    margin-bottom: 12px;
+    padding: 6px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .viewTabs.primaryNav {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+    width: 100%;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .viewTabs.primaryNav button {
+    min-height: 44px;
+    padding: 0 10px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNav {
+    margin-bottom: 12px;
+    padding: 6px;
+    overflow-x: auto;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNavShell {
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNavItems {
+    flex-wrap: nowrap;
+    gap: 6px;
+    min-width: 0;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNavItems button {
+    min-height: 44px;
+    padding: 0 14px;
+    white-space: nowrap;
+    touch-action: manipulation;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(button, .buttonLink) {
+    min-height: 44px;
+    touch-action: manipulation;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),
+    select,
+    textarea
+  ) {
+    min-height: 44px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .systemScopeList,
+  body:not(.playerFullWindow):not(.playerMaximized) .healthGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .historyMetrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(.musicMemorySearch, .beatportChartForm) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-width: 0;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .playlistBrowserActions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock {
+    position: relative;
+    grid-template-rows: 18px 10px 16px;
+    gap: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock .playerMeta {
+    display: grid;
+    align-items: center;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #playState {
+    grid-column: 1;
+    color: var(--accent);
+    text-align: left;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #queueInfo {
+    grid-column: 2;
+    width: 100%;
+    color: var(--accent);
+    justify-self: center;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock .seekTimes {
+    position: absolute;
+    top: 4px;
+    right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    width: max-content;
+    gap: 0;
+    color: var(--accent);
+    z-index: 2;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekPosition::after {
+    content: " — ";
+    margin: 0 5px;
+  }
+}
+
+@media (min-width: 700px) and (max-width: 899px) and (orientation: landscape),
+  (min-width: 700px) and (max-width: 1099px) and (orientation: portrait),
+  (min-width: 700px) and (max-width: 1099px) and (pointer: coarse) and (hover: none) and (orientation: landscape),
+  (min-width: 700px) and (pointer: coarse) and (hover: none) and (orientation: portrait) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    --rh-tablet-stage-height: clamp(360px, min(54vw, 52vh), 540px);
+    display: grid;
+    grid-template-columns: minmax(0, 0.86fr) minmax(0, 1.14fr);
+    grid-template-rows: 42px var(--rh-tablet-stage-height) auto 72px 62px;
+    gap: 12px 14px;
+    min-height: 0;
+    padding: 16px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .now {
+    grid-column: 1;
+    grid-row: 2;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack {
+    grid-column: 2;
+    grid-row: 2;
+    min-height: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryBadge {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    grid-column: 1 / -1;
+    grid-row: 4;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-areas: "prev play stop next";
+    gap: 8px;
+    padding-top: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls button {
+    min-height: 44px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock {
+    grid-column: 1 / -1;
+    grid-row: 5;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .nowDiscoveryTools) {
+    padding: 16px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .sourceRow {
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowSourceFormat {
+    margin-top: 14px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock .playerMeta {
+    grid-template-columns: minmax(96px, 0.7fr) minmax(0, 1.3fr);
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1099px) and (orientation: landscape),
+  (min-width: 1100px) and (pointer: coarse) and (hover: none) and (orientation: landscape) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    --rh-left-rail: clamp(220px, 24vw, 290px);
+    --rh-right-rail: clamp(236px, 26vw, 320px);
+    --rh-rail-gap: 16px;
+    --rh-tablet-stage-height: clamp(400px, 58vh, 560px);
+    grid-template-columns: var(--rh-left-rail) minmax(0, 1fr) var(--rh-right-rail);
+    grid-template-rows: 42px var(--rh-tablet-stage-height) 72px 18px 62px;
+    gap: 0 var(--rh-rail-gap);
+    padding: 18px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .artStack, .nowDiscoveryTools) {
+    grid-row: 2;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryBadge {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    display: grid;
+    grid-template-columns: var(--rh-left-rail) minmax(0, 1fr) var(--rh-right-rail);
+    grid-template-areas: "prev . next" "play . stop";
+    gap: 6px var(--rh-rail-gap);
+    padding-top: 4px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock {
+    grid-column: 1 / -1;
+    grid-row: 5;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock .playerMeta {
+    grid-template-columns: var(--rh-left-rail) minmax(0, 1fr) var(--rh-right-rail);
+    column-gap: var(--rh-rail-gap);
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .nowDiscoveryTools) {
+    padding: 18px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .nowDiscoveryTools) {
+    overflow: auto;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .sourceRow {
+    grid-template-columns: 104px minmax(0, 1fr);
+    gap: 9px;
+  }
+}
+
+/* Pass 7 correction: tablet header simplification and regular-player height fit. */
+@media (min-width: 700px) and (max-width: 1099px),
+  (min-width: 700px) and (pointer: coarse) and (hover: none) {
+  body:not(.playerFullWindow):not(.playerMaximized) .shell {
+    padding-top: max(8px, env(safe-area-inset-top));
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .appHeader {
+    min-height: 38px;
+    margin-bottom: 6px;
+    padding: 0 2px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .appIdentity {
+    gap: 10px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .appIdentity .systemTag {
+    max-width: min(54vw, 520px);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .statusStack {
+    gap: 4px 6px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .topbar {
+    margin-bottom: 8px;
+    padding: 5px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNav {
+    margin-bottom: 10px;
+    padding: 0 0 4px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNavShell {
+    gap: 10px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNavLabel {
+    line-height: 44px;
+  }
+}
+
+@media (min-width: 700px) and (max-width: 899px) and (orientation: landscape),
+  (min-width: 700px) and (max-width: 1099px) and (orientation: portrait),
+  (min-width: 700px) and (max-width: 1099px) and (pointer: coarse) and (hover: none) and (orientation: landscape),
+  (min-width: 700px) and (pointer: coarse) and (hover: none) and (orientation: portrait) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    --rh-tablet-stage-height: clamp(320px, min(50vw, calc(100dvh - 470px)), 500px);
+    grid-template-rows: 38px var(--rh-tablet-stage-height) auto 60px 52px;
+    gap: 8px 14px;
+    padding: 14px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools:not([hidden]) {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(220px, 0.85fr);
+    grid-template-areas:
+      "feedback actions"
+      "profile profile"
+      "playlist playlist";
+    gap: 8px 14px;
+    align-items: start;
+    overflow: visible;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .nowDiscoveryTools) {
+    padding: 12px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowFeedback .feedbackRail {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowDiscoveryActions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowDiscoveryActions::before,
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowTidalPlaylistGroup::before {
+    grid-column: 1 / -1;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowTidalPlaylistGroup {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    margin-top: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowTidalPlaylistTargets {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowTidalPlaylistCreate {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) :is(
+    .feedbackButton,
+    .nowDiscoveryActions button,
+    .nowTidalPlaylistTarget select,
+    .nowTidalPlaylistCreate input,
+    .nowTidalPlaylistCreate button
+  ) {
+    min-height: 44px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowSourceFormat {
+    margin-top: 12px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    gap: 6px;
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1099px) and (orientation: landscape),
+  (min-width: 1100px) and (pointer: coarse) and (hover: none) and (orientation: landscape) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    --rh-tablet-stage-height: clamp(340px, min(50vh, calc(100dvh - 350px)), 500px);
+    grid-template-rows: 38px var(--rh-tablet-stage-height) 60px 12px 52px;
+    padding: 14px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    padding-top: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .nowDiscoveryTools) {
+    padding: 14px;
+  }
+}
+
+/* Pass 7 correction 2: tablet controls-only chrome and viewport-fit player. */
+@media (min-width: 700px) and (max-width: 1099px),
+  (min-width: 700px) and (pointer: coarse) and (hover: none) {
+  body:not(.playerFullWindow):not(.playerMaximized) :is(.topbar, .viewTabs.primaryNav, .secondaryNav) {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .topbar {
+    margin-bottom: 8px;
+    padding: 0;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .viewTabs.primaryNav {
+    display: flex;
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: max-content;
+    max-width: 100%;
+    padding: 0;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .viewTabs.primaryNav button {
+    flex: 0 0 auto;
+    min-width: 108px;
+    padding: 0 16px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNav {
+    margin-bottom: 10px;
+    padding: 0 0 4px;
+    overflow: visible;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNavShell {
+    width: max-content;
+    max-width: 100%;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNavItems {
+    flex: 0 1 auto;
+  }
+}
+
+@media (min-width: 700px) and (max-width: 899px) and (orientation: landscape),
+  (min-width: 700px) and (max-width: 1099px) and (orientation: portrait),
+  (min-width: 700px) and (max-width: 1099px) and (pointer: coarse) and (hover: none) and (orientation: landscape),
+  (min-width: 700px) and (pointer: coarse) and (hover: none) and (orientation: portrait) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    --rh-tablet-player-height: min(760px, calc(100dvh - 180px));
+    height: var(--rh-tablet-player-height);
+    max-height: var(--rh-tablet-player-height);
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 0.82fr);
+    grid-template-rows: 34px minmax(320px, 1fr) 52px 48px;
+    grid-template-areas:
+      "badge badge"
+      "main tools"
+      "controls controls"
+      "seek seek";
+    gap: 6px 12px;
+    padding: 12px;
+    overflow: hidden;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .now {
+    grid-area: now;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack {
+    grid-area: art;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryBadge {
+    grid-area: badge;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools {
+    grid-area: tools;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    grid-area: controls;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock {
+    grid-area: seek;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools:not([hidden]) {
+    max-height: 220px;
+    padding: 10px;
+    overflow: auto;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .artStack) {
+    min-height: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    gap: 4px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock {
+    min-height: 0;
+  }
+}
+
+@media (min-width: 900px) and (max-width: 1099px) and (orientation: landscape),
+  (min-width: 1100px) and (pointer: coarse) and (hover: none) and (orientation: landscape) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    --rh-tablet-player-height: min(760px, calc(100dvh - 180px));
+    height: var(--rh-tablet-player-height);
+    max-height: var(--rh-tablet-player-height);
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.46fr);
+    grid-template-rows: 34px minmax(360px, 1fr) 52px 48px;
+    grid-template-areas:
+      "badge badge"
+      "main tools"
+      "controls controls"
+      "seek seek";
+    gap: 0 var(--rh-rail-gap);
+    padding: 12px;
+    overflow: hidden;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .now {
+    grid-area: now;
+    min-height: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack {
+    grid-area: art;
+    min-height: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryBadge {
+    grid-area: badge;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools {
+    grid-area: tools;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    grid-area: controls;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock {
+    grid-area: seek;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .nowDiscoveryTools) {
+    min-height: 0;
+    padding: 12px;
+    overflow: auto;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    padding-top: 0;
+    gap: 4px var(--rh-rail-gap);
+  }
+}
+
+/* Pass 7 custom tablet composition: functional zones, artwork-first stage, and full-width transport. */
+@media (min-width: 700px) and (max-width: 1099px),
+  (min-width: 700px) and (pointer: coarse) and (hover: none) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    --rh-tablet-meta-zone: clamp(220px, 25%, 290px);
+    --rh-tablet-utility-zone: clamp(280px, 28%, 340px);
+    grid-template-columns: minmax(0, var(--rh-tablet-meta-zone)) minmax(0, 1fr) minmax(0, var(--rh-tablet-utility-zone));
+    grid-template-rows: 34px minmax(360px, 1fr) 52px 48px;
+    grid-template-areas:
+      "badge badge badge"
+      "now art tools"
+      "controls controls controls"
+      "seek seek seek";
+    column-gap: 14px;
+    row-gap: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .now {
+    grid-area: now;
+    align-self: start;
+    justify-self: stretch;
+    width: auto;
+    height: auto;
+    max-height: 100%;
+    padding: 12px;
+    overflow: visible;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowInfo {
+    height: auto;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack {
+    grid-area: art;
+    align-self: stretch;
+    justify-self: stretch;
+    width: auto;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools {
+    grid-area: tools;
+    display: grid;
+    align-self: start;
+    width: auto;
+    height: auto;
+    max-height: none;
+    min-height: 0;
+    padding: 10px;
+    overflow: visible;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowFeedback .feedbackRail {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowDiscoveryActions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
+    margin-top: 0;
+    padding-top: 4px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowTidalPlaylistGroup {
+    margin-top: 0;
+    padding-top: 4px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowTidalPlaylistTargets {
+    grid-template-columns: minmax(0, 1fr) repeat(2, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowTidalPlaylistTarget:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowTidalPlaylistCreate {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    grid-area: controls;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-areas: "prev play next stop";
+    gap: 6px;
+    padding: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock {
+    grid-area: seek;
+    min-height: 0;
+    overflow: visible;
+  }
+}
+
+/* Pass 6 final regular parity owner for touch tablets: keep the approved
+   artwork-led surface after the tablet composition rules have run. */
+@media (min-width: 700px) and (pointer: coarse) and (hover: none) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    background:
+      linear-gradient(90deg, rgba(3, 3, 6, 0.66), rgba(10, 10, 14, 0.12) 30% 70%, rgba(3, 3, 6, 0.74)) padding-box,
+      linear-gradient(135deg, rgba(255, 255, 255, 0.14), rgba(217, 179, 255, 0.18), rgba(143, 240, 255, 0.08)) border-box !important;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow)::before {
+    background:
+      linear-gradient(90deg, rgba(3, 1, 8, 0.7), rgba(8, 3, 16, 0.14) 30% 70%, rgba(3, 1, 8, 0.76)),
+      var(--now-artwork-backdrop) center / cover no-repeat;
+    filter: blur(28px) saturate(1.08) brightness(0.46);
+    opacity: 0.82;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .nowDiscoveryTools) {
+    background: transparent !important;
+    border-color: rgba(255, 255, 255, 0.075) !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    overflow: visible;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack {
+    background: transparent;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack::before,
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack::after {
+    display: none !important;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .cover {
+    background-color: transparent !important;
+    opacity: 0.75 !important;
+    box-shadow: none !important;
+  }
+}
+
+/* Pass 6 regular parity: regular mode mirrors the approved maximized
+   typography, accent hierarchy, and right-side utility alignment. */
+@media (min-width: 700px) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowInfo #nowTitle {
+    font-size: clamp(18px, 1.55vw, 22px);
+    line-height: 1.06;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowInfo #nowSubtitle {
+    margin-top: 7px;
+    font-size: clamp(13px, 1.15vw, 16px);
+    line-height: 1.2;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .now .sourceRow {
+    grid-template-columns: 124px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .now .sourceLabel {
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .now .sourceValue {
+    font-size: 12px;
+    overflow-wrap: normal;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .now .sourceTechnical {
+    white-space: nowrap;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) :is(
+    .feedbackButton,
+    .nowDiscoveryActions button,
+    .nowTidalPlaylistCreate button,
+    .controls button
+  ) {
+    color: var(--accent) !important;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .feedbackButton:is(.active, [aria-pressed="true"]) {
+    border-color: rgba(210, 210, 218, 0.24) !important;
+    background: rgba(255, 255, 255, 0.06) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+  }
+}
+
+@media (min-width: 700px) and (pointer: coarse) and (hover: none) {
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "feedback"
+      "profile"
+      "actions"
+      "playlist";
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowFeedback {
+    gap: 3px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowFeedback::before {
+    width: calc(100% - 32px);
+    justify-self: center;
+    margin-bottom: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowFeedback .feedbackRail {
+    grid-template-columns: minmax(0, 1fr);
+    width: calc(100% - 32px);
+    justify-self: center;
+    gap: 4px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowDiscoveryActions {
+    grid-template-columns: minmax(0, 1fr);
+    width: calc(100% - 32px);
+    align-self: center;
+    margin-top: 8px;
+    gap: 4px;
+    padding-top: 5px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowDiscoveryActions::before {
+    width: 100%;
+    margin-bottom: 0;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowTidalPlaylistGroup {
+    margin-top: 8px;
+    gap: 4px;
+    padding-top: 5px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowTidalPlaylistTargets,
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowTidalPlaylistCreate {
+    gap: 4px;
+  }
+
+  .player.player--regular:not(.isMaximized):not(.isFullWindow) .nowTidalPlaylistTarget {
+    grid-template-columns: 18px minmax(0, 1fr);
+    min-height: 44px;
+  }
+}
+
+/* Pass 7 correction: regular tablet geometry is owned by one explicit
+   landscape touch-tablet media rule. Container-query sizing stays out of the
+   regular player; older tablet and desktop blocks above are neutralized here
+   by this later, more-specific owner. */
+@media (min-width: 700px) and (orientation: landscape) {
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .shell {
+    width: 100%;
+    max-width: none;
+    padding-inline: 12px;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) #playerView .layout:has(> .player.player--regular:not(.isMaximized):not(.isFullWindow)) {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    min-width: 0;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    --rh-touch-tablet-meta: clamp(220px, 24%, 310px);
+    --rh-touch-tablet-tools: clamp(300px, 24vw, 318px);
+    --rh-touch-tablet-control-height: 31px;
+    --rh-touch-tablet-select-height: 24px;
+    --rh-left-rail: var(--rh-touch-tablet-meta);
+    --rh-right-rail: var(--rh-touch-tablet-tools);
+    --rh-rail-gap: 16px;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    grid-template-columns: minmax(0, var(--rh-touch-tablet-meta)) minmax(0, 1fr) minmax(0, var(--rh-touch-tablet-tools));
+    grid-template-rows: 48px minmax(360px, auto) 94px 48px;
+    grid-template-areas:
+      ". badge viewControls"
+      "now art tools"
+      "controls controls controls"
+      "seek seek seek";
+    column-gap: 16px;
+    row-gap: 0;
+    padding: 14px;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .playerViewControls {
+    position: static;
+    grid-area: viewControls;
+    align-self: start;
+    justify-self: end;
+    width: auto;
+    max-width: 100%;
+    gap: 8px;
+    z-index: 2;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .playerViewControls button {
+    min-height: 44px;
+    padding-inline: 12px;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryBadge {
+    grid-area: badge;
+    align-self: start;
+    justify-self: stretch;
+    justify-content: center;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) .cover {
+    opacity: 0.62 !important;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > :is(.now, .artStack, .nowDiscoveryTools) {
+    min-height: 0;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .now {
+    grid-area: now;
+    height: auto;
+    padding: 12px;
+    overflow: visible;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack {
+    grid-area: art;
+    height: 100%;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools {
+    grid-area: tools;
+    height: auto;
+    padding: 12px 18px;
+    overflow: visible;
+    align-content: start;
+    gap: 2px;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowFeedback .feedbackRail {
+    grid-template-columns: minmax(0, 1fr);
+    width: calc(100% - 32px);
+    justify-self: center;
+    gap: 2px;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .feedbackButton {
+    min-width: 0;
+    min-height: var(--rh-touch-tablet-control-height);
+    height: var(--rh-touch-tablet-control-height);
+    max-height: var(--rh-touch-tablet-control-height);
+    padding-inline: 10px;
+    padding-block: 0;
+    font-size: 13px;
+    line-height: 1;
+    white-space: normal;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowDiscoveryActions {
+    width: calc(100% - 32px) !important;
+    max-width: none;
+    grid-template-columns: minmax(0, 1fr);
+    align-self: center;
+    gap: 2px;
+    margin-top: 8px;
+    padding-top: 5px;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowTidalPlaylistGroup {
+    gap: 0;
+    margin-top: 8px;
+    padding-top: 5px;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools :is(
+    .nowFeedback,
+    .nowDiscoveryActions,
+    .nowTidalPlaylistGroup
+  ) {
+    width: 100%;
+    justify-self: center;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowDiscoveryActions button {
+    width: 100%;
+    max-width: none;
+    min-height: var(--rh-touch-tablet-control-height);
+    height: var(--rh-touch-tablet-control-height);
+    max-height: var(--rh-touch-tablet-control-height);
+    padding-inline: 10px;
+    padding-block: 0;
+    font-size: 13px;
+    line-height: 1;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowDiscoveryActions::before,
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowTidalPlaylistGroup::before {
+    grid-column: 1 / -1;
+    width: 100%;
+    margin-bottom: 0;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowTidalPlaylistTargets {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    width: calc(100% - 32px);
+    justify-self: center;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowTidalPlaylistTarget {
+    grid-template-columns: 18px minmax(0, 1fr);
+    min-height: var(--rh-touch-tablet-select-height);
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowTidalPlaylistTarget:first-child {
+    grid-column: auto;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowTidalPlaylistCreate {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    width: calc(100% - 32px);
+    justify-self: center;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools :is(.nowTidalPlaylistTarget select, .nowTidalPlaylistCreate input, .nowTidalPlaylistCreate button) {
+    min-height: var(--rh-touch-tablet-select-height);
+    height: var(--rh-touch-tablet-select-height);
+    max-height: var(--rh-touch-tablet-select-height);
+    padding-inline: 8px;
+    padding-block: 0;
+    font-size: 12px;
+    line-height: 1;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowTidalPlaylistCreate button {
+    width: 100%;
+    white-space: nowrap;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    grid-area: controls;
+    display: grid;
+    grid-template-columns: var(--rh-left-rail) minmax(0, 1fr) var(--rh-right-rail);
+    grid-template-rows: 44px 44px;
+    grid-template-areas:
+      "prev . next"
+      "play . stop";
+    gap: 6px var(--rh-rail-gap);
+    padding: 0;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls button {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+  }
+
+  body.hasTouchScreen:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock {
+    grid-area: seek;
+    min-height: 0;
+    overflow: visible;
+  }
+}
+
+/* Regular player color normalization: keep the approved purple text
+   hierarchy independent from the fullscreen-only color treatment above. */
+.player.player--regular:not(.isMaximized):not(.isFullWindow) .nowInfo #nowTitle,
+.player.player--regular:not(.isMaximized):not(.isFullWindow) .nowInfo #nowSubtitle,
+.player.player--regular:not(.isMaximized):not(.isFullWindow) .nowSourceFormat,
+.player.player--regular:not(.isMaximized):not(.isFullWindow) .now .sourceLabel,
+.player.player--regular:not(.isMaximized):not(.isFullWindow) .now .sourceValue,
+.player.player--regular:not(.isMaximized):not(.isFullWindow) .now .sourceTechnical :is(.sourceLabel, .sourceValue),
+.player.player--regular:not(.isMaximized):not(.isFullWindow) .pcTempOverlay::before,
+.player.player--regular:not(.isMaximized):not(.isFullWindow) .pcTempChip :is(span, strong),
+.player.player--regular:not(.isMaximized):not(.isFullWindow) .fullscreenConnectionStatus .statusPill,
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock .playerMeta,
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #playState,
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #queueInfo,
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock .seekTimes {
+  color: var(--accent) !important;
+}
+
+/* Static metadata window: reserve an eight-row maximum so the left rail does
+   not move the System section when a track has fewer fields or a tag row. */
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowInfo .nowSourceFormat {
+  flex: 0 0 auto;
+  display: grid;
+  visibility: visible;
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) .nowInfo .nowSourceFormat[hidden] {
+  display: grid !important;
+  visibility: hidden;
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) .nowInfo .nowSourceFormat {
+  min-height: calc(8 * 1.3em + 7 * 7px);
+}
+
+body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowInfo .nowSourceFormat {
+  min-height: calc(8 * 1.2em + 7 * 4px);
+}
+
+body.playerFullWindow .player.player--fullscreen.isFullWindow .nowInfo .nowSourceFormat,
+.player.player--fullscreen:fullscreen .nowInfo .nowSourceFormat,
+.player.player--fullscreen:-webkit-full-screen .nowInfo .nowSourceFormat {
+  min-height: calc(8 * 1.3em + 7 * 5px);
+}
+
+/* Phase 8 phone owner: keep Regular Now Playing single-column, reserve a
+   dedicated row for mode controls, and preserve readable touch targets. */
+@media (max-width: 699px) {
+  body:not(.playerFullWindow):not(.playerMaximized) .viewTabs.primaryNav button {
+    min-height: 44px;
+    flex: 1 1 0;
+    min-width: 0;
+    padding-inline: 4px;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNavItems button {
+    min-height: 44px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(.view, .secondaryNav) :is(
+    button,
+    .buttonLink,
+    select,
+    textarea,
+    input:not([type="checkbox"]):not([type="range"])
+  ) {
+    min-height: 44px;
+    touch-action: manipulation;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .jumpTop {
+    min-height: 44px;
+    touch-action: manipulation;
+  }
+
+  main[data-memory-item] {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 12px;
+  }
+
+  main[data-memory-item] :is(
+    button,
+    select,
+    textarea,
+    input:not([type="checkbox"]):not([type="range"])
+  ) {
+    width: 100%;
+    max-width: 100%;
+    min-height: 44px;
+  }
+
+  main[data-memory-item] label {
+    display: grid;
+    gap: 8px;
+    margin: 12px 0;
+  }
+
+  main[data-memory-item] > a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(280px, 72vw) auto auto auto;
+    grid-template-areas:
+      "viewControls"
+      "badge"
+      "now"
+      "art"
+      "tools"
+      "controls"
+      "seek";
+    gap: 10px;
+    min-height: 0;
+    padding: 12px;
+    overflow: visible;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .playerViewControls {
+    position: static;
+    inset: auto;
+    grid-area: viewControls;
+    display: flex;
+    width: 100%;
+    max-width: none;
+    gap: 8px;
+    justify-content: space-between;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .playerViewControls button {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 44px;
+    padding-inline: 8px;
+    font-size: 11px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryBadge {
+    grid-area: badge;
+    justify-content: center;
+    min-height: 28px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .now {
+    grid-area: now;
+    min-height: 0;
+    padding: 0 12px;
+    overflow: visible;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack {
+    grid-area: art;
+    width: 100%;
+    min-height: 0;
+    align-self: stretch;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack .cover {
+    width: min(100%, 72vw);
+    height: auto;
+    aspect-ratio: 1;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools {
+    grid-area: tools;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "feedback"
+      "profile"
+      "actions"
+      "playlist";
+    gap: 10px;
+    height: auto;
+    min-height: 0;
+    padding: 12px;
+    overflow: visible;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowFeedback .feedbackRail {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    width: 100%;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .feedbackButton,
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowDiscoveryActions button {
+    min-height: 44px;
+    height: auto;
+    padding-block: 8px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowDiscoveryActions {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    width: 100%;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowTidalPlaylistGroup {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    width: 100%;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowTidalPlaylistTargets,
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowTidalPlaylistCreate {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    width: 100%;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .nowDiscoveryTools .nowTidalPlaylistTarget input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls {
+    grid-area: controls;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "prev next"
+      "play stop";
+    gap: 8px;
+    margin: 0;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls button {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    font-size: 13px;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls button[data-control="previous"] { grid-area: prev; }
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls button[data-control="playpause"] { grid-area: play; }
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls button[data-control="stop"] { grid-area: stop; }
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .controls button[data-control="next"] { grid-area: next; }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock {
+    grid-area: seek;
+    margin: 0;
+  }
+}
+
+/* Phase 8 phone completion: all phone surfaces share the current dark-glass
+   language, and Maximize/Full Window reuse the Regular phone composition. */
+@media (max-width: 699px) {
+  body:not(.playerFullWindow):not(.playerMaximized) {
+    --rh-phone-surface: linear-gradient(112deg, rgba(8, 2, 17, 0.96), rgba(20, 5, 34, 0.82) 48%, rgba(4, 1, 9, 0.97));
+    --rh-phone-card: rgba(4, 1, 10, 0.36);
+    --rh-phone-line: rgba(217, 179, 255, 0.12);
+    --rh-phone-muted: rgba(226, 198, 242, 0.82);
+    background:
+      radial-gradient(circle at 50% 10%, rgba(115, 44, 160, 0.16), transparent 38%),
+      linear-gradient(180deg, #05020b 0%, #0b0418 48%, #030108 100%);
+    color: #f8f1ff;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized)::before {
+    background:
+      radial-gradient(circle at 50% 34%, rgba(178, 91, 226, 0.1), transparent 42%),
+      linear-gradient(90deg, rgba(2, 1, 6, 0.22), transparent 30% 70%, rgba(2, 1, 6, 0.32));
+    opacity: 1;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) :is(.appHeader, .topbar, .secondaryNav),
+  body:not(.playerFullWindow):not(.playerMaximized) .view.isActive:not(#playerView) .panel {
+    border-color: var(--rh-phone-line);
+    background: var(--rh-phone-surface);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 18px 48px rgba(0, 0, 0, 0.42);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNavItems button,
+  body:not(.playerFullWindow):not(.playerMaximized) .view.isActive:not(#playerView) :is(
+    button,
+    .buttonLink,
+    input,
+    select,
+    textarea
+  ) {
+    border-color: var(--rh-phone-line) !important;
+    background: var(--rh-phone-card) !important;
+    color: var(--rh-phone-muted) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025) !important;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .secondaryNavItems button.active,
+  body:not(.playerFullWindow):not(.playerMaximized) .view.isActive:not(#playerView) :is(
+    button.active,
+    button[aria-pressed="true"]
+  ) {
+    border-color: rgba(225, 165, 255, 0.48) !important;
+    background: rgba(79, 27, 105, 0.2) !important;
+    color: #fff !important;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .view.isActive:not(#playerView) :is(
+    h1,
+    h2,
+    h3,
+    h4,
+    strong,
+    .formHead h2,
+    .queueViewHeader h2,
+    .systemViewHeader h2,
+    .settingsHeader h2,
+    .playlistBrowserHeader h3,
+    .tidalSectionTitle h3
+  ) {
+    color: #fff;
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .view.isActive:not(#playerView) :is(
+    .muted,
+    .tasteNarrative,
+    .musicMemoryMeta,
+    .musicMemoryIds,
+    .musicMemoryProvider,
+    .radioStationText p,
+    .playlistBrowserBody p,
+    .playlistBrowserBody small,
+    .tidalMixBody p,
+    .tidalMixBody small,
+    .beatportChartBody small,
+    .systemScopeItem span
+  ) {
+    color: var(--rh-phone-muted);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .view.isActive:not(#playerView) :is(
+    .track,
+    .standbyTrack,
+    .metricCard,
+    .musicMemoryCard,
+    .beatportChartTrack,
+    .radioStation,
+    .playlistBrowserCard,
+    .tidalMixCard,
+    .systemScopeItem,
+    .healthCard,
+    .intentDebugCard,
+    .poolDiagnosticsCard,
+    .sourceReportCard,
+    .rejectedDebugCard,
+    .scoreBox,
+    .reasonBlock
+  ) {
+    border-color: rgba(217, 179, 255, 0.1);
+    background: rgba(4, 1, 10, 0.28);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025), 0 14px 34px rgba(0, 0, 0, 0.28);
+  }
+
+  body:not(.playerFullWindow):not(.playerMaximized) .view.isActive:not(#playerView) :is(
+    .musicMemoryArt,
+    .beatportChartArt,
+    .radioStationArt,
+    .playlistBrowserArt,
+    .tidalMixArt
+  ) {
+    border-color: rgba(217, 179, 255, 0.18);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 28px rgba(0, 0, 0, 0.3);
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow),
+  body.playerFullWindow .player.player--fullscreen.isFullWindow,
+  .player.player--fullscreen:fullscreen,
+  .player.player--fullscreen:-webkit-full-screen {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: max-content max-content max-content minmax(280px, 72vw) max-content max-content max-content;
+    grid-template-areas:
+      "viewControls"
+      "badge"
+      "now"
+      "art"
+      "tools"
+      "controls"
+      "seek";
+    gap: 10px;
+    min-height: 0;
+    max-height: none;
+    align-content: start;
+    padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .playerViewControls,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .playerViewControls,
+  .player.player--fullscreen:fullscreen > .playerViewControls,
+  .player.player--fullscreen:-webkit-full-screen > .playerViewControls {
+    position: static;
+    inset: auto;
+    grid-area: viewControls;
+    display: flex;
+    width: 100%;
+    max-width: none;
+    gap: 8px;
+    justify-content: space-between;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .playerViewControls button,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .playerViewControls button,
+  .player.player--fullscreen:fullscreen > .playerViewControls button,
+  .player.player--fullscreen:-webkit-full-screen > .playerViewControls button {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 44px;
+    padding-inline: 8px;
+    font-size: 11px;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .nowDiscoveryBadge,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .nowDiscoveryBadge,
+  .player.player--fullscreen:fullscreen > .nowDiscoveryBadge,
+  .player.player--fullscreen:-webkit-full-screen > .nowDiscoveryBadge {
+    grid-area: badge;
+    justify-content: center;
+    min-height: 28px;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .now,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .now,
+  .player.player--fullscreen:fullscreen > .now,
+  .player.player--fullscreen:-webkit-full-screen > .now {
+    grid-area: now;
+    display: block;
+    height: auto;
+    min-height: 0;
+    margin: 0;
+    padding: 0 12px;
+    overflow: visible;
+    transform: none;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .artStack,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .artStack,
+  .player.player--fullscreen:fullscreen > .artStack,
+  .player.player--fullscreen:-webkit-full-screen > .artStack {
+    grid-area: art;
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    margin: 0;
+    align-self: stretch;
+    transform: none;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .cover,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow .cover,
+  .player.player--fullscreen:fullscreen .cover,
+  .player.player--fullscreen:-webkit-full-screen .cover {
+    width: min(100%, 72vw);
+    height: auto;
+    max-width: 100%;
+    max-height: none;
+    aspect-ratio: 1;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .nowDiscoveryTools,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .nowDiscoveryTools,
+  .player.player--fullscreen:fullscreen > .nowDiscoveryTools,
+  .player.player--fullscreen:-webkit-full-screen > .nowDiscoveryTools {
+    grid-area: tools;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "feedback"
+      "profile"
+      "actions"
+      "playlist";
+    gap: 10px;
+    height: auto;
+    min-height: max-content;
+    margin: 0;
+    padding: 12px;
+    overflow: visible;
+    transform: none;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowFeedback .feedbackRail,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow .nowFeedback .feedbackRail,
+  .player.player--fullscreen:fullscreen .nowFeedback .feedbackRail,
+  .player.player--fullscreen:-webkit-full-screen .nowFeedback .feedbackRail {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    width: 100%;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) :is(.feedbackButton, .nowDiscoveryActions button),
+  body.playerFullWindow .player.player--fullscreen.isFullWindow :is(.feedbackButton, .nowDiscoveryActions button),
+  .player.player--fullscreen:fullscreen :is(.feedbackButton, .nowDiscoveryActions button),
+  .player.player--fullscreen:-webkit-full-screen :is(.feedbackButton, .nowDiscoveryActions button) {
+    min-height: 44px;
+    height: auto;
+    padding-block: 8px;
+    font-size: 13px;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) :is(.nowTidalPlaylistTarget select, .nowTidalPlaylistCreate input, .nowTidalPlaylistCreate button),
+  body.playerFullWindow .player.player--fullscreen.isFullWindow :is(.nowTidalPlaylistTarget select, .nowTidalPlaylistCreate input, .nowTidalPlaylistCreate button),
+  .player.player--fullscreen:fullscreen :is(.nowTidalPlaylistTarget select, .nowTidalPlaylistCreate input, .nowTidalPlaylistCreate button),
+  .player.player--fullscreen:-webkit-full-screen :is(.nowTidalPlaylistTarget select, .nowTidalPlaylistCreate input, .nowTidalPlaylistCreate button) {
+    min-height: 44px;
+    height: auto;
+    padding-block: 8px;
+    font-size: 13px;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowDiscoveryActions,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow .nowDiscoveryActions,
+  .player.player--fullscreen:fullscreen .nowDiscoveryActions,
+  .player.player--fullscreen:-webkit-full-screen .nowDiscoveryActions {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    width: 100%;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowTidalPlaylistGroup,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow .nowTidalPlaylistGroup,
+  .player.player--fullscreen:fullscreen .nowTidalPlaylistGroup,
+  .player.player--fullscreen:-webkit-full-screen .nowTidalPlaylistGroup,
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowTidalPlaylistTargets,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow .nowTidalPlaylistTargets,
+  .player.player--fullscreen:fullscreen .nowTidalPlaylistTargets,
+  .player.player--fullscreen:-webkit-full-screen .nowTidalPlaylistTargets,
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowTidalPlaylistCreate,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow .nowTidalPlaylistCreate,
+  .player.player--fullscreen:fullscreen .nowTidalPlaylistCreate,
+  .player.player--fullscreen:-webkit-full-screen .nowTidalPlaylistCreate {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    width: 100%;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowTidalPlaylistTarget input[type="checkbox"],
+  body.playerFullWindow .player.player--fullscreen.isFullWindow .nowTidalPlaylistTarget input[type="checkbox"],
+  .player.player--fullscreen:fullscreen .nowTidalPlaylistTarget input[type="checkbox"],
+  .player.player--fullscreen:-webkit-full-screen .nowTidalPlaylistTarget input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .controls,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .controls,
+  .player.player--fullscreen:fullscreen > .controls,
+  .player.player--fullscreen:-webkit-full-screen > .controls {
+    grid-area: controls;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "prev next"
+      "play stop";
+    gap: 8px;
+    margin: 0;
+    transform: none;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .controls button,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .controls button,
+  .player.player--fullscreen:fullscreen > .controls button,
+  .player.player--fullscreen:-webkit-full-screen > .controls button {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    font-size: 13px;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .controls button[data-control="previous"],
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .controls button[data-control="previous"],
+  .player.player--fullscreen:fullscreen > .controls button[data-control="previous"],
+  .player.player--fullscreen:-webkit-full-screen > .controls button[data-control="previous"] { grid-area: prev; }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .controls button[data-control="playpause"],
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .controls button[data-control="playpause"],
+  .player.player--fullscreen:fullscreen > .controls button[data-control="playpause"],
+  .player.player--fullscreen:-webkit-full-screen > .controls button[data-control="playpause"] { grid-area: play; }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .controls button[data-control="stop"],
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .controls button[data-control="stop"],
+  .player.player--fullscreen:fullscreen > .controls button[data-control="stop"],
+  .player.player--fullscreen:-webkit-full-screen > .controls button[data-control="stop"] { grid-area: stop; }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .controls button[data-control="next"],
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .controls button[data-control="next"],
+  .player.player--fullscreen:fullscreen > .controls button[data-control="next"],
+  .player.player--fullscreen:-webkit-full-screen > .controls button[data-control="next"] { grid-area: next; }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .seekBlock,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .seekBlock,
+  .player.player--fullscreen:fullscreen > .seekBlock,
+  .player.player--fullscreen:-webkit-full-screen > .seekBlock {
+    grid-area: seek;
+    margin: 0;
+    transform: none;
+  }
+
+  body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) > .nowDiscoveryBadge,
+  body.playerFullWindow .player.player--fullscreen.isFullWindow > .nowDiscoveryBadge,
+  .player.player--fullscreen:fullscreen > .nowDiscoveryBadge,
+  .player.player--fullscreen:-webkit-full-screen > .nowDiscoveryBadge {
+    transform: none;
+    margin: 0;
   }
 }

@@ -628,3 +628,16 @@ test("OpenAI usage ledger tracks costs by Synapse tier", () => {
   assert.equal(ledger.budgetState(0, "sol").limited, true);
   assert.equal(ledger.budgetState(0, "luna").limited, false);
 });
+
+
+test("explicit Lyrion and SoundCloud commands never enter local Roon shortcuts",async()=>{
+  const calls=[];const tools=fakeTools(calls);tools.queue_supplied_tracks={handler:()=>{throw Error("Roon shortcut reached");}};
+  const local=new LocalModelProvider({tools});
+  for(const message of ["pause Lyrion","what's playing through Lyrion?","find SoundCloud tracks and queue them","add to Synapse Finds"]){
+    const result=await local.respond(message);assert.equal(result.toolCalls.length,0);
+  }
+  assert.equal(calls.length,0);
+  const router=new AutoModelRouter({config:{mode:"auto"},tools,localProvider:local,openAiProvider:{respond:async()=>({text:"parallel tools",provider:"synapse",toolCalls:[]}),safeStatus:()=>({enabled:true,configured:true,state:"connected"})},logger:{log(){}}});
+  assert.equal(router.routeAuto("pause Lyrion").provider,"synapse");
+  const result=await router.respond({message:"retry failed SoundCloud additions",mode:"local"});assert.equal(result.toolCalls.length,0);
+});

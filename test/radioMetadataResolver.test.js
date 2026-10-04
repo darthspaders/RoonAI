@@ -160,6 +160,18 @@ test("radio metadata TIDAL circuit opens after fetch failures", async () => {
   assert.equal(calls, 1);
 });
 
+test("live MusicBrainz enrichment prefers asynchronous local search", async () => {
+  const expected = [{ id: "local-async", title: "Strobe" }];
+  const resolver = new RadioMetadataResolver({
+    musicBrainzIndex: {
+      searchRecordings() { throw new Error("Synchronous scan would block Roon"); },
+      async searchRecordingsAsync(track) { assert.equal(track.title, "Strobe"); return expected; }
+    },
+    musicBrainzPublicFallback: false
+  });
+  assert.deepEqual(await resolver.searchRecordings({ title: "Strobe" }), expected);
+});
+
 test("MusicBrainz recording search uses local index before public fallback", async () => {
   let publicCalls = 0;
   const resolver = new RadioMetadataResolver({

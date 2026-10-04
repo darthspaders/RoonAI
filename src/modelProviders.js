@@ -570,10 +570,12 @@ class LocalModelProvider {
     const text = String(message || "").toLowerCase();
     if (/\b(never\s+again|reject\s+similar)\b/.test(text)) return "never";
     if (/\bwrong\s+genre\b/.test(text)) return "wrong_genre";
+    if (/\b(?:don't|do not|not|never)\s+(?:really\s+)?like\b/.test(text)) return "dislike";
     if (/\b(love|loved)\b/.test(text)) return "love";
+    if (/\blike\b/.test(text)) return "like";
     if (/\bgood\b/.test(text)) return "good";
     if (/\bok(?:ay)?\b/.test(text)) return "ok";
-    if (/\b(skip|reject|dislike)\b/.test(text)) return "skip";
+    if (/\b(dislike|reject|skip)\b/.test(text)) return "dislike";
     return "";
   }
 
@@ -625,6 +627,9 @@ class LocalModelProvider {
     const calls = [];
     const text = cleanText(message);
     const lower = text.toLowerCase();
+    if (/\b(?:lyrion|soundcloud|synapse finds)\b/i.test(text)) {
+      return {text:"Use Synapse mode or the ChatGPT Lyrion/SoundCloud tools for this request. The local shortcut router cannot safely perform it.",toolCalls:[],provider:LOCAL_MODE,model:options.localModel||""};
+    }
 
     if (/\b(what'?s|what is|show|get|status).*\b(playing|roon|rabbit hole|status)\b/.test(lower) || /\bnow playing\b/.test(lower)) {
       calls.push(await this.executeTool("get_rabbit_hole_status"));
@@ -1019,6 +1024,7 @@ class OpenAIModelProvider {
         "Use Rabbit Hole tools for facts and actions. Do not claim Roon, TIDAL, standby, or feedback actions succeeded until a tool result confirms it.",
         "Keep answers concise and practical. Prefer current Rabbit Hole state over memory. Ask for clarification only when an action would be unsafe or impossible.",
         "For discovery quality, let Rabbit Hole search and verify the real catalog. Do not invent tracks.",
+        "For explicit Lyrion requests use only lyrion_* tools for playback and discovery. Preserve referenceId, SoundCloud URN, URL and action tokens; never rematch an exact result by title. Use soundcloud_* tools for account playlists, default Synapse Finds. Inspect soundcloud_connection before setup, and only create or modify playlists when requested. Use lyrion_recent_discoveries for the last N SoundCloud discoveries. Do not retry uncertain writes without reading the queue or playlist. Never send Lyrion requests to Roon tools.",
         "For a resolution-only request, use resolve_verified_tracks_for_roon. With queue authorization, call queue_verified_tracks directly even when saved tracks are TIDAL_VERIFIED_ROON_PENDING: it resolves pending identities and queues through the existing bulk Roon service. Never rerun TIDAL verification or discovery to retry Roon. Report timeout, not-found and version mismatch separately.",
         "For supplied lists with queue authorization, call roon_queue_tracks with structured track objects and matchPolicy flexible by default. Never send these through search_rabbit_hole or a natural-language list parser. Use roon_search_track for resolution diagnostics and roon_get_queue to inspect results. Use matchPolicy strict for exact versions/no substitutions. Do not pre-verify trusted lists. Use strict only for explicit verify-first, exact-version-only, availability or queueability requirements. Retry only failed requestedTrack objects through roon_queue_tracks; never resend successes. For QUEUE_FAILED with an uncertain acknowledgement, inspect roon_get_queue before retrying. For verification-only requests call verify_exact_tracks, never search_rabbit_hole. Preserve list line breaks and exact titles. Do not apply discovery, novelty or replacement tracks. Verification alone does not authorize queueing. A later queue request uses queue_verified_tracks for saved TIDAL identities, including pending Roon resolution. Roon lookup is required and allowed; another TIDAL lookup or discovery search is not.",
         `Available Rabbit Hole tools: ${compactToolList(this.tools)}.`
@@ -1312,7 +1318,8 @@ class AutoModelRouter {
 
   routeAuto(message = "") {
     const text = String(message || "").toLowerCase();
-    if (/\b(what'?s playing|now playing|love this|good this|ok this|wrong genre|skip this|never again|pause|play|stop|next|previous|refresh standby)\b/.test(text)) {
+    if (/\b(?:lyrion|soundcloud|synapse finds)\b/i.test(text)) return {provider:SYNAPSE_MODE,tier:"luna",reason:"independent Lyrion or SoundCloud tool workflow"};
+    if (/\b(what'?s playing|now playing|love this|like this|good this|okay this|ok this|dislike this|wrong genre|skip this|never again|pause|play|stop|next|previous|refresh standby)\b/.test(text)) {
       return { provider: LOCAL_MODE, tier: "", reason: "routine playback or feedback command" };
     }
     if (/\b(maximum|hardest|think really hard|architect(?:ure|ural)|algorithmic|debug|troubleshoot|major|reconstruct|autonomous|repeated failure|sol\b)\b/.test(text)) {
@@ -1478,18 +1485,19 @@ class AutoModelRouter {
     const message = stripped.message;
     const memoryCommand = this.memory?.command(message);
     if (memoryCommand) { this.conversation = new CompactConversationState(8, this.memory); return {...memoryCommand, provider:LOCAL_MODE, toolCalls:[]}; }
-    const supplied = parseTrackList(message);
+    const parallelMusic = /\b(?:lyrion|soundcloud|synapse finds)\b/i.test(message);
+    const supplied = parallelMusic ? [] : parseTrackList(message);
     const wantsQueue = /(?:^|\n)\s*(?:please\s+)?(?:(?:verify|confirm|check)[^\n]*then\s+queue|send|queue|add|load)\b/i.test(message) && !/\b(?:tidal playlist|to tidal)\b/i.test(message) && !/\b(?:do not|don’t|don't|never)\s+(?:queue|send|add|load)\b/i.test(message);
     const wantsStrict = /\b(?:strict|verify|verification|exact versions only|confirm availability|check Roon queueability)\b/i.test(message);
     const retryFailures = /\bretry\b.*\bfail(?:ed|ures)\b/i.test(message);
-    if (((supplied.length && wantsQueue) || retryFailures) && this.tools.queue_supplied_tracks) {
+    if (!parallelMusic && ((supplied.length && wantsQueue) || retryFailures) && this.tools.queue_supplied_tracks) {
       const args = { ...(retryFailures ? {retryFailures:true} : {tracks:supplied}), queuePolicy:wantsStrict?"strict":"fast" };
       const result = await this.tools.queue_supplied_tracks.handler(args);
       const text = `Requested ${result.requested}; queued ${result.queued}; failed ${result.failed}. Policy: ${result.queuePolicy}.`;
       this.conversation.add("user",message); this.conversation.add("assistant",text);
       return {text,provider:LOCAL_MODE,model:"",toolCalls:[{name:"queue_supplied_tracks",input:args,result}]};
     }
-    const exact = exactIntent({ message });
+    const exact = parallelMusic ? null : exactIntent({ message });
     if (exact && this.tools.verify_tracks) {
       const result = await this.tools.verify_tracks.handler({ tracks: exact.tracks, checkRoon: /\b(?:roon|queueab|queue)\w*/i.test(message) });
       const text = `TIDAL verified ${result.verifiedCount}/${result.checkedCount}. ${result.roonQueueableCount} Roon queueable. ${result.notFoundCount} not found; ${result.errorCount} API errors. Nothing queued.`;
@@ -1499,7 +1507,7 @@ class AutoModelRouter {
     }
     const verifiedAction = /^\s*(?:please\s+)?(?:queue|add)\b.*\bverified\s+tracks?\b/i.test(message) ? "queue_verified_tracks"
       : /^\s*(?:please\s+)?(?:send|save|create)\b.*\bverified\b.*\b(?:tidal|playlist)\b/i.test(message) ? "send_verified_tracks_to_tidal_playlist" : "";
-    if (verifiedAction && this.tools[verifiedAction]) {
+    if (!parallelMusic && verifiedAction && this.tools[verifiedAction]) {
       const result = await this.tools[verifiedAction].handler({});
       const text = JSON.stringify(result);
       this.conversation.add("user", message);

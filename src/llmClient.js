@@ -1,5 +1,6 @@
 "use strict";
 const {memory} = require("./synapseMemory");
+const { REJECTION_BASES, compactReviewEvidence } = require("./candidateReviewEvidence");
 
 const LLM_TIMEOUT_MS = 45_000;
 const OPENAI_COMPATIBLE_PROVIDERS = new Set(["openai-compatible", "openai_compatible", "lmstudio", "llamacpp"]);
@@ -87,7 +88,8 @@ IMPORTANT:
 - TIDAL/Roon are the source of truth. The app will only show verified playable catalogue results.
 
 Interpret the user's request, seed playlist, current Roon track, and optional filters.
-If the seed playlist and requested genre differ, translate the seed's sonic traits into the requested genre.
+The requested genre/style is the current search lane. The seed playlist and saved taste are guidance about texture, energy, mood, and adjacency—not a genre allowlist.
+If the seed playlist or saved taste and requested genre differ, translate the useful sonic traits into the requested genre instead of reverting to the learned genre.
 Example: an 80s playlist plus "progressive house" means search progressive/melodic/deep/organic/progressive-trance-adjacent catalogues with 80s traits such as analog synth color, neon mood, gated drums, new-wave melancholy, Italo/boogie bass, or retro melodic hooks.
 The current Roon track is context only. Use it as a seed only if the user asks for now/current/like-this discovery or gives no other search intent.
 
@@ -123,8 +125,10 @@ Rules:
 - For simple theme prompts like "love songs about being apart", use intentRoute "theme", keep targetGenres empty unless the user named a genre, add themeTerms such as "love" and "being apart", and create title/theme/tag search queries such as "long distance love electronic" or "missing you vocal electronic".
 - For activity prompts like "chill driving music", use intentRoute "activity", add activityTerms, and only use learned taste as a light preference unless the user asks for similar/taste-guided results.
 - For narrow genre/year discovery, include credible labels, artists, and one-ring adjacent scene terms; avoid generic SEO phrases like "best mix", "top hits", "playlist", or "summer vibes".
+- Treat saved taste as a soft preference, never as a whitelist. A request for a genre outside the saved profile must still search that requested genre and may keep unfamiliar artists when the current metadata matches.
+- For an explicit genre request, do not copy saved-taste artists into candidateArtists or standalone searchQueries merely because they are historically successful. Use current-lane artists, labels, and genre queries; use taste to shape sonic descriptors and ranking.
 - Do not default to progressive house just because the listener often likes it. Use progressive assumptions only when the request, seed, or explicit genre points there.
-- Pure Search means tasteInfluence "not at all". Explore/outside-taste/theme/activity/open discovery should allowOutsideTaste true. Similar Mode should keep tasteInfluence "strongly".
+- Pure Search means tasteInfluence "not at all". For every other mode, explicit genre discovery keeps taste as a soft preference unless the user explicitly asks for strict taste-only behavior. Explore/outside-taste/theme/activity/open discovery should allowOutsideTaste true. Similar Mode should keep tasteInfluence "strongly".
 - Treat "progressive psytrance" as psytrance, not progressive house. Treat "psychedelic trance" as a psytrance genre phrase, not a 70s/disco/funk vibe.
 - Do not include the current Roon artist as a seed when the user asks for an unrelated genre/date/vibe search.
 - If a year or date filter exists, include it in the relevant search queries.
@@ -191,7 +195,7 @@ function llmTrackId(track = {}, index = 0) {
   return `${index}:${normalizeCandidateText(track.artist, 80)}|${normalizeCandidateText(track.title, 100)}`;
 }
 
-function compactCandidate(track = {}, index = 0) {
+function compactCandidate(track = {}, index = 0, tasteProfile = {}) {
   const breakdown = track.scoreBreakdown || {};
   return {
     id: llmTrackId(track, index),
@@ -206,7 +210,8 @@ function compactCandidate(track = {}, index = 0) {
     current_prompt_match: breakdown.promptMatch?.percent ?? null,
     current_taste_match: breakdown.tasteMatch?.percent ?? null,
     reason: normalizeCandidateText(track.reason, 240),
-    why: Array.isArray(track.why) ? track.why.slice(0, 5).map((item) => normalizeCandidateText(item, 160)) : []
+    why: Array.isArray(track.why) ? track.why.slice(0, 3).map((item) => normalizeCandidateText(item, 120)) : [],
+    version_evidence: compactReviewEvidence(track, tasteProfile)
   };
 }
 
@@ -237,10 +242,22 @@ function buildCandidateScoringPrompt({ tracks = [], options = {}, tasteProfile =
 
 You do NOT invent songs. You only score the provided TIDAL candidates.
 Return ONLY valid JSON. No markdown, no prose, no code fences.
+Score every supplied candidate exactly once, including rejected candidates.
+The requested playlist count does not limit how many supplied candidates you review.
 
 Reject obvious junk: playlists, compilations, chart packs, SEO genre/year uploads, karaoke, covers, tribute versions, live versions unless requested, remasters, reissues, anniversary/deluxe/archive versions, and generic background-music catalogue filler.
 Do NOT reject legitimate DJ-friendly remixes or extended/original mixes just because they are remixes.
 If metadata is missing, lower confidence. Never make up labels, years, genres, or facts.
+Treat saved taste as a soft preference, not an artist allowlist. Missing an artist from the profile is not evidence of dislike.
+
+Named-remix policy:
+- Evaluate the exact remix as its own production/version. A named remixer's supplied genre/scene and taste evidence is strong evidence, even when the original artist normally works in another genre.
+- Original-artist genre/taste mismatch alone is NEVER grounds for rejecting a named remix. At most it is a weak negative ranking signal; do not let it dominate prompt_match, taste_match, artist_label_match or genre_confidence.
+- Evaluate remixer compatibility, release/label evidence, this track's genre metadata, requested vibe, and duration/version together. Do not assume the original artist's genre describes the remix. Missing remix metadata means uncertainty, not proof of a genre conflict.
+- Sonic diagnostics are existing evidence only. An applied adjustment is already included in current_score: do not add another Sonic bonus/penalty. If unavailable or not applied, do not use it to adjust scores or infer audio; the existing coverage gate still governs Sonic scoring.
+- Keep true remix/version, duration, explicit user-exclusion, catalogue-quality and supported track/vibe mismatches rejectable. A remixer's name is not blanket approval. Do not invent remixer reputation, instrumentation, vocal content or audio observations.
+- Respect supplied duration_constraint semantics: minimumMs is a minimum, not a target or maximum. Do not reject a longer track for exceeding a minimum. Missing vibe evidence lowers confidence without inventing a conflict.
+- Example: Pendulum - 9,000 Miles (Eelke Kleijn Remix) must be evaluated using the Eelke Kleijn remix evidence, not rejected just because Pendulum is absent from a Progressive House profile. This is a policy example, not an instruction to accept that track.
 
 Discovery request:
 ${JSON.stringify({
@@ -257,7 +274,7 @@ Taste profile:
 ${JSON.stringify(compactTasteProfile(tasteProfile))}
 
 TIDAL candidates:
-${JSON.stringify(tracks.map(compactCandidate))}
+${JSON.stringify(tracks.map((track, index) => compactCandidate(track, index, tasteProfile)))}
 
 Return exactly this shape:
 {
@@ -266,6 +283,7 @@ Return exactly this shape:
       "track_id": "same id from input",
       "rejected": false,
       "rejection_reason": "",
+      "rejection_basis": [],
       "scores": {
         "prompt_match": 0,
         "taste_match": 0,
@@ -286,10 +304,12 @@ Scoring guidance:
 - taste_match: how well it fits the user's saved likes/dislikes.
 - freshness: release/date fit and whether it avoids stale reissue tricks.
 - artist_label_match: artist/label relevance to request or taste profile.
+- For named remixes, artist_label_match and taste_match must weigh the remixer evidence strongly and original-artist mismatch only weakly.
 - length_preference: duration fit only, not genre quality.
 - genre_confidence: confidence this is actually the requested genre/vibe.
 - final_score should balance prompt first, taste second: 35% prompt, 25% taste, 15% freshness, 15% artist/label, 10% length, then adjust down for low genre confidence.
 - For a genre-only search, prompt_match and genre_confidence matter more than existing progressive-house taste.
+- If rejected, list every independent reason in rejection_basis using only: ${REJECTION_BASES.join(", ")}. Use [] when not rejected. original_artist_profile_mismatch means the original artist's usual genre or saved taste fit; explicit user exclusions belong to explicit_request_mismatch. Do not relabel an original-artist-only objection as track_genre_mismatch, vibe_mismatch or insufficient_evidence. Cite the actual remix/version evidence for those reasons.
 - Keep why bullets factual and tied to metadata/request/taste.`;
 }
 
@@ -300,6 +320,9 @@ function normalizeCandidateScore(item = {}) {
     trackId: String(item.track_id || item.id || "").trim(),
     rejected: Boolean(item.rejected),
     rejectionReason: normalizeCandidateText(item.rejection_reason, 180),
+    // Preserve unknown/missing basis as untrusted; never silently drop a
+    // second objection and turn a real rejection into an artist-only warning.
+    rejectionBasis: Array.isArray(item.rejection_basis) ? item.rejection_basis.map(value => normalizeCandidateText(value, 80)) : [],
     scores: {
       promptMatch: clampScore(scores.prompt_match),
       tasteMatch: clampScore(scores.taste_match),
@@ -320,6 +343,41 @@ async function scoreCandidateBatch(config, { tracks = [], options = {}, tastePro
   const candidates = tracks.filter((track) => track?.artist && track?.title).slice(0, 50);
   if (!candidates.length) return { prompt: "", scores: [], rawCount: 0 };
 
+  // Local Qwen 3.5/3.6 can spend its entire loaded context on reasoning before
+  // producing JSON. Keep this bounded scoring task out of thinking mode and
+  // leave room for both input and output even with an 8K loaded context.
+  const boundedLocalReview = OPENAI_COMPATIBLE_PROVIDERS.has(config.llmProvider) &&
+    /(?:^|\/)qwen3\.[56](?:[-_:]|$)/i.test(config.openAiCompatibleModel || "");
+  if (boundedLocalReview) {
+    const stableCandidates = candidates.map((track, index) => ({ ...track, id: llmTrackId(track, index) }));
+    const deadline = Date.now() + Math.max(1, Number(timeoutMs || 30_000));
+    const scores = [];
+    const prompts = [];
+    for (let offset = 0; offset < stableCandidates.length; offset += 8) {
+      const batch = stableCandidates.slice(offset, offset + 8);
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) throw new Error("LLM candidate review timed out before all batches completed.");
+      const prompt = buildCandidateScoringPrompt({ tracks: batch, options, tasteProfile });
+      const raw = await callConfiguredModel(config, prompt, remainingMs, {
+        reasoning_effort: "none",
+        max_tokens: 3000,
+        response_format: candidateScoringResponseFormat(batch)
+      });
+      const parsed = extractJsonObject(raw);
+      const items = Array.isArray(parsed.candidates) ? parsed.candidates : [];
+      const expectedIds = new Set(batch.map(llmTrackId));
+      const batchScores = items.map(normalizeCandidateScore);
+      const returnedIds = new Set(batchScores.map(item => item.trackId));
+      if (items.length !== batch.length || returnedIds.size !== expectedIds.size ||
+          batchScores.some(item => !expectedIds.has(item.trackId))) {
+        throw new Error("LLM review must score every supplied candidate exactly once with its original track ID.");
+      }
+      scores.push(...batchScores);
+      prompts.push(prompt);
+    }
+    return { prompt: prompts.join("\n\n"), scores, rawCount: scores.length };
+  }
+
   const prompt = buildCandidateScoringPrompt({ tracks: candidates, options, tasteProfile });
   const raw = await callConfiguredModel(config, prompt, timeoutMs);
   const parsed = extractJsonObject(raw);
@@ -330,6 +388,32 @@ async function scoreCandidateBatch(config, { tracks = [], options = {}, tastePro
     scores,
     rawCount: items.length
   };
+}
+
+function candidateScoringResponseFormat(tracks = []) {
+  const scoreProperties = Object.fromEntries([
+    "prompt_match", "taste_match", "freshness", "artist_label_match", "length_preference", "genre_confidence"
+  ].map(key => [key, { type: "integer", minimum: 0, maximum: 100 }]));
+  const properties = {
+    track_id: { type: "string", enum: tracks.map(llmTrackId) },
+    rejected: { type: "boolean" },
+    rejection_reason: { type: "string" },
+    rejection_basis: { type: "array", items: { type: "string", enum: REJECTION_BASES }, maxItems: 5 },
+    scores: { type: "object", properties: scoreProperties, required: Object.keys(scoreProperties), additionalProperties: false },
+    final_score: { type: "integer", minimum: 0, maximum: 100 },
+    genre: { type: "string" },
+    why: { type: "array", items: { type: "string" }, maxItems: 2 }
+  };
+  return { type: "json_schema", json_schema: {
+    name: "candidate_review", strict: true,
+    schema: {
+      type: "object", additionalProperties: false, required: ["candidates"],
+      properties: { candidates: {
+        type: "array", minItems: tracks.length, maxItems: tracks.length,
+        items: { type: "object", properties, required: Object.keys(properties), additionalProperties: false }
+      } }
+    }
+  } };
 }
 
 async function callOllama(config, prompt, timeoutMs = LLM_TIMEOUT_MS) {
@@ -394,7 +478,7 @@ function normalizeBaseUrl(baseUrl = "") {
   return String(baseUrl || "").replace(/\/+$/, "");
 }
 
-async function callOpenAiCompatible(config, prompt, timeoutMs = LLM_TIMEOUT_MS) {
+async function callOpenAiCompatible(config, prompt, timeoutMs = LLM_TIMEOUT_MS, completionOptions = {}) {
   const activeModel = await require("./localModelRuntime").resolveLocalModel(config);
   const baseUrl = normalizeBaseUrl(config.openAiCompatibleBaseUrl);
   if (!baseUrl) throw new Error("LLM_BASE_URL is not set.");
@@ -417,7 +501,8 @@ async function callOpenAiCompatible(config, prompt, timeoutMs = LLM_TIMEOUT_MS) 
       ],
       temperature: 0.35,
       top_p: 0.9,
-      response_format: { type: "text" }
+      response_format: { type: "text" },
+      ...completionOptions
     })
   }, timeoutMs);
 
@@ -426,16 +511,19 @@ async function callOpenAiCompatible(config, prompt, timeoutMs = LLM_TIMEOUT_MS) 
   }
 
   const body = await response.json();
+  if (body.choices?.[0]?.finish_reason === "length") {
+    throw new Error(`OpenAI-compatible LLM reached its token or context limit (prompt ${body.usage?.prompt_tokens ?? "unknown"}, completion ${body.usage?.completion_tokens ?? "unknown"}).`);
+  }
   const content = body.choices?.[0]?.message?.content || "";
   if (!content) throw new Error("OpenAI-compatible LLM returned an empty response.");
   return content;
 }
 
-function callConfiguredModel(config, modelPrompt, timeoutMs = LLM_TIMEOUT_MS) {
+function callConfiguredModel(config, modelPrompt, timeoutMs = LLM_TIMEOUT_MS, completionOptions = {}) {
   modelPrompt = [memory.context(modelPrompt), modelPrompt].filter(Boolean).join("\n\n");
   if (config.llmProvider === "openrouter") return callOpenRouter(config, modelPrompt, timeoutMs);
   if (OPENAI_COMPATIBLE_PROVIDERS.has(config.llmProvider)) {
-    return callOpenAiCompatible(config, modelPrompt, timeoutMs);
+    return callOpenAiCompatible(config, modelPrompt, timeoutMs, completionOptions);
   }
   return callOllama(config, modelPrompt, timeoutMs);
 }

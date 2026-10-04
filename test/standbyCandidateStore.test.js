@@ -8,8 +8,123 @@ const test = require("node:test");
 const {
   StandbyCandidateStore,
   isStandbySeoSludge,
-  standbyTrackKey
+  standbyTrackKey,
+  selectStandbyQueueTracks,
+  standbyCanonicalReleasePreference
 } = require("../src/standbyCandidateStore");
+
+test("standby queue prefers an extended mix over its plain/original variant", () => {
+  const selected = selectStandbyQueueTracks([
+    { artist: "Artist", title: "Signal (Original Mix)", tidalTrackId: "original" },
+    { artist: "Other Artist", title: "Other Track", tidalTrackId: "other" },
+    { artist: "Artist", title: "Signal", version: "Extended Mix", tidalTrackId: "extended" },
+    { artist: "Third Artist", title: "Third Track", tidalTrackId: "third" }
+  ], 3);
+
+  assert.deepEqual(selected.map((track) => track.tidalTrackId), ["extended", "other", "third"]);
+});
+
+test("standby queue does not collapse named remixes into an extended/original family", () => {
+  const selected = selectStandbyQueueTracks([
+    { artist: "Artist", title: "Signal (Original Mix)", tidalTrackId: "original" },
+    { artist: "Artist", title: "Signal (DJ Kayo Remix)", tidalTrackId: "remix" }
+  ], 2);
+
+  assert.deepEqual(selected.map((track) => track.tidalTrackId), ["original", "remix"]);
+});
+
+test("standby queue fails closed on conflicting provider version descriptors", () => {
+  const selected = selectStandbyQueueTracks([
+    { artist: "Artist", title: "Signal", version: "Original Mix", mixName: "Extended Mix", tidalTrackId: "conflicting" },
+    { artist: "Artist", title: "Signal (Extended Mix)", tidalTrackId: "extended" }
+  ], 2);
+
+  assert.deepEqual(selected.map((track) => track.tidalTrackId), ["conflicting", "extended"]);
+});
+
+test("standby prefers a standalone release over a matching episode copy", () => {
+  const result = standbyCanonicalReleasePreference([
+    {
+      artist: "Ruben Karapetyan",
+      title: "State of Progression (ULF003)",
+      album: "Underground Live Forever - Episode 003",
+      tidal: { id: "episode", version: "" }
+    },
+    {
+      artist: "Ruben Karapetyan",
+      title: "State of Progression",
+      album: "State of Progression",
+      tidal: { id: "standalone", version: "" }
+    }
+  ]);
+
+  assert.deepEqual(result.tracks.map((track) => track.tidal.id), ["standalone"]);
+  assert.equal(result.rejected[0].copyKind, "episode");
+  assert.equal(result.rejected[0].canonicalTitle, "State of Progression");
+  assert.equal(result.rejected[0].versionCompatible, true);
+});
+
+test("standby store does not persist a copy when the standalone release is present", () => {
+  const store = tempStore({ targetCount: 2 });
+  const result = store.replace([
+    {
+      artist: "Artist",
+      title: "Signal (Mixed)",
+      album: "Artist - Episode 12",
+      score: 90,
+      tidal: { id: "episode", version: "Mixed" }
+    },
+    {
+      artist: "Artist",
+      title: "Signal",
+      album: "Signal",
+      score: 89,
+      tidal: { id: "standalone", version: "" }
+    }
+  ]);
+
+  assert.deepEqual(result.summary.tracks.map((track) => track.tidal.id), ["standalone"]);
+  assert.equal(result.canonicalReleaseRejected[0].canonicalAlbum, "Signal");
+});
+
+test("standby keeps a compilation copy when no compatible standalone release exists", () => {
+  const result = standbyCanonicalReleasePreference([
+    {
+      artist: "Artist",
+      title: "Signal (Extended Mix)",
+      album: "Various Artists - Club Compilation",
+      tidal: { id: "compilation", version: "Extended Mix" }
+    },
+    {
+      artist: "Artist",
+      title: "Signal",
+      album: "Signal",
+      tidal: { id: "plain", version: "" }
+    }
+  ]);
+
+  assert.deepEqual(result.tracks.map((track) => track.tidal.id), ["compilation", "plain"]);
+  assert.equal(result.rejected.length, 0);
+});
+
+test("standby does not let a compilation Extended Mix replace a standalone Original Mix", () => {
+  const selected = selectStandbyQueueTracks([
+    {
+      artist: "Artist",
+      title: "Signal (Original Mix)",
+      album: "Signal",
+      tidal: { id: "original", version: "Original Mix" }
+    },
+    {
+      artist: "Artist",
+      title: "Signal (Extended Mix)",
+      album: "Various Artists - Club Compilation",
+      tidal: { id: "compilation-extended", version: "Extended Mix" }
+    }
+  ], 2);
+
+  assert.deepEqual(selected.map((track) => track.tidal.id), ["original", "compilation-extended"]);
+});
 
 function tempStore(options = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "standby-candidates-"));
@@ -282,6 +397,20 @@ test("standby summary caps repeated artist families across collaborations", () =
   );
 });
 
+test("short standby pool relaxes the artist cap for clean alternates", () => {
+  const store = tempStore({ targetCount: 5 });
+  const tracks = ["One", "Two", "Three", "Four"].map((title, index) => ({
+    artist: "One Strong Artist",
+    title,
+    album: `Release ${index + 1}`,
+    score: 90 - index
+  }));
+
+  const result = store.replace(tracks);
+
+  assert.deepEqual(result.summary.tracks.map((track) => track.title), ["One", "Two", "Three"]);
+});
+
 test("standby summary caps repeated albums and remix packs", () => {
   const store = tempStore({ targetCount: 4 });
   store.replace([
@@ -295,6 +424,21 @@ test("standby summary caps repeated albums and remix packs", () => {
     store.summary().tracks.map((track) => track.title),
     ["Original", "Another Release", "Third Release"]
   );
+});
+
+test("fresh standby shortfall can retain a second reviewed album track", () => {
+  const store = tempStore({ targetCount: 4 });
+  const result = store.replace([
+    { artist: "Artist A", title: "Original", album: "Strong EP", label: "Good Label", score: 90 },
+    { artist: "Artist B", title: "Remix", album: "Strong EP", label: "Good Label", score: 89 },
+    { artist: "Artist C", title: "Another Release", album: "Another Release", label: "Other Label", score: 88 },
+    { artist: "Artist D", title: "Third Release", album: "Third Release", label: "Other Label", score: 87 }
+  ], { allowAlbumRepeatsOnShortfall: true });
+
+  assert.equal(result.summary.tracks.length, 4);
+  assert.deepEqual(result.summary.tracks.map((track) => track.title), [
+    "Original", "Remix", "Another Release", "Third Release"
+  ]);
 });
 
 test("standby refresh status records success and errors", () => {
@@ -343,7 +487,7 @@ test("standby refresh is not due when the pool is full", () => {
   assert.equal(store.refreshDue(1), false);
 });
 
-test("standby queue failures are retained across automatic refresh replace", () => {
+test("standby queue failures stay quarantined but do not appear in the refreshed display", () => {
   const store = tempStore({ targetCount: 3 });
   store.replace([
     { artist: "Monkey Safari", title: "Gravity (with Delhia De France)", score: 88, tidal: { id: "162866784" } },
@@ -364,9 +508,46 @@ test("standby queue failures are retained across automatic refresh replace", () 
     { artist: "New C", title: "Five", score: 97 }
   ]);
 
-  assert.equal(refreshed.summary.tracks[0].title, "Gravity (with Delhia De France)");
-  assert.equal(refreshed.summary.tracks[0].standbyQueueFailure.failureType, "not_found");
-  assert.equal(refreshed.summary.tracks[0].standbyQueueFailure.queueAttemptSource, "standby");
+  assert.equal(refreshed.summary.tracks[0].title, "Three");
+  assert.equal(refreshed.summary.tracks.length, 3);
+  assert.equal(refreshed.summary.tracks.some(track => track.title === "Gravity (with Delhia De France)"), false);
+  const quarantined = store.read().candidates.find(track => track.title === "Gravity (with Delhia De France)");
+  assert.equal(quarantined.standbyQueueFailure.failureType, "not_found");
+  assert.equal(quarantined.standbyQueueFailure.queueAttemptSource, "standby");
+});
+
+test("transient Roon connection failures remain retryable in the standby display", () => {
+  const store = tempStore({ targetCount: 1 });
+  store.replace([{ artist: "Retry Artist", title: "Retry Track", score: 88, tidal: { id: "retry-1" } }]);
+
+  const summary = store.retainQueueFailures([{
+    track: { artist: "Retry Artist", title: "Retry Track", tidalTrackId: "retry-1" },
+    reason: "Roon browse service is not connected.",
+    failureType: "error",
+    resolutionMethod: "roon_search"
+  }], { source: "standby" });
+
+  assert.equal(summary.count, 1);
+  assert.equal(summary.tracks[0].title, "Retry Track");
+  assert.equal(store.read().candidates[0].standbyQueueFailure.failureType, "error");
+});
+
+test("short standby replacements carry transient Roon failures until fresh tracks arrive", () => {
+  const store = tempStore({ targetCount: 3 });
+  store.replace([
+    { artist: "Retry Artist", title: "Retry Track", score: 88, tidal: { id: "retry-2" } }
+  ]);
+  store.retainQueueFailures([{
+    track: { artist: "Retry Artist", title: "Retry Track", tidalTrackId: "retry-2" },
+    reason: "Roon browse service is not connected.",
+    failureType: "error"
+  }]);
+
+  const refreshed = store.replace([{ artist: "Fresh Artist", title: "Fresh Track", score: 92 }]);
+
+  assert.equal(refreshed.summary.count, 2);
+  assert.equal(refreshed.summary.tracks.some(track => track.title === "Retry Track"), true);
+  assert.equal(refreshed.summary.tracks.some(track => track.title === "Fresh Track"), true);
 });
 
 test("standby track key prefers TIDAL identity", () => {

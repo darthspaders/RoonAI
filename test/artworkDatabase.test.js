@@ -1,0 +1,38 @@
+"use strict";
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const { MusicMemoryStore } = require('../src/musicMemoryStore');
+const { migrate, snapshotSource } = require('../src/canonicalFoundation');
+const { readCatalog, browseCatalog } = require('../src/databaseBrowserCatalog');
+
+test('Database API projects additive exact-item artwork repairs, supports reversal, preserves grouping and legacy rows', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'artwork-database-'));
+  const memory = new MusicMemoryStore({ dbFile: path.join(directory, 'db.sqlite'), logger: null });
+  t.after(() => { memory.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const track = { tidalId: '101', artist: 'Artist', title: 'Song', album: 'Album' };
+  memory.rememberObservation(track, 'now_playing');
+  memory.saveProviderEnrichment(track, 'tidal', { id: '101', fetchedAt: '2026-01-01', rawJson: { id: '101', imageUrl: 'https://art.darthspader.com/art/dead.jpg' } });
+  const db = memory.db;
+  const legacy = db.prepare('SELECT * FROM track_identity').all();
+  const enrichments = db.prepare('SELECT * FROM provider_enrichment').all();
+  const before = readCatalog(db, null).records[0];
+  migrate(db);
+  const source = snapshotSource(db, { provider: 'tidal', kind: 'track', externalId: '101', raw: { exactItem: '101' } });
+  db.prepare('INSERT INTO canonical_provider_track(source_id,snapshot_id) VALUES(?,?)').run(source.sourceId, source.snapshotId);
+  const repairId = randomUUID();
+  db.prepare('INSERT INTO canonical_artwork_repair(id,legacy_track_id,original_url,replacement_url,source_id,snapshot_id,legacy_snapshot_id,evidence_json) VALUES(?,?,?,?,?,?,?,?)').run(repairId, before.id, before.imageUrl, 'https://resources.tidal.com/images/exact/320x320.jpg', source.sourceId, source.snapshotId, enrichments[0].id, '{}');
+  const after = browseCatalog(readCatalog(db, null), { view: 'tracks' }).items[0];
+  assert.equal(after.imageUrl, 'https://resources.tidal.com/images/exact/320x320.jpg');
+  assert.equal(after.albumKey, before.albumKey);
+  assert.equal(after.identityKey, before.identityKey);
+  assert.equal(after.artworkProjection.repairId, repairId);
+  assert.deepEqual(db.prepare('SELECT * FROM track_identity').all(), legacy);
+  assert.deepEqual(db.prepare('SELECT * FROM provider_enrichment').all(), enrichments);
+  db.prepare('UPDATE canonical_artwork_repair SET revoked_at=CURRENT_TIMESTAMP,revocation_reason=? WHERE id=?').run('test reversal', repairId);
+  assert.equal(readCatalog(db, null).records[0].imageUrl, before.imageUrl);
+  assert.equal(db.prepare('SELECT count(*) n FROM canonical_artwork_repair').get().n, 1);
+});

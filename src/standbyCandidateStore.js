@@ -1,6 +1,7 @@
 "use strict";
 const {recordRefresh} = require("./standbyNovelty");
 const {identityKeys} = require("./standbyTrackIdentity");
+const {parseCanonicalCatalogIdentity} = require("./catalogIdentityNormalization");
 
 const fs = require("fs");
 const path = require("path");
@@ -298,8 +299,21 @@ function meetsStandbyScoreFloor(track = {}) {
   return scoreFor(track) >= DEFAULT_MIN_SCORE;
 }
 
+function isTransientStandbyQueueFailure(track = {}) {
+  const failure = track.standbyQueueFailure || {};
+  const failureType = normalize(failure.failureType);
+  const reason = normalize(failure.reason);
+  // A disconnected Roon core is a transient delivery problem, not evidence
+  // that the candidate itself is invalid. Keep it retryable/displayable so a
+  // brief bridge outage cannot empty the standby pool. Version mismatches and
+  // catalog misses remain quarantined until a later refresh finds a replacement.
+  return failureType === "error" && /\broon\b.*\b(?:not connected|disconnected|connection|timeout|timed out)\b/.test(reason);
+}
+
 function retainedQueueFailure(track = {}, now = Date.now()) {
-  return Boolean(track.standbyQueueFailure && Number(track.standbyQueueFailure.retainUntil || 0) > now);
+  if (isTransientStandbyQueueFailure(track)) return false;
+  const failure = track.standbyQueueFailure || {};
+  return Boolean(failure && Number(failure.retainUntil || 0) > now);
 }
 
 function standbyArtistKeys(track = {}) {
@@ -307,6 +321,186 @@ function standbyArtistKeys(track = {}) {
     ...track,
     artist: metadataField(track, "artist") || track.artist
   }, splitStandbyArtists);
+}
+
+function standbyCopyTitle(title = "") {
+  return cleanText(title)
+    .replace(/\s*[([]\s*(?:mixed|(?:ulf|fsoe|abgt)\s*\d+|episode\s+\d+)\s*[)\]]/gi, " ")
+    .replace(/\s+(?:mixed|episode\s+\d+)\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function standbyCanonicalCopyKind(track = {}, identity = {}) {
+  const title = metadataField(track, "title");
+  const album = metadataField(track, "album");
+  const titleText = cleanText(title);
+  const albumText = cleanText(album);
+  if (/\b(?:episode\s*\d+|(?:ulf|fsoe|abgt)\s*\d+)\b/i.test(`${titleText} ${albumText}`)) return "episode";
+  if (identity.versionKind === "mixed" || /\b(?:dj\s+mix|continuous\s+mix|mixed\s+by|mixed)\b/i.test(titleText)) return "dj-mix";
+  if (/\b(?:compilation|various\s+artists?|best\s+of|collection|anthology|essentials?|yearbook|sampler)\b/i.test(albumText)) return "compilation";
+  return "";
+}
+
+function standbyCanonicalIdentity(track = {}) {
+  const title = metadataField(track, "title");
+  if (!title) return null;
+  const initial = parseCanonicalCatalogIdentity({
+    ...track,
+    title
+  });
+  const copyKind = standbyCanonicalCopyKind(track, initial);
+  const identity = copyKind
+    ? parseCanonicalCatalogIdentity({ ...track, title: standbyCopyTitle(title) })
+    : initial;
+  const artistKeys = standbyArtistKeys(track);
+  if (!artistKeys.length || !identity.normalizedBaseTitle) return null;
+  const versionKind = identity.versionKind === "mixed" ? "none" : (identity.versionKind || "none");
+  return {
+    track,
+    key: `${artistKeys.slice().sort().join("|")}|${identity.normalizedBaseTitle}`,
+    artistKeys,
+    baseTitle: identity.normalizedBaseTitle,
+    versionKind,
+    versionSemantic: identity.version.semantic || "",
+    copyKind,
+    identity
+  };
+}
+
+function standbyVersionCompatible(left = {}, right = {}) {
+  if (left.versionKind !== right.versionKind) {
+    const principalPair = new Set([left.versionKind, right.versionKind]);
+    if (!principalPair.has("none") || !principalPair.has("original")) return false;
+  }
+  const leftSemantic = normalize(left.versionSemantic);
+  const rightSemantic = normalize(right.versionSemantic);
+  return !leftSemantic && !rightSemantic || leftSemantic === rightSemantic;
+}
+
+function standbyCanonicalReleasePreference(tracks = []) {
+  const source = Array.isArray(tracks) ? tracks : [];
+  const entries = source
+    .map(track => ({ track, entry: standbyCanonicalIdentity(track) }));
+  const families = new Map();
+  for (const { entry } of entries) {
+    if (!entry) continue;
+    if (!families.has(entry.key)) families.set(entry.key, []);
+    families.get(entry.key).push(entry);
+  }
+
+  const rejected = [];
+  const kept = [];
+  for (const { track, entry } of entries) {
+    if (!entry) {
+      kept.push(track);
+      continue;
+    }
+    if (!entry.copyKind) {
+      kept.push(entry.track);
+      continue;
+    }
+    const standalone = (families.get(entry.key) || [])
+      .filter(candidate => !candidate.copyKind && candidate !== entry && standbyVersionCompatible(entry, candidate))
+      .sort((left, right) => {
+        const leftPrincipal = left.identity.normalizedAlbumFamily === left.baseTitle ? 1 : 0;
+        const rightPrincipal = right.identity.normalizedAlbumFamily === right.baseTitle ? 1 : 0;
+        return rightPrincipal - leftPrincipal;
+      })[0];
+    if (!standalone) {
+      kept.push(entry.track);
+      continue;
+    }
+    rejected.push({
+      artist: metadataField(entry.track, "artist"),
+      title: metadataField(entry.track, "title"),
+      album: metadataField(entry.track, "album"),
+      copyKind: entry.copyKind,
+      reason: "standby-copy-replaced-by-compatible-standalone-release",
+      canonicalArtist: metadataField(standalone.track, "artist"),
+      canonicalTitle: metadataField(standalone.track, "title"),
+      canonicalAlbum: metadataField(standalone.track, "album"),
+      normalizedBaseTitle: entry.baseTitle,
+      versionCompatible: true
+    });
+  }
+
+  return { tracks: kept, rejected };
+}
+
+function standbyQueueVariantInfo(track = {}) {
+  if (standbyCanonicalIdentity(track)?.copyKind) return null;
+  const title = metadataField(track, "title");
+  const versionTexts = [
+    metadataField(track, "version"),
+    track.mixVersion,
+    track.mixName,
+    track.tidal?.mixVersion,
+    track.tidal?.mixName
+  ].map(cleanText).filter(Boolean);
+  if (!title) return null;
+
+  const titleMarker = title.match(/\b(original|extended)\s+(?:mix|version)\b/i)?.[1]?.toLowerCase() || "";
+  const versionMarkers = [...new Set(versionTexts
+    .map((value) => value.match(/\b(original|extended)\s+(?:mix|version)\b/i)?.[1]?.toLowerCase() || "")
+    .filter(Boolean))];
+  if (versionMarkers.length > 1) return null;
+  const versionMarker = versionMarkers[0] || "";
+  if (titleMarker && versionMarker && titleMarker !== versionMarker) return null;
+
+  const kind = versionMarker || titleMarker || "base";
+  const baseTitle = title
+    .replace(/\s*(?:\(|\[)?\s*(?:original|extended)\s+(?:mix|version)\s*(?:\)|\])?\s*$/i, "")
+    .trim();
+  const artistKeys = standbyArtistKeys(track);
+  if (!baseTitle || !artistKeys.length) return null;
+
+  return {
+    key: `${artistKeys.slice().sort().join("|")}|${normalize(baseTitle)}`,
+    kind,
+    track
+  };
+}
+
+function selectStandbyQueueTracks(tracks = [], targetCount = tracks.length) {
+  const source = standbyCanonicalReleasePreference(tracks).tracks;
+  const numericTarget = Number(targetCount);
+  const target = Number.isFinite(numericTarget)
+    ? Math.max(0, Math.trunc(numericTarget))
+    : source.length;
+  if (!source.length || !target) return [];
+
+  const families = new Map();
+  for (const track of source) {
+    const info = standbyQueueVariantInfo(track);
+    if (!info) continue;
+    if (!families.has(info.key)) families.set(info.key, []);
+    families.get(info.key).push(info);
+  }
+
+  const extendedReplacements = new Map();
+  for (const [key, family] of families.entries()) {
+    const extended = family.find((entry) => entry.kind === "extended");
+    const hasPlainOrOriginal = family.some((entry) => entry.kind === "base" || entry.kind === "original");
+    if (extended && hasPlainOrOriginal) extendedReplacements.set(key, extended);
+  }
+
+  const selected = [];
+  const emittedFamilies = new Set();
+  for (const track of source) {
+    if (selected.length >= target) break;
+    const info = standbyQueueVariantInfo(track);
+    const replacement = info && extendedReplacements.get(info.key);
+    if (replacement) {
+      if (emittedFamilies.has(info.key)) continue;
+      selected.push(replacement.track);
+      emittedFamilies.add(info.key);
+      continue;
+    }
+    selected.push(track);
+  }
+
+  return selected.slice(0, target);
 }
 
 function standbyAlbumKey(track = {}) {
@@ -342,6 +536,15 @@ function diverseStandbyCandidates(
   }
 
   return selected;
+}
+
+function adaptiveDiverseStandbyCandidates(tracks = [], targetCount = DEFAULT_TARGET_COUNT, { allowAlbumRepeatsOnShortfall = false } = {}) {
+  const target = Math.max(1, Number(targetCount || DEFAULT_TARGET_COUNT));
+  const first = diverseStandbyCandidates(tracks, target, 1);
+  if (first.length >= target) return first;
+  const second = diverseStandbyCandidates(tracks, target, 2, allowAlbumRepeatsOnShortfall ? 2 : 1);
+  if (second.length >= target) return second;
+  return diverseStandbyCandidates(tracks, target, 3, allowAlbumRepeatsOnShortfall ? 2 : 1);
 }
 
 function compactTrack(track = {}, previous = {}, context = {}, now = Date.now(), ttlMs = DEFAULT_TTL_MS) {
@@ -393,6 +596,7 @@ class StandbyCandidateStore {
       nextRefreshAt: "",
       lastError: "",
       lastRun: null,
+      standbySelectionPolicy: "",
       candidates: []
     };
   }
@@ -427,16 +631,19 @@ class StandbyCandidateStore {
     return next;
   }
 
-  activeCandidates(snapshot = this.read(), now = Date.now()) {
+  activeCandidates(snapshot = this.read(), now = Date.now(), options = {}) {
+    const includeQueueFailures = Boolean(options.includeQueueFailures);
+    const allowAlbumRepeatsOnShortfall = options.allowAlbumRepeatsOnShortfall === true || snapshot.standbySelectionPolicy === "adaptive-album-v1";
     const tracks = (snapshot.candidates || [])
       .filter((track) => (
         standbyTrackKey(track) &&
         meetsStandbyScoreFloor(track) &&
         !isStandbySeoSludge(track) &&
-        Number(track.standbyExpiresAt || 0) > now
+        Number(track.standbyExpiresAt || 0) > now &&
+        (includeQueueFailures || !retainedQueueFailure(track, now))
       ))
       .sort(sortCandidates);
-    return diverseStandbyCandidates(tracks, this.targetCount);
+    return adaptiveDiverseStandbyCandidates(tracks, this.targetCount, { allowAlbumRepeatsOnShortfall });
   }
 
   list(options = {}) {
@@ -467,7 +674,8 @@ class StandbyCandidateStore {
       byKey.set(key, compactTrack(track, byKey.get(key), context, now, this.ttlMs));
     }
 
-    const candidates = diverseStandbyCandidates([...byKey.values()].sort(sortCandidates), this.targetCount);
+    const canonical = standbyCanonicalReleasePreference([...byKey.values()].sort(sortCandidates));
+    const candidates = adaptiveDiverseStandbyCandidates(canonical.tracks, this.targetCount);
     const next = this.write({
       ...snapshot,
       candidates,
@@ -477,6 +685,7 @@ class StandbyCandidateStore {
       addedCount: candidates.length,
       targetCount: this.targetCount,
       tracks: candidates,
+      canonicalReleaseRejected: canonical.rejected,
       summary: this.summary(next)
     };
   }
@@ -484,35 +693,64 @@ class StandbyCandidateStore {
   replace(tracks = [], context = {}) {
     const snapshot = this.read();
     const now = Date.now();
-    const previousActive = this.activeCandidates(snapshot, now);
+    // Keep queue-failed candidates in the persisted quarantine during a
+    // replacement, but never let them compete with fresh recommendations in
+    // the normal active/display pool.
+    const previousActive = this.activeCandidates(snapshot, now, { includeQueueFailures: true });
     const previousByKey = new Map(
       previousActive
         .map((track) => [standbyTrackKey(track), track])
         .filter(([key]) => key)
     );
-    const byKey = new Map();
-
+    const quarantined = new Map();
+    const retryable = new Map();
     for (const track of previousActive.filter((candidate) => retainedQueueFailure(candidate, now))) {
       const key = standbyTrackKey(track);
-      if (key) byKey.set(key, track);
+      if (key) quarantined.set(key, track);
     }
+    for (const track of previousActive.filter((candidate) => isTransientStandbyQueueFailure(candidate))) {
+      const key = standbyTrackKey(track);
+      if (key) retryable.set(key, track);
+    }
+
+    const freshByKey = new Map();
 
     for (const track of tracks || []) {
       const key = standbyTrackKey(track);
       if (!key || !meetsStandbyScoreFloor(track) || isStandbySeoSludge(track)) continue;
-      byKey.set(key, compactTrack(track, previousByKey.get(key) || byKey.get(key), context, now, this.ttlMs));
+      // A newly discovered candidate supersedes an older queue-failed copy of
+      // the same identity. Do not carry the failure marker forward.
+      quarantined.delete(key);
+      retryable.delete(key);
+      freshByKey.set(key, compactTrack(track, previousByKey.get(key), context, now, this.ttlMs));
     }
 
-    const candidates = diverseStandbyCandidates([...byKey.values()].sort(sortCandidates), this.targetCount);
+    // Quarantined failures are persisted separately from the fresh selection
+    // so they cannot crowd out new tracks when the target is only partially
+    // filled.
+    const allowAlbumRepeatsOnShortfall = context.allowAlbumRepeatsOnShortfall === true;
+    const canonical = standbyCanonicalReleasePreference([...freshByKey.values()].sort(sortCandidates));
+    const freshCandidates = adaptiveDiverseStandbyCandidates(canonical.tracks, this.targetCount, { allowAlbumRepeatsOnShortfall });
+    // A Roon connection failure says nothing about candidate quality. Carry
+    // those tracks forward only to fill a genuine shortfall; once the fresh
+    // pool reaches the target, the new pool fully replaces them.
+    const visibleCandidates = freshCandidates.length >= this.targetCount
+      ? freshCandidates
+      : adaptiveDiverseStandbyCandidates([...freshCandidates, ...retryable.values()].sort(sortCandidates), this.targetCount, { allowAlbumRepeatsOnShortfall });
+    const candidates = [...quarantined.values(), ...visibleCandidates];
+    const historyCandidates = visibleCandidates.filter((candidate) => freshByKey.has(standbyTrackKey(candidate)) && !retainedQueueFailure(candidate, now));
     const next = this.write({
       ...snapshot,
       candidates,
-      standbyHistory: context.recordHistory ? recordRefresh(context.history || snapshot.standbyHistory || [], candidates) : snapshot.standbyHistory
+      standbySelectionPolicy: allowAlbumRepeatsOnShortfall ? "adaptive-album-v1" : snapshot.standbySelectionPolicy,
+      standbyHistory: context.recordHistory ? recordRefresh(context.history || snapshot.standbyHistory || [], historyCandidates) : snapshot.standbyHistory
     });
     return {
-      addedCount: candidates.length,
+      addedCount: visibleCandidates.length,
       targetCount: this.targetCount,
-      tracks: candidates,
+      tracks: visibleCandidates,
+      canonicalReleaseRejected: canonical.rejected,
+      quarantinedTracks: [...quarantined.values()],
       summary: this.summary(next)
     };
   }
@@ -632,7 +870,10 @@ module.exports = {
   StandbyCandidateStore,
   isStandbySeoSludge,
   standbySeoSludgeReason,
+  isTransientStandbyQueueFailure,
   standbyTrackKey,
   standbyArtistKeys,
+  standbyCanonicalReleasePreference,
+  selectStandbyQueueTracks,
   diverseStandbyCandidates
 };

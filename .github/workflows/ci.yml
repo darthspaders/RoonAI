@@ -1,0 +1,56 @@
+name: Check release
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.13.0", "24"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install audio test dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build source-only image
+        run: docker build -t rabbit-hole:ci .
+      - name: Start without access to any real Roon or LMS server
+        run: >-
+          docker run -d --name rabbit-hole-smoke --network none --entrypoint node
+          rabbit-hole:ci -e "const RoonApi=require('node-roon-api');
+          RoonApi.prototype.start_discovery=()=>{}; require('./src/server.js')"
+      - name: Wait for HTTP and check persistent pairing path
+        run: |
+          for attempt in $(seq 1 30); do
+            if docker exec rabbit-hole-smoke node -e "fetch('http://127.0.0.1:3777/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+              docker exec rabbit-hole-smoke node -e "const fs=require('node:fs'); if(fs.realpathSync('/app/data')!='/app/data'||fs.readlinkSync('/app/config.json')!='data/config.json')process.exit(1); fetch('http://127.0.0.1:3777/api/status/live').then(async r=>{if(!r.ok)throw Error('HTTP '+r.status); await r.json()}).catch(e=>{console.error(e.message);process.exitCode=1})"
+              exit $?
+            fi
+            sleep 1
+          done
+          docker logs rabbit-hole-smoke
+          exit 1
+      - name: Container diagnostics
+        if: failure()
+        run: docker logs rabbit-hole-smoke
+      - name: Stop smoke container
+        if: always()
+        run: docker rm -f rabbit-hole-smoke || true

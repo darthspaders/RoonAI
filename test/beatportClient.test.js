@@ -566,6 +566,9 @@ test("Beatport search sends bearer auth and normalizes the first track", async (
               id: 77,
               name: "Solar",
               artists: [{ name: "Ezequiel Arias" }],
+              label: { name: "Anjunadeep" },
+              release_date: "2024-01-01",
+              length_ms: 360000,
               genre: { name: "Melodic House & Techno" },
               sub_genre: { name: "Progressive House" }
             }]
@@ -576,7 +579,7 @@ test("Beatport search sends bearer auth and normalizes the first track", async (
     logger: null
   });
 
-  const result = await client.findTrack({ artist: "Ezequiel Arias", title: "Solar" });
+  const result = await client.findTrack({ artist: "Ezequiel Arias", title: "Solar", label: "Anjunadeep", releaseDate: "2024-01-01", durationMs: 360000 });
 
   assert.equal(result.id, "77");
   assert.equal(result.artist, "Ezequiel Arias");
@@ -585,6 +588,125 @@ test("Beatport search sends bearer auth and normalizes the first track", async (
   assert.match(requests[0].url, /\/catalog\/search\/\?/);
   assert.match(requests[0].url, /type=tracks/);
   assert.equal(requests[0].options.headers.authorization, "Bearer abc123");
+});
+
+test("Beatport search continues to bounded later pages when the first hit is unsafe", async () => {
+  const requests = [];
+  const client = new BeatportClient({
+    enabled: true,
+    accessToken: "abc123",
+    tokenFile: tempTokenFile(),
+    maxSearchPages: 2,
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      requests.push(parsed);
+      const page = parsed.searchParams.get("page");
+      return jsonResponse(200, {
+        results: page === "1" ? [{
+          id: 901,
+          name: "Universal Nation",
+          mix_name: "Charlotte de Witte Rework",
+          artists: [{ name: "Push" }, { name: "Charlotte de Witte" }],
+          release_date: "2024-01-01",
+          length_ms: 330000
+        }] : [{
+          id: 902,
+          name: "Universal Nation",
+          artists: [{ name: "Push" }],
+          label: { name: "Bonzai" },
+          release_date: "2000-01-01",
+          length_ms: 390000
+        }]
+      });
+    },
+    logger: null
+  });
+
+  const result = await client.findTrack({
+    artist: "Push",
+    title: "Universal Nation",
+    recordingYear: 2000,
+    durationMs: 390000,
+    label: "Bonzai"
+  });
+
+  assert.equal(result.id, "902");
+  assert.deepEqual(requests.map((request) => request.searchParams.get("page")), ["1", "2"]);
+  assert.equal(client.lastIdentityDiagnostics.selectedCandidateId, "902");
+  assert.equal(client.lastIdentityDiagnostics.evaluated.find((item) => item.id === "901").safe, false);
+});
+
+test("Beatport track id lookup fetches the authoritative candidate before search", async () => {
+  const requests = [];
+  const client = new BeatportClient({
+    enabled: true,
+    accessToken: "abc123",
+    tokenFile: tempTokenFile(),
+    fetchImpl: async (url) => {
+      requests.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 17771962,
+          name: "Wonky",
+          artists: [{ name: "Luci" }, { name: "Point.Blank" }],
+          isrc: "QMBZ92039199",
+          release_date: "2024-01-01",
+          length_ms: 360000,
+          genre: { name: "Dubstep" }
+        })
+      };
+    },
+    logger: null
+  });
+
+  const result = await client.findTrack({ artist: "Luci / Point.Blank / Point Blank", title: "Wonky" }, {
+    beatportTrackId: "17771962"
+  });
+
+  assert.equal(result.id, "17771962");
+  assert.equal(result.title, "Wonky");
+  assert.equal(requests.length, 1);
+  assert.match(requests[0], /\/catalog\/tracks\/17771962\//);
+});
+
+test("a verified named remix resolves directly by Beatport ID without redundant ISRC or search calls", async () => {
+  const { tidal, beatport } = require("./fixtures/anuqram-remix.json");
+  const requests = [];
+  const client = new BeatportClient({
+    enabled: true, accessToken: "test-token", tokenFile: tempTokenFile(), logger: null,
+    fetchImpl: async (url) => {
+      requests.push(new URL(url).pathname);
+      return jsonResponse(200, {
+        id: beatport.id, name: beatport.title, mix_name: beatport.mixName,
+        artists: [{ name: beatport.artist }], isrc: beatport.isrc, length_ms: beatport.durationMs
+      });
+    }
+  });
+  const result = await client.findTrack(tidal, { beatportTrackId: beatport.id });
+  assert.equal(result.id, beatport.id);
+  assert.equal(result.mixName, "ANUQRAM Remix");
+  assert.deepEqual(requests, ["/v4/catalog/tracks/24501011/"]);
+});
+
+test("Beatport search selects the verified remix when the ISRC endpoint has no result", async () => {
+  const { tidal, beatport } = require("./fixtures/anuqram-remix.json");
+  const client = new BeatportClient({
+    enabled: true, accessToken: "test-token", tokenFile: tempTokenFile(), logger: null,
+    sleepFn: async () => {},
+    fetchImpl: async (url) => {
+      if (new URL(url).pathname.includes("/store/")) return jsonResponse(404, {});
+      return jsonResponse(200, { results: ["Other Artist Remix", "Original Mix", beatport.mixName].map((mix, i) => ({
+        id: i === 2 ? beatport.id : `other-${i}`, name: beatport.title, mix_name: mix,
+        artists: [{ name: beatport.artist }], isrc: beatport.isrc, length_ms: beatport.durationMs
+      })) });
+    }
+  });
+  const result = await client.findTrack(tidal);
+  assert.equal(result.id, beatport.id);
+  assert.equal(client.lastIdentityDiagnostics.safeCandidateCount, 1);
+  assert.equal(client.lastIdentityDiagnostics.attemptedSearches.length, 1);
 });
 
 test("Beatport requests are throttled through one client limiter", async () => {
@@ -826,12 +948,21 @@ test("Beatport client refreshes expired token from token file before search", as
         return jsonResponse(200, { access_token: "fresh-access", expires_in: 3600 });
       }
       assert.equal(options.headers.authorization, "Bearer fresh-access");
-      return jsonResponse(200, { results: [{ id: 88, name: "Damage", artists: [{ name: "Agustin Pietrocola" }] }] });
+      return jsonResponse(200, {
+        results: [{
+          id: 88,
+          name: "Damage",
+          artists: [{ name: "Agustin Pietrocola" }],
+          label: { name: "Manual Music" },
+          release_date: "2024-01-01",
+          length_ms: 360000
+        }]
+      });
     },
     logger: null
   });
 
-  const result = await client.findTrack({ artist: "Agustin Pietrocola", title: "Damage" });
+  const result = await client.findTrack({ artist: "Agustin Pietrocola", title: "Damage", label: "Manual Music", releaseDate: "2024-01-01", durationMs: 360000 });
 
   assert.equal(result.id, "88");
   assert.equal(requests.length, 2);

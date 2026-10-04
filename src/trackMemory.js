@@ -9,6 +9,7 @@ const {
 } = require("./trackIdentity");
 
 const DEFAULT_MAX_BYTES = 0;
+const FUZZY_LOOKUP_CACHE_LIMIT = 128;
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -50,8 +51,10 @@ function normalizeMaxBytes(value) {
 function feedbackScoreForRating(value = "") {
   const rating = normalizeRating(value, { fallback: "" });
   if (rating === "love") return 3;
-  if (rating === "good") return 1;
-  if (rating === "ok") return 0.5;
+  if (rating === "like") return 0.75;
+  if (rating === "good") return 0.75;
+  if (rating === "ok") return -0.25;
+  if (rating === "dislike") return -1.5;
   if (rating === "skip") return -1;
   if (rating === "never") return -3;
   if (rating === "wrong_genre") return -1;
@@ -107,10 +110,12 @@ class TrackMemory {
     this.file = options.file || path.join(__dirname, "..", "data", "track-memory.json");
     this.maxBytes = normalizeMaxBytes(options.maxBytes ?? DEFAULT_MAX_BYTES);
     this.entries = new Map();
+    this.fuzzyLookups = new Map();
     this.load();
   }
 
   load() {
+    this.fuzzyLookups.clear();
     try {
       const json = JSON.parse(fs.readFileSync(this.file, "utf8"));
       const entries = Array.isArray(json.entries) ? json.entries : [];
@@ -139,6 +144,7 @@ class TrackMemory {
   }
 
   save() {
+    this.fuzzyLookups.clear();
     const entries = this.prune();
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     fs.writeFileSync(this.file, this.serialize(entries));
@@ -146,6 +152,7 @@ class TrackMemory {
   }
 
   record(tracks = [], now = Date.now(), options = {}) {
+    this.fuzzyLookups.clear();
     const incrementSeen = options.incrementSeen !== false;
     for (const track of tracks || []) {
       const key = trackKey(track);
@@ -166,6 +173,7 @@ class TrackMemory {
   }
 
   updateFeedback(track = {}, rating = "") {
+    this.fuzzyLookups.clear();
     const key = trackKey(track);
     if (!key || key === "|") return this.summary();
     const previous = this.entries.get(key) || compactTrack(track);
@@ -186,12 +194,50 @@ class TrackMemory {
   find(track = {}) {
     const key = trackKey(track);
     if (key && this.entries.has(key)) return this.entries.get(key);
-    return [...this.entries.values()]
+    const query = {
+      title: cleanText(track.title || track.tidal?.title),
+      artist: cleanText(track.artist || track.tidal?.artist)
+    };
+    // Empty/stopped zones cannot fuzzy-match. Repeated live status reads also
+    // share the same small set of identities, including identities we lack.
+    if (!titleKeys(query.title).length || !splitArtists(query.artist).length) return null;
+    const memoKey = JSON.stringify([query.title, query.artist]);
+    if (this.fuzzyLookups.has(memoKey)) return this.fuzzyLookups.get(memoKey);
+    const match = [...this.entries.values()]
       .sort((left, right) => Number(right.lastSeenAt || 0) - Number(left.lastSeenAt || 0))
-      .find((entry) => trackMatches(entry, track)) || null;
+      .find((entry) => trackMatches(entry, query)) || null;
+    this.fuzzyLookups.set(memoKey, match);
+    if (this.fuzzyLookups.size > FUZZY_LOOKUP_CACHE_LIMIT) this.fuzzyLookups.delete(this.fuzzyLookups.keys().next().value);
+    return match;
+  }
+
+  findValidatedTidalIdentities(track = {}, { limit = 24 } = {}) {
+    const candidates = [...this.entries.values()]
+      .filter((entry) => entry?.tidal?.verified === true)
+      .map((entry) => {
+        const tidal = entry.tidal || {};
+        const tidalId = cleanText(tidal.id || tidal.tidalId || tidal.trackId);
+        if (!/^\d+$/.test(tidalId)) return null;
+        return {
+          ...tidal,
+          id: tidal.id || tidalId,
+          tidalId,
+          tidalTrackId: tidalId,
+          tidalUrl: cleanText(tidal.tidalUrl || tidal.url || `https://tidal.com/browse/track/${tidalId}`),
+          artist: cleanText(tidal.artist || entry.artist),
+          title: cleanText(tidal.title || entry.title),
+          mixVersion: cleanText(tidal.mixVersion || tidal.mixName || tidal.version || entry.mixVersion),
+          album: cleanText(tidal.album || entry.album),
+          validatedIdentitySource: "track-memory-validated-tidal"
+        };
+      })
+      .filter((candidate) => candidate && trackMatches(candidate, track))
+      .sort((left, right) => Number(right.observationCount || right.seenCount || 0) - Number(left.observationCount || left.seenCount || 0));
+    return candidates.slice(0, Math.max(1, Math.min(100, Number(limit) || 24)));
   }
 
   purge() {
+    this.fuzzyLookups.clear();
     this.entries.clear();
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     fs.writeFileSync(this.file, this.serialize([]));

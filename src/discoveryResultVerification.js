@@ -84,7 +84,14 @@ function createDiscoveryResultVerification({
   }
 
   function tidalPlaylistBridgeResult(result = {}, requestedCount = 8) {
-    const tracks = mergeTrackLists(result.tracks || [], result.alternates || []);
+    const limit = Math.max(1, Number(result.verification?.requested || result.requestedCount || requestedCount));
+    // Selection already applied artist/label diversity and ranking. Preparing
+    // the playback bridge must not promote held alternates back into results.
+    const selected = mergeTrackLists(result.tracks || []);
+    const tracks = selected.slice(0, limit);
+    const selectedKeys = new Set(tracks.flatMap(candidateIdentityKeys));
+    const alternates = mergeTrackLists(selected.slice(limit), result.alternates || [])
+      .filter(track => !candidateIdentityKeys(track).some(key => selectedKeys.has(key)));
     const discarded = result.discarded || [];
     const sourceStrategy = String(result.verification?.strategy || "");
     const strategy = /roon-verified/i.test(sourceStrategy)
@@ -93,7 +100,7 @@ function createDiscoveryResultVerification({
     return {
       ...result,
       tracks,
-      alternates: [],
+      alternates,
       verification: {
         ...(result.verification || {}),
         strategy,

@@ -6,6 +6,7 @@ const path = require("path");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { TidalProfileMixes, normalizeTidalMixesPayload } = require("../src/tidalProfileMixes");
+const { isCurrentSearchRequest, currentSearchDocument } = require("./tidalSearchFixture");
 
 function tempTokenFile() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tidal-profile-mixes-"));
@@ -195,6 +196,71 @@ test("TIDAL profile mix client reads official recommendation playlists", async (
   assert.ok(calls.some((call) => call.url.includes("/v2/playlists/daily")));
 });
 
+test("TIDAL profile mix client reads current user mix resources after recommendations endpoint removal", async () => {
+  const calls = [];
+  const client = new TidalProfileMixes({
+    accessToken: "profile-token",
+    tokenFile: tempTokenFile(),
+    countryCode: "US",
+    locale: "en_US",
+    clock: () => 1_800_000_000_000,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      const parsed = new URL(url);
+      if (parsed.pathname === "/v2/userDiscoveryMixes/me") {
+        return new Response(JSON.stringify({
+          data: {
+            id: "user",
+            type: "userDiscoveryMixes",
+            relationships: {
+              items: { data: [{ id: "current-discovery", type: "playlists" }] }
+            }
+          }
+        }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+      }
+      if (parsed.pathname === "/v2/playlists/current-discovery") {
+        return new Response(JSON.stringify({
+          data: {
+            id: "current-discovery",
+            type: "playlists",
+            attributes: {
+              name: "My Daily Discovery",
+              description: "Songs by new and familiar artists.",
+              playlistType: "MIX",
+              externalLinks: [{ href: "https://listen.tidal.com/mix/current-discovery" }]
+            },
+            relationships: {
+              coverArt: { data: [{ id: "current-art", type: "artworks" }] },
+              items: { data: [{ id: "1", type: "tracks" }, { id: "2", type: "tracks" }] }
+            }
+          }
+        }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+      }
+      if (parsed.pathname === "/v2/artworks/current-art") {
+        return new Response(JSON.stringify({
+          data: {
+            id: "current-art",
+            type: "artworks",
+            attributes: {
+              files: [{ href: "https://resources.tidal.com/current.jpg", meta: { width: 640, height: 640 } }]
+            }
+          }
+        }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+      }
+      return new Response("{}", { status: 404 });
+    }
+  });
+
+  const result = await client.getMixes({ force: true });
+  assert.equal(result.connected, true);
+  assert.deepEqual(result.mixes.map((mix) => mix.title), ["My Daily Discovery"]);
+  assert.equal(result.mixes[0].category, "Daily Discovery");
+  assert.equal(result.mixes[0].itemCount, 2);
+  assert.equal(result.mixes[0].imageUrl, "https://resources.tidal.com/current.jpg");
+  assert.match(result.sourceEndpoint, /openapi\.tidal\.com\/v2\/userDiscoveryMixes\/me/);
+  assert.equal(calls.some((call) => call.url.includes("/v2/userRecommendations/me")), false);
+});
+
 test("TIDAL profile mix client adds full Mixes & Radio shelf when legacy scope is available", async () => {
   const calls = [];
   const client = new TidalProfileMixes({
@@ -296,14 +362,15 @@ test("TIDAL profile mix client synthesizes Artist Radio from official mix artist
           }
         }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
       }
-      if (parsed.pathname === "/v2/searchResults/deadmau5/relationships/artists") {
-        return new Response(JSON.stringify({
+      if (isCurrentSearchRequest(parsed) && parsed.searchParams.get("filter[query]") === "deadmau5") {
+        assert.equal(parsed.searchParams.get("include"), "artists");
+        return new Response(JSON.stringify(currentSearchDocument({
           data: [{ id: "3523908", type: "artists" }],
           included: [
             { id: "3523908", type: "artists", attributes: { name: "deadmau5" } },
             { id: "111", type: "artists", attributes: { name: "not deadmau5" } }
           ]
-        }), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
+        }, "artists", "deadmau5")), { status: 200, headers: { "content-type": "application/vnd.api+json" } });
       }
       if (parsed.pathname === "/v2/artists/3523908/relationships/radio") {
         return new Response(JSON.stringify({

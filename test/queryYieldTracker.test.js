@@ -101,6 +101,38 @@ test("rankQueries promotes historically useful templates and demotes sludge", ()
   assert.ok(ranked.adjustments.some((item) => item.template === "deep house mix {year}" && item.quality < 0));
 });
 
+test("query yield history is scoped to the requested genre context", () => {
+  const tracker = new QueryYieldTracker(tempFile("yield.json"));
+  tracker.recordRun([{
+    query: "D-Nox",
+    lane: "core",
+    attempts: 4,
+    returned: 24,
+    accepted: 12
+  }]);
+  tracker.recordRun([{
+    query: "Tape B dubstep",
+    lane: "core",
+    targetGenres: ["dubstep"],
+    vibes: ["dark"],
+    attempts: 1,
+    returned: 4,
+    accepted: 2
+  }]);
+
+  const ranked = tracker.rankQueries(["D-Nox", "Tape B dubstep"], {
+    lane: "core",
+    targetGenres: ["dubstep"],
+    vibes: ["dark"],
+    prune: true
+  });
+
+  assert.equal(ranked.ranked.find((item) => item.query === "D-Nox").entryScope, "none");
+  assert.equal(ranked.ranked.find((item) => item.query === "D-Nox").quality, 0);
+  assert.ok(ranked.contextKey.includes("genre:dubstep"));
+  assert.ok(Object.keys(tracker.read().entries).some((key) => key.includes("genre:dubstep")));
+});
+
 test("rankQueries can prune historically bad templates when discovery asks for it", () => {
   const tracker = new QueryYieldTracker(tempFile("yield.json"));
   tracker.recordRun([
@@ -187,6 +219,21 @@ test("discovery uses query yield memory to reorder TIDAL search queries", async 
   assert.equal(result.tracks.length, 1);
   assert.equal(searchOrder[0], "better query");
   assert.ok(result.verification.queryYield.adjustments.some((item) => item.query === "better query"));
+  const selectedQuery = result.verification.querySelectionDiagnostics.find((item) => item.query === "better query");
+  assert.equal(selectedQuery.source, "explicit/core genre search");
+  assert.deepEqual(Object.keys(selectedQuery).sort(), [
+    "budgetCost",
+    "currentIntentContribution",
+    "genreCompatibilityScore",
+    "historicalYieldContribution",
+    "query",
+    "queryContextKey",
+    "source",
+    "tasteContribution",
+    "tasteRole",
+    "whySelected",
+    "lane"
+  ].sort());
 });
 
 test("discovery skips pruned query-yield templates before spending TIDAL crawl time", async () => {

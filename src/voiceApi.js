@@ -72,7 +72,7 @@ function createVoiceApi({ tools, router, directory = defaultDirectory, availabil
           if (!r.ok) throw new Error("Roon did not confirm the command.");
           spokenResponse = { pause: "Paused.", play: "Playing.", next: "Skipped.", previous: "Previous track.", stop: "Stopped." }[cmd.control];
         } else if (cmd.kind === "rating") {
-          await call("rate_now_playing", { rating: cmd.rating }); spokenResponse = { love: "Loved.", good: "Rated good.", never: "Rejected." }[cmd.rating];
+          await call("rate_now_playing", { rating: cmd.rating }); spokenResponse = { love: "Loved.", like: "Rated like.", good: "Rated like.", ok: "Marked okay.", dislike: "Disliked.", skip: "Disliked.", never: "Marked never again." }[cmd.rating] || "Rating saved.";
         } else if (cmd.kind === "queue" || cmd.kind === "send") {
           const state = await call("get_rabbit_hole_status");
           const input = { ...(state.zone?.id ? { zoneId: state.zone.id } : {}) };

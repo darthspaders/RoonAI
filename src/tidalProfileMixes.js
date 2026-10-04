@@ -15,6 +15,7 @@ const { TidalProfileAuth } = require("./tidalProfileAuth");
 
 const USER_AGENT = "RoonLocalAI/0.1.0";
 const TIDAL_OPENAPI_ROOT = "https://openapi.tidal.com/v2";
+const { searchRelationForUrl, toLegacySearchShape } = require("./tidalSearchCompat");
 const DEFAULT_CACHE_MS = 5 * 60 * 1000;
 const DEFAULT_PLAYLIST_TRACK_CACHE_MS = 30 * 60 * 1000;
 const DEFAULT_PLAYLIST_TRACK_CACHE_FILE = path.join(__dirname, "..", "data", "tidal-playlist-track-cache.json");
@@ -30,6 +31,12 @@ const RECOMMENDATION_RELATIONSHIPS = [
   { key: "newArrivalMixes", category: "New Arrivals" },
   { key: "myMixes", category: "My Mix" },
   { key: "offlineMixes", category: "Offline Mix" }
+];
+const CURRENT_MIX_RESOURCES = [
+  { pathname: "/userDiscoveryMixes/me", category: "Daily Discovery" },
+  { pathname: "/userDailyMixes/me", category: "My Mix" },
+  { pathname: "/userNewReleaseMixes/me", category: "New Arrivals" },
+  { pathname: "/userOfflineMixes/me", category: "Offline Mix" }
 ];
 const PLAYLIST_TRACK_RATE_LIMIT_COOLDOWN_MS = 2 * 60 * 1000;
 
@@ -731,7 +738,7 @@ function coverArtIdFromPlaylist(payload = {}) {
   return cleanText(coverArt?.id);
 }
 
-function normalizeOfficialPlaylistMix({ playlist = {}, imageUrl = "", category = "Mix", relationship = "" } = {}) {
+function normalizeOfficialPlaylistMix({ playlist = {}, imageUrl = "", category = "Mix", relationship = "", sourcePath = "" } = {}) {
   const data = playlist.data || playlist;
   const attributes = data.attributes || {};
   const title = firstText(attributes.name, data.name, data.title);
@@ -746,7 +753,7 @@ function normalizeOfficialPlaylistMix({ playlist = {}, imageUrl = "", category =
     imageUrl,
     url: firstExternalLink(attributes),
     itemCount,
-    sourcePath: `/userRecommendations/me/relationships/${relationship}`
+    sourcePath: sourcePath || `/userRecommendations/me/relationships/${relationship}`
   };
 }
 
@@ -1030,10 +1037,12 @@ class TidalProfileMixes {
   }
 
   async fetchOpenApiJson(pathname, params = {}, options = {}) {
-    return this.fetchJson(openApiUrl(pathname, params), {
+    const url = openApiUrl(pathname, params);
+    const json = await this.fetchJson(url, {
       accept: "application/vnd.api+json",
       ...options
     });
+    return toLegacySearchShape(json, searchRelationForUrl(url));
   }
 
   hasPlaylistWriteScope() {
@@ -1827,10 +1836,10 @@ class TidalProfileMixes {
   async resolveArtist(artistName = "") {
     const name = cleanText(artistName);
     if (!name) return null;
-    const payload = await this.fetchOpenApiJson(`/searchResults/${encodeURIComponent(name)}/relationships/artists`, {
+    const payload = await this.fetchOpenApiJson("/searchResults", {
+      "filter[query]": name,
       countryCode: this.countryCode,
-      include: "artists",
-      limit: "10"
+      include: "artists"
     });
     return this.artistSearchResult(payload, name);
   }
@@ -1981,7 +1990,84 @@ class TidalProfileMixes {
     return radios;
   }
 
+  async getCurrentOfficialMixes(now) {
+    const attemptedEndpoints = [];
+    const mixes = [];
+    const seen = new Set();
+    let successfulResources = 0;
+
+    for (const resource of CURRENT_MIX_RESOURCES) {
+      const resourceParams = {
+        include: "items",
+        locale: bcp47Locale(this.locale)
+      };
+      const resourceEndpoint = openApiUrl(resource.pathname, resourceParams);
+      try {
+        const payload = await this.fetchOpenApiJson(resource.pathname, resourceParams);
+        successfulResources += 1;
+        attemptedEndpoints.push(resourceEndpoint);
+
+        const includedPlaylists = new Map(
+          (Array.isArray(payload?.included) ? payload.included : [])
+            .filter((item) => item?.type === "playlists" && item?.id)
+            .map((item) => [cleanText(item.id), item])
+        );
+        const playlistRefs = relationshipRefs(payload, "items");
+        for (const included of includedPlaylists.values()) {
+          if (!playlistRefs.some((ref) => cleanText(ref.id) === cleanText(included.id))) {
+            playlistRefs.push(included);
+          }
+        }
+
+        for (const ref of playlistRefs) {
+          const id = cleanText(ref.id);
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+
+          const playlistPath = `/playlists/${encodeURIComponent(id)}`;
+          const playlistParams = {
+            countryCode: this.countryCode,
+            include: "coverArt,items"
+          };
+          const playlistEndpoint = openApiUrl(playlistPath, playlistParams);
+          try {
+            const playlist = await this.fetchOpenApiJson(playlistPath, playlistParams);
+            attemptedEndpoints.push(playlistEndpoint);
+            const imageUrl = await this.fetchArtworkUrl(coverArtIdFromPlaylist(playlist));
+            const mix = normalizeOfficialPlaylistMix({
+              playlist,
+              imageUrl,
+              category: resource.category,
+              relationship: resource.pathname,
+              sourcePath: resource.pathname
+            });
+            if (mix) mixes.push(mix);
+          } catch (error) {
+            attemptedEndpoints.push(`${playlistEndpoint} -> ${error.message}`);
+          }
+        }
+      } catch (error) {
+        attemptedEndpoints.push(`${resourceEndpoint} -> ${error.message}`);
+      }
+    }
+
+    if (!successfulResources) return null;
+
+    return {
+      ...this.status(),
+      connected: true,
+      mixes: sortMixes(mixes),
+      attemptedEndpoints,
+      sourceEndpoint: attemptedEndpoints.find((endpoint) => !endpoint.includes(" -> ")) || "",
+      fetchedAt: new Date(now).toISOString(),
+      warning: mixes.length ? "" : "TIDAL responded, but no current personal mix playlists were found."
+    };
+  }
+
   async getOfficialMixes(now) {
+    const currentResult = await this.getCurrentOfficialMixes(now);
+    if (currentResult) return currentResult;
+
     const recommendations = await this.fetchOpenApiJson("/userRecommendations/me", {
       include: RECOMMENDATION_RELATIONSHIPS.map((entry) => entry.key).join(","),
       locale: bcp47Locale(this.locale)
@@ -2029,22 +2115,26 @@ class TidalProfileMixes {
     };
   }
 
-  async getMixTracks(mixId = "", { limit = 50, excludeTracks = [] } = {}) {
+  async getMixTracks(mixId = "", { limit = 50, excludeTracks = [], exportAll = false, includeArtwork = true } = {}) {
     const id = cleanText(mixId);
     if (!id) throw new Error("Missing TIDAL mix id.");
     if (!this.isConfigured()) throw new Error("TIDAL profile token missing. Connect TIDAL profile access first.");
 
-    const safeLimit = Math.max(1, Math.min(50, Number(limit || 50)));
+    const maxLimit = exportAll ? 1000 : 50;
+    const safeLimit = Math.max(1, Math.min(maxLimit, Number(limit || (exportAll ? maxLimit : 50))));
     const excluded = Array.isArray(excludeTracks) ? excludeTracks : [];
     const fetchLimit = excluded.length
       ? Math.max(safeLimit, Math.min(50, safeLimit + Math.max(10, excluded.length)))
       : safeLimit;
     const playlistPath = `/playlists/${encodeURIComponent(id)}`;
+    await this.waitForPlaylistTrackFetchSlot();
     const playlist = await this.fetchOpenApiJson(playlistPath, {
       countryCode: this.countryCode,
       include: "coverArt,items"
     });
-    const imageUrl = await this.fetchArtworkUrl(coverArtIdFromPlaylist(playlist));
+    const imageUrl = includeArtwork
+      ? await this.fetchArtworkUrl(coverArtIdFromPlaylist(playlist))
+      : "";
     const mix = normalizeOfficialPlaylistMix({
       playlist,
       imageUrl,
@@ -2064,6 +2154,7 @@ class TidalProfileMixes {
       if (cursor) params["page[cursor]"] = cursor;
       const itemsPath = `/playlists/${encodeURIComponent(id)}/relationships/items`;
       attemptedEndpoints.push(openApiUrl(itemsPath, params));
+      await this.waitForPlaylistTrackFetchSlot();
       const payload = await this.fetchOpenApiJson(itemsPath, params);
       tracks.push(...normalizeOfficialPlaylistTracks(payload, { mix }));
       const next = cleanText(payload?.links?.next);
@@ -2077,7 +2168,7 @@ class TidalProfileMixes {
         }
       }
       page += 1;
-    } while (cursor && tracks.length < fetchLimit && page < 5);
+    } while (cursor && tracks.length < fetchLimit && page < (exportAll ? 50 : 5));
 
     const filtered = filterExcludedTracks(tracks, excluded);
     const selectedTracks = filtered.tracks.slice(0, safeLimit);

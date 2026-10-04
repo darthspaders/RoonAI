@@ -33,8 +33,8 @@ test("standby fresh source passes broaden a short visible pool without allowing 
   assert.match(passes.map((pass) => pass.options.request).join("\n"), /Prefer a short clean pool/i);
   assert.doesNotMatch(passes.map((pass) => pass.options.request).join("\n"), /allow same artists when needed/i);
   const cleanRefill = passes[0];
-  assert.match(cleanRefill.options.request, /Reject SEO playlist/i);
-  assert.match(cleanRefill.options.request, /wellness, meditation, hypnosis/i);
+  assert.match(cleanRefill.options.request, /standard catalogue-quality policy/i);
+  assert.doesNotMatch(cleanRefill.options.request, /wellness|meditation|hypnosis|downtempo/i);
   assert.match(cleanRefill.options.genres, /progressive breaks/i);
   assert.equal(cleanRefill.options.releasePreset, "");
   assert.equal(cleanRefill.options.releaseStartDate, "");
@@ -50,6 +50,25 @@ test("standby fresh source passes broaden a short visible pool without allowing 
 
 test("standby fresh source passes are skipped when the visible pool is full", () => {
   assert.deepEqual(standbyFreshSourcePasses({ count: "25" }, { freshCount: 25, targetCount: 25 }), []);
+});
+
+test("taste-profile standby refill uses learned anchors instead of the legacy progressive-only plan", () => {
+  const passes = standbyFreshSourcePasses({
+    request: "Find tracks that fit my current Rabbit Hole taste profile",
+    genres: "",
+    scoringMode: "taste-guided",
+    learnedTasteArtists: ["Guy J", "Mersiv"],
+    learnedTasteLabels: ["Anjunadeep", "Wakaan"]
+  }, { freshCount: 0, targetCount: 25 });
+  const refill = passes.find((pass) => pass.id === "clean-refill-wide-sources");
+
+  assert.equal(refill.options.genres, "");
+  assert.deepEqual(refill.options.llmSearchPlan.searchQueries, ["Guy J", "Mersiv", "Anjunadeep", "Wakaan"]);
+  assert.deepEqual(refill.options.llmSearchPlan.targetGenres, []);
+  assert.equal(refill.options.scoringMode, "taste-guided");
+  assert.equal(refill.options.request, "");
+  assert.equal(refill.options.mood, undefined);
+  assert.doesNotMatch(passes.map((pass) => pass.options.request).join("\n"), /radio-like|underground/i);
 });
 
 test("standby refill merge keeps the stronger existing pool when new discovery underfills", () => {

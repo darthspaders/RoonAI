@@ -224,7 +224,10 @@ function enrichedFeedbackEntries(profile = {}, trackMemory = null) {
       ...memory,
       ...entry,
       rating,
-      tasteScore: Number.isFinite(Number(entry.tasteScore)) ? Number(entry.tasteScore) : ratingDelta(rating),
+      // tasteScore is derived from the rating vocabulary. Recompute it so the
+      // conservative migration also applies to persisted legacy Good/Up and
+      // old OK entries instead of trusting stale stored deltas.
+      tasteScore: ratingDelta(rating),
       scoreBreakdown: memory.scoreBreakdown || entry.scoreBreakdown || null,
       durationMs: memory.durationMs || entry.durationMs || null,
       reason: cleanText(memory.reason || entry.reason),

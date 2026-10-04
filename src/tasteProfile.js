@@ -139,8 +139,13 @@ function shouldBlockArtistSignal(track = {}, delta = 0) {
 function ratingDelta(value) {
   const rating = normalizeRating(value);
   if (rating === "love") return 3;
-  if (rating === "good") return 1;
-  if (rating === "ok") return 0.5;
+  // Like is intentionally weaker than Love. Existing Good ratings are
+  // retained as legacy positive evidence, but are treated conservatively too.
+  if (rating === "like") return 0.75;
+  if (rating === "good") return 0.75;
+  // Okay is a slight negative signal, but not a hard negative preference.
+  if (rating === "ok") return -0.25;
+  if (rating === "dislike") return -1.5;
   if (rating === "reject_similar") return -1;
   if (rating === "skip") return -1;
   if (rating === "never") return -3;
@@ -400,6 +405,13 @@ function rebuildWeightedSignals(profile = {}) {
   return rebuilt;
 }
 
+function freezeReadState(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const child of Object.values(value)) freezeReadState(child);
+  return value;
+}
+
 class TasteProfile {
   constructor(filePath = path.join(__dirname, "..", "data", "taste-profile.json")) {
     this.filePath = filePath;
@@ -426,6 +438,34 @@ class TasteProfile {
         updatedAt: null
       };
     }
+  }
+
+  createReadView() {
+    // Discovery consults the same derived profile many times per candidate.
+    // Reuse it within this reader, but observe feedback written during a run.
+    // Public read()/write() keep their existing mutable, uncached contract.
+    let signature;
+    let state;
+    const read = () => {
+      let nextSignature = "missing";
+      try {
+        const stat = fs.statSync(this.filePath, { bigint: true });
+        nextSignature = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+      } catch (_) {}
+      if (!state || nextSignature !== signature) {
+        state = freezeReadState(this.read());
+        signature = nextSignature;
+      }
+      return state;
+    };
+    const view = { read };
+    for (const name of [
+      "getFeedbackFor", "getTopArtists", "adjustmentFor",
+      "calibrationAdjustmentFor", "serendipityAdjustmentFor", "summary"
+    ]) {
+      view[name] = (...args) => TasteProfile.prototype[name].apply(view, args);
+    }
+    return Object.freeze(view);
   }
 
   write(profile) {

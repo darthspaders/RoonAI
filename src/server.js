@@ -1,6 +1,7 @@
 "use strict";
 
 const http = require("http");
+const crypto = require("crypto");
 const voiceExecution = require("./voiceExecution");
 const { createVoiceApi } = require("./voiceApi");
 const {memory} = require("./synapseMemory");
@@ -8,8 +9,17 @@ const { bridgeSyncAlertFromResult } = require("./bridgeSyncAlert");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { spawn } = require("node:child_process");
 const { URL } = require("url");
 const config = require("./config");
+const { acquireProcessLock } = require("./processLock");
+let appProcessLock;
+try {
+  appProcessLock = acquireProcessLock(path.join(__dirname, "..", "data", "rabbit-hole.app.lock"), "Rabbit Hole app");
+} catch (error) {
+  console.error(`[lifecycle] ${error.message}`);
+  process.exit(75);
+}
 const { FreshPool, FreshnessEvents, searchFreshPool, identityKeys: standbyIdentityKeys } = require("./standbyFreshness");
 const { recordRefresh } = require("./standbyNovelty");
 const { reviewStandbyPool, generateStandbySearchPlan } = require("./standbySynapseReview");
@@ -51,6 +61,7 @@ const {
   discoverTracks,
   discoveryStatusFor,
   effectiveDiscoveryCount,
+  hardDurationConstraintFor,
   minimumScoreFor,
   minimumScoreLabel,
   nearYearFallbackOptions,
@@ -74,13 +85,17 @@ const { MetadataEnrichmentService } = require("./metadataEnrichmentService");
 const { MusicBrainzLocalIndex } = require("./musicBrainzLocalIndex");
 const { BeatportClient } = require("./beatportClient");
 const { MusicMemoryStore } = require("./musicMemoryStore");
-const { runBeatportEnrichmentBackfill } = require("../scripts/beatport-enrichment-backfill");
+const { DatabaseBrowserService } = require("./databaseBrowserService");
+const { DiscogsClient } = require("./discogsClient");
+const { DiscogsOAuth } = require("./discogsOAuth");
+const { RecommendationEngineV2 } = require("./recommendationEngineV2");
+const { createSonicReviewSessionService } = require("./sonicReviewSessionService");
+const { SonicBlindReview } = require("./sonicBlindReview");
+const { serveBlindAudio } = require("./sonicBlindAudio");
+const { createRecommendationV2DiscoveryReranker } = require("./recommendationV2Discovery");
 const { createRabbitHoleMcpHttpHandler, createRabbitHoleMcpTools } = require("./mcpHttpServer");
 const { createModelRouter } = require("./modelProviders");
-const {
-  appSnapshot: buildAppSnapshot,
-  sessionSnapshot: buildSessionSnapshot
-} = require("./statusSnapshot");
+const { createStatusDelivery, statusChunks } = require("./statusDelivery");
 const {
   createModelReviewAudit,
   classifyModelReviewChange,
@@ -105,9 +120,11 @@ const {
 } = require("./roonFirstRescueRunner");
 const { createRoonQueueableFilter } = require("./roonQueueableFilter");
 const { createStandbyRefreshService } = require("./standbyRefreshService");
+const { readTasteFacetSeeds } = require("./tasteFacetSeeds");
 const { createPcMonitorStatus } = require("./pcMonitorStatus");
 const { createLlmHealthStatus } = require("./llmHealthStatus");
 const { createCurrentTrackMetadataEnrichment } = require("./currentTrackMetadataEnrichment");
+const { LiveSonicAnalysisService } = require("./liveSonicAnalysisService");
 const { createRadioEnrichmentService } = require("./radioEnrichmentService");
 const { createSimilarArtistExpansion } = require("./similarArtistExpansion");
 const {
@@ -144,7 +161,12 @@ const {
   summarizeZoneTrack
 } = require("./radioPlaybackState");
 const { SessionStore, trackKey } = require("./sessionStore");
-const { StandbyCandidateStore, isStandbySeoSludge } = require("./standbyCandidateStore");
+const { DiscoveryDiagnosticsStore } = require("./discoveryDiagnostics");
+const { SonicCoverageService } = require("./sonicCoverageService");
+const { SonicAnalysisService } = require("./sonicAnalysisService");
+const { buildAnalysisPilot } = require("./sonicAnalysisPilot");
+const { createSonicCoverageInventory } = require("./sonicCoverageInventory");
+const { StandbyCandidateStore, isStandbySeoSludge, selectStandbyQueueTracks } = require("./standbyCandidateStore");
 const {
   mergeStandbyRefillPool,
   standbyFreshSourcePasses,
@@ -154,6 +176,7 @@ const { TidalPinnedMixStore } = require("./tidalPinnedMixes");
 const { TasteProfile, normalizeRating, ratingDelta } = require("./tasteProfile");
 const { TidalProfileMixes } = require("./tidalProfileMixes");
 const { TidalVerifier } = require("./tidalVerifier");
+const { buildCsv, buildM3u, safeM3uFileName } = require("./m3u");
 const { TrackMemory } = require("./trackMemory");
 const { QueueAttemptStore } = require("./queueAttemptStore");
 const { mergeTrackLists } = require("./trackListMerge");
@@ -188,6 +211,7 @@ const {
 });
 const listeningHistory = new ListeningHistory();
 const sessionStore = new SessionStore();
+const discoveryDiagnostics = new DiscoveryDiagnosticsStore({ sessionStore });
 const tasteProfile = new TasteProfile();
 const trackMemory = new TrackMemory();
 const queueAttemptStore = new QueueAttemptStore();
@@ -265,8 +289,156 @@ const beatport = new BeatportClient({
   ...config.beatport,
   logger: console
 });
+const discogsOAuth = new DiscogsOAuth({
+  enabled: config.discogs.enabled,
+  consumerKey: config.discogs.consumerKey,
+  consumerSecret: config.discogs.consumerSecret,
+  redirectUri: config.discogs.redirectUri,
+  authorizeUrl: config.discogs.authorizeUrl,
+  requestTokenUrl: config.discogs.requestTokenUrl,
+  accessTokenUrl: config.discogs.accessTokenUrl,
+  tokenFile: config.discogs.oauthTokenFile,
+  timeoutMs: config.discogs.timeoutMs,
+  userAgent: config.discogs.userAgent,
+  logger: console
+});
+const discogs = new DiscogsClient({
+  ...config.discogs,
+  oauth: discogsOAuth,
+  logger: console
+});
 musicMemory = new MusicMemoryStore({
   ...config.musicMemory,
+  logger: console
+});
+const databaseBrowser = new DatabaseBrowserService({
+  dbFile: musicMemory.dbFile,
+  sonicDbFile: config.recommendationV2.dbFile,
+  enabled: Boolean(musicMemory.enabled && musicMemory.db)
+});
+tidal.setValidatedIdentityLookup?.((track) => {
+  const candidates = [
+    ...(musicMemory?.findValidatedTidalIdentities?.(track) || []),
+    ...(trackMemory?.findValidatedTidalIdentities?.(track) || [])
+  ];
+  return [...new Map(candidates.map((candidate) => [String(
+    candidate.tidalId || candidate.tidalTrackId || candidate.providerIds?.tidal || candidate.id
+  ), candidate])).values()];
+});
+const recommendationEngineV2 = new RecommendationEngineV2({
+  ...config.recommendationV2,
+  beatportClient: beatport,
+  tidalClient: tidal,
+  logger: console
+});
+function currentSonicReviewTrack() {
+  const state = playbackSnapshot();
+  const zones = Array.isArray(state?.zones) ? state.zones : [];
+  const selectedId = defaultRoonZoneId();
+  const zone = zones.find((item) => item.zone_id === selectedId) ||
+    zones.find((item) => item.state === "playing" && item.now_playing) ||
+    zones.find((item) => item.now_playing) ||
+    zones[0];
+  if (!zone?.now_playing) return null;
+  const basic = summarizeZoneTrack(zone) || {};
+  const now = zone.now_playing || {};
+  const enrichment = now.metadata_enrichment || now.radio_enrichment || {};
+  const reversed = musicMemory?.findReversedRoonTrack?.(basic) || null;
+  const memoryTrack = reversed ? {
+    identityKey: reversed.identity_key,
+    tidalId: reversed.tidal_id,
+    roonIdentity: reversed.roon_identity,
+    isrc: reversed.isrc,
+    artist: reversed.artist,
+    title: reversed.title,
+    mixVersion: reversed.mix_version,
+    album: reversed.album,
+    durationMs: reversed.duration_ms
+  } : {};
+  return {
+    ...basic,
+    ...memoryTrack,
+    artist: enrichment.artist || memoryTrack.artist || basic.artist,
+    title: enrichment.title || memoryTrack.title || basic.title,
+    album: enrichment.album || memoryTrack.album || basic.album,
+    genre: enrichment.genre || "",
+    subgenre: enrichment.subgenre || "",
+    label: enrichment.label || "",
+    releaseDate: enrichment.releaseDate || "",
+    bpm: enrichment.bpm || "",
+    key: enrichment.key || enrichment.keyName || "",
+    camelot: enrichment.camelot || "",
+    beatportId: enrichment.beatportTrackId || enrichment.beatportId || "",
+    tidalUrl: enrichment.tidalUrl || (basic.tidalId ? `https://tidal.com/browse/track/${basic.tidalId}` : ""),
+    zoneId: zone.zone_id || zone.id || "",
+    zoneName: zone.display_name || zone.name || ""
+  };
+}
+const sonicReviewSessionService = createSonicReviewSessionService({
+  db: musicMemory?.db || recommendationEngineV2.store?.db,
+  recommendationEngine: recommendationEngineV2,
+  musicMemory,
+  trackMemory,
+  discoveryHistory,
+  standbyStore,
+  getCurrentTrack: currentSonicReviewTrack,
+  queueTracks: (tracks, options = {}) => roon.queueTracks(tracks, options.zoneId, {
+    mode: options.mode || "append",
+    preferExtendedMixes: options.preferExtendedMixes !== false,
+    matchPolicy: options.matchPolicy || "strict",
+    allowBridge: options.allowBridge === true
+  }),
+  recordRating: (track, rating, context = {}) => {
+    const feedbackTrack = feedbackTrackWithSessionContext(track || {}, rating);
+    const result = recordFeedbackAcrossStores({
+      rating,
+      track: feedbackTrack,
+      calibrationContext: feedbackCalibrationContext(feedbackTrack, context),
+      tasteProfile,
+      genreProfileStore,
+      sessionStore,
+      trackMemory
+    });
+    rememberMusicObservations(feedbackTrack, `feedback:${rating || "unknown"}`);
+    scheduleBroadcast();
+    return result;
+  },
+  logger: console
+});
+const sonicCoverage = musicMemory?.db && recommendationEngineV2.enabled ? new SonicCoverageService({
+  db: musicMemory.db,
+  recommendationEngine: recommendationEngineV2,
+  inventory: createSonicCoverageInventory({ db: musicMemory.db,
+    queueTracks: () => [...roon.queues.values()].flatMap(queue => (queue.items || []).map(item => {
+      const artist = item.artist || item.subtitle || "";
+      const suffix = ` - ${artist}`;
+      return { artist, title: artist && item.title?.endsWith(suffix) ? item.title.slice(0, -suffix.length) : item.title, album: item.album || "", lengthSeconds: item.length };
+    })),
+    files: {
+    "taste-profile.json": tasteProfile.file, "track-memory.json": trackMemory.file,
+    "discovery-history.json": discoveryHistory.file, "standby-candidates.json": standbyStore.file,
+    "listening-history.json": listeningHistory.file
+  } }),
+  settings: config.recommendationV2.coverage,
+  autoStart: false
+}) : null;
+const sonicAnalysis = sonicCoverage ? new SonicAnalysisService({ db: musicMemory.db, recommendationEngine: recommendationEngineV2, coverage: sonicCoverage }) : null;
+const sonicBlindReview = new SonicBlindReview(musicMemory.db);
+recommendationEngineV2.analysisEvidenceFor = track => sonicAnalysis?.evidence(track) || [];
+const recommendationV2Discovery = createRecommendationV2DiscoveryReranker({
+  analysisService: sonicAnalysis,
+  coverageService: sonicCoverage,
+  recommendationEngine: recommendationEngineV2,
+  db: musicMemory?.db || null,
+  enabled: config.recommendationV2.enabled,
+  mode: config.recommendationV2.discoveryMode,
+  model: config.recommendationV2.discoveryModel,
+  modelVersion: config.recommendationV2.discoveryModelVersion,
+  weight: config.recommendationV2.discoveryRerankWeight,
+  minCoverage: config.recommendationV2.discoveryMinCoverage,
+  minScored: config.recommendationV2.discoveryMinScored,
+  productionMode: config.recommendationV2.sonicProductionMode,
+  maxAdjustment: config.recommendationV2.sonicMaxAdjustment,
   logger: console
 });
 const radioMetadataResolver = new RadioMetadataResolver({
@@ -314,6 +486,7 @@ const {
 const metadataEnrichment = new MetadataEnrichmentService({
   tidal,
   beatport,
+  discogs,
   musicMemory,
   metadataResolver: radioMetadataResolver,
   artBridge: config.artBridge,
@@ -321,6 +494,17 @@ const metadataEnrichment = new MetadataEnrichmentService({
   minConfidence: config.metadataEnrichment.minConfidence,
   timeoutMs: config.metadataEnrichment.timeoutMs,
   beatportMissingRetryMs: config.beatport.missingRetryMs,
+  logger: console
+});
+const liveSonicAnalysis = new LiveSonicAnalysisService({
+  enabled: config.recommendationV2.enabled && config.recommendationV2.liveSonicAnalysisEnabled,
+  autoAnalyze: config.recommendationV2.enabled && config.recommendationV2.liveSonicAnalysisAutoAnalyze,
+  musicMemory,
+  metadataEnrichment,
+  recommendationEngine: recommendationEngineV2,
+  minConfidence: config.metadataEnrichment.minConfidence,
+  maxConcurrentAnalyses: config.recommendationV2.liveSonicAnalysisMaxConcurrent,
+  analysisFailureRetryMs: config.recommendationV2.liveSonicAnalysisFailureRetryMs,
   logger: console
 });
 const {
@@ -331,9 +515,11 @@ const {
   config,
   metadataEnrichment,
   scheduleBroadcast,
-  summarizeZoneTrack
+  summarizeZoneTrack,
+  onLiveTrackObserved: track => liveSonicAnalysis.observe(track)
 });
 let beatportMemoryBackfillRunning = false;
+let beatportMemoryBackfillChild = null;
 const BEATPORT_PROGRESSIVE_PAGE_SOURCES = [
   "staff_picks",
   "best_curation",
@@ -355,30 +541,57 @@ const BEATPORT_PROGRESSIVE_PAGE_SOURCES = [
 ];
 
 function scheduleBeatportMemoryBackfill(delayMs = config.beatportMemoryBackfill.startDelayMs) {
-  if (!config.beatportMemoryBackfill.enabled || !config.beatport.enabled || !beatport.isConfigured?.() || !musicMemory?.enabled) return;
-  const waitMs = Math.max(30_000, Number(delayMs) || 0);
+  if (shuttingDown || !config.beatportMemoryBackfill.enabled || !config.beatport.enabled || !beatport.isConfigured?.() || !musicMemory?.enabled) return;
+  // Keep a small guard against a zero-delay loop while allowing the local
+  // backfill interval to be tuned independently from its startup delay.
+  const waitMs = Math.max(500, Number(delayMs) || 0);
   const timer = setTimeout(async () => {
+    if (shuttingDown) return;
     if (beatportMemoryBackfillRunning) {
       scheduleBeatportMemoryBackfill(config.beatportMemoryBackfill.intervalMs);
       return;
     }
-    beatportMemoryBackfillRunning = true;
-    try {
-      const result = await runBeatportEnrichmentBackfill({
-        store: musicMemory,
-        beatport,
-        limit: config.beatportMemoryBackfill.batchSize,
-        delayMs: config.beatportMemoryBackfill.delayMs,
-        jitter: config.beatportMemoryBackfill.jitter,
-        logger: console
-      });
-      if (result.enriched > 0) scheduleBroadcast();
-    } catch (error) {
-      console.warn("[beatport-memory-backfill] Failed:", error.message);
-    } finally {
-      beatportMemoryBackfillRunning = false;
-      scheduleBeatportMemoryBackfill(config.beatportMemoryBackfill.intervalMs);
+    const roonState = roon.getState?.() || {};
+    const connectionDiagnostics = roonState.connectionDiagnostics || {};
+    const connectedAt = Date.parse(connectionDiagnostics.connectedAt || "");
+    const connectionStable = roonState.connected === true &&
+      Number.isFinite(connectedAt) &&
+      Date.now() - connectedAt >= config.roon.backgroundWorkGraceMs;
+    if (!connectionStable) {
+      scheduleBeatportMemoryBackfill(Math.min(30_000, config.roon.backgroundWorkGraceMs));
+      return;
     }
+    beatportMemoryBackfillRunning = true;
+    const workerPath = path.join(__dirname, "..", "scripts", "beatport-enrichment-backfill.js");
+    const args = [
+      workerPath,
+      "--limit", String(config.beatportMemoryBackfill.batchSize),
+      "--delay-ms", String(config.beatportMemoryBackfill.delayMs),
+      "--jitter", String(config.beatportMemoryBackfill.jitter)
+    ];
+    const child = spawn(process.execPath, args, {
+      cwd: path.join(__dirname, ".."),
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
+    });
+    beatportMemoryBackfillChild = child;
+    const forward = (stream, chunk) => {
+      const text = String(chunk).trimEnd();
+      if (text) console.log(`[beatport-memory-backfill/${stream}] ${text}`);
+    };
+    child.stdout.on("data", chunk => forward("stdout", chunk));
+    child.stderr.on("data", chunk => forward("stderr", chunk));
+    child.on("error", error => console.warn("[beatport-memory-backfill] Worker failed to start:", error.message));
+    child.on("exit", (code, signal) => {
+      if (beatportMemoryBackfillChild === child) beatportMemoryBackfillChild = null;
+      beatportMemoryBackfillRunning = false;
+      if (shuttingDown) return;
+      if (code !== 0 && code !== 75) {
+        console.warn(`[beatport-memory-backfill] Worker exited with ${signal || code}.`);
+      }
+      scheduleBeatportMemoryBackfill(config.beatportMemoryBackfill.intervalMs);
+    });
   }, waitMs);
   timer.unref?.();
 }
@@ -421,6 +634,7 @@ const {
 } = createDiscoveryRequestPolicy({
   buildDiscoveryProfile,
   config,
+  hardDurationConstraintFor,
   minimumScoreFor,
   normalizeMatchText,
   openAiCompatibleProviders: OPENAI_COMPATIBLE_PROVIDERS,
@@ -464,6 +678,8 @@ const {
   discoveryHistory,
   mergeTrackLists,
   queryYieldTracker,
+  hardDurationConstraintFor,
+  recommendationV2Reranker: recommendationV2Discovery.rerankCandidates,
   selectDiscoveryLaneCandidates,
   shouldContinueAutoBroadenAfterError,
   tasteProfile,
@@ -555,7 +771,6 @@ const clients = new Set();
 const STATE_UPDATE_DEBOUNCE_MS = 1000;
 const EVENT_STREAM_HEARTBEAT_MS = Math.max(5000, Number(process.env.EVENT_STREAM_HEARTBEAT_MS || 15000));
 let broadcastTimer = null;
-let lastBroadcastData = "";
 let modelRouter = null;
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -605,10 +820,20 @@ const {
   standbyIdentityKeys,
   standbyStore,
   summarizeStandbyFreshness,
+  // Standby needs a wider seed reservoir than the compact UI summary. Keep
+  // the facets themselves bounded, but expose enough artists/labels from each
+  // learned library region to reach less-obvious catalog material after the
+  // dominant global artists have cooled down.
+  tasteFacetSeedProvider: () => readTasteFacetSeeds(musicMemory?.db, {
+    maxFacets: 12,
+    artistsPerFacet: 6,
+    labelsPerFacet: 5
+  }),
   tasteProfile,
   tidal,
   trackMemory,
   previouslySuggestedTrack,
+  withSimilarArtistSeeds,
   voiceExecution,
   withNormalizedYearFilter,
   withTimeout
@@ -635,6 +860,44 @@ const noStoreHeaders = {
   "pragma": "no-cache",
   "expires": "0"
 };
+
+const M3U_EXPORT_TTL_MS = 10 * 60 * 1000;
+const m3uExportDirectory = path.join(os.tmpdir(), "rabbit-hole-m3u");
+const m3uExports = new Map();
+
+async function cleanupM3uExports(now = Date.now()) {
+  const expired = [];
+  for (const [token, entry] of m3uExports.entries()) {
+    if (Number(entry.expiresAtMs || 0) > now) continue;
+    expired.push([token, entry]);
+    m3uExports.delete(token);
+  }
+  await Promise.all(expired.map(([, entry]) => fs.promises.unlink(entry.filePath).catch(() => {})));
+}
+
+async function createM3uExport({
+  title = "TIDAL collection",
+  content = "",
+  extension = ".m3u",
+  mimeType = "audio/x-mpegurl; charset=utf-8"
+} = {}) {
+  await cleanupM3uExports();
+  await fs.promises.mkdir(m3uExportDirectory, { recursive: true });
+  const token = crypto.randomUUID();
+  const filename = extension === ".csv"
+    ? safeM3uFileName(title).replace(/\.m3u$/i, ".csv")
+    : safeM3uFileName(title);
+  const filePath = path.join(m3uExportDirectory, `${token}${extension}`);
+  const expiresAtMs = Date.now() + M3U_EXPORT_TTL_MS;
+  await fs.promises.writeFile(filePath, content, "utf8");
+  m3uExports.set(token, { filePath, filename, mimeType, expiresAtMs });
+  return {
+    token,
+    filename,
+    expiresAtMs,
+    downloadUrl: `/api/tidal/m3u/download/${token}`
+  };
+}
 
 function responseHeaders(headers = {}) {
   return {
@@ -688,6 +951,11 @@ function requestOrigin(req) {
 function tidalOAuthRedirectUriForRequest(req) {
   const origin = requestOrigin(req);
   return origin ? `${origin}/api/tidal/oauth/callback` : tidalProfileMixes.auth.redirectUri;
+}
+
+function discogsOAuthRedirectUriForRequest(req) {
+  const origin = requestOrigin(req);
+  return origin ? `${origin}/api/discogs/oauth/callback` : discogsOAuth.redirectUri;
 }
 
 function sendJson(res, status, body) {
@@ -928,27 +1196,25 @@ function decorateRoonFirstTimeoutFallback(roonResult = {}, options = {}, error =
   return roonFirstDecorator.decorateRoonFirstTimeoutFallback(roonResult, options, error);
 }
 
-function appSnapshot() {
-  return buildAppSnapshot({
+function appSnapshot(musicMemoryStatus) {
+  const modelStatus = modelRouter ? modelRouter.status() : null;
+  return {
     latestResultSource,
-    latestBridgeSyncAlert,
-    sessionStore,
-    syncFinalResultVerification,
-    parseRequestedCount,
-    tasteProfile,
-    genreProfileStore,
-    trackMemory,
-    standbyFreshSummary,
-    queryYieldTracker,
-    lastfm,
-    tidal,
-    tidalProfileMixes,
-    radioMetadataResolver,
-    metadataEnrichment,
-    llmSnapshot,
-    modelRouter
-  });
+    bridgeSyncAlert: latestBridgeSyncAlert,
+    updatedAt: new Date().toISOString(),
+    lastfm: lastfm.status(), tidal: tidal.status(), tidalProfileMixes: tidalProfileMixes.status(),
+    radioMetadata: radioMetadataResolver.status(), metadataEnrichment: metadataEnrichment.status({ musicMemoryStatus }),
+    llm: llmSnapshot(), ai: modelStatus,
+    mcp: { endpoint: "/mcp", connected: true, toolCount: modelStatus ? modelStatus.tools.count : 0 }
+  };
 }
+
+const statusDelivery = createStatusDelivery({ targetCount: STANDBY_TARGET_COUNT,
+  musicMemory: { enabled: Boolean(musicMemory?.enabled && musicMemory?.db), dbFile: musicMemory?.dbFile }, files: {
+  session: sessionStore.filePath, taste: tasteProfile.filePath, genreProfiles: genreProfileStore.file,
+  memory: trackMemory.file, standby: standbyStore.file, queryYield: queryYieldTracker.file,
+  discoveryHistory: discoveryHistory.file, listeningHistory: listeningHistory.file, standbyEvents: standbyEvents.file
+} });
 
 function recordBridgeSyncAlert(result = {}) {
   const alert = bridgeSyncAlertFromResult(result, {
@@ -960,10 +1226,6 @@ function recordBridgeSyncAlert(result = {}) {
   return latestBridgeSyncAlert;
 }
 
-function sessionSnapshot() {
-  return buildSessionSnapshot({ sessionStore, syncFinalResultVerification, parseRequestedCount });
-}
-
 function feedbackTrackWithSessionContext(track = {}, rating = "") {
   return buildFeedbackTrackWithSessionContext(track, rating, { sessionStore, trackKey, ratingDelta });
 }
@@ -972,7 +1234,7 @@ function feedbackCalibrationContext(track = {}, request = {}) {
   return buildFeedbackCalibrationContext(track, request);
 }
 
-function eventPayload() {
+function playbackSnapshot() {
   const baseState = withTrackMemory(withHqplayerStatus(roon.getState()));
   scheduleRadioEnrichment(baseState);
   const stateWithRadio = attachRadioEnrichment(baseState);
@@ -987,22 +1249,39 @@ function eventPayload() {
   }));
   return {
     ...state,
-    urls: getNetworkUrls(),
-    app: appSnapshot()
+    urls: getNetworkUrls()
   };
 }
 
-function broadcast() {
+function eventPayload(stored) {
+  return { ...playbackSnapshot(), app: appSnapshot(stored.musicMemory) };
+}
+
+let broadcastRevision = 0;
+async function broadcast() {
+  const revision = ++broadcastRevision;
   if (broadcastTimer) {
     clearTimeout(broadcastTimer);
     broadcastTimer = null;
   }
-  const data = `data: ${JSON.stringify(eventPayload())}\n\n`;
-  if (data === lastBroadcastData) return;
-  lastBroadcastData = data;
+  if (!clients.size) return;
+  let stored;
+  try { stored = await statusDelivery.read(); }
+  catch (error) { console.warn(`[status] ${error.message}`); return; }
+  if (revision !== broadcastRevision || shuttingDown) return;
+  const { app, ...playback } = eventPayload(stored);
+  const bodies = new Map();
   for (const client of clients) {
     try {
-      client.write(data);
+      if (client.destroyed || client.writableEnded) { clients.delete(client); continue; }
+      const compact = client.statusCompact === true;
+      if (!bodies.has(compact)) bodies.set(compact, statusChunks(playback, app, stored, compact));
+      // A slow event viewer skips updates while its previous bytes drain; it
+      // cannot accumulate repeated full-session bodies or stall native video.
+      if (client.writableNeedDrain) continue;
+      client.write("data: ");
+      for (const chunk of bodies.get(compact)) client.write(chunk);
+      client.write("\n\n");
     } catch {
       clients.delete(client);
     }
@@ -1013,12 +1292,16 @@ function scheduleBroadcast() {
   if (broadcastTimer) return;
   broadcastTimer = setTimeout(() => {
     broadcastTimer = null;
-    broadcast();
+    void broadcast();
   }, STATE_UPDATE_DEBOUNCE_MS);
 }
 
 function serveStatic(req, res, pathname) {
-  const safePath = pathname === "/" ? "/index.html" : pathname;
+  const safePath = pathname === "/"
+    ? "/index.html"
+    : pathname === "/remote"
+      ? "/remote.html"
+      : pathname;
   const filePath = path.normalize(path.join(publicDir, safePath));
   const relativePath = path.relative(publicDir, filePath);
   if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
@@ -1107,14 +1390,20 @@ async function handleApi(req, res, url) {
   const pathname = url.pathname;
 
   if (pathname === "/api/events") {
+    const stored = await statusDelivery.read();
+    if (req.destroyed || res.destroyed || res.writableEnded || shuttingDown) return;
     res.writeHead(200, responseHeaders({
       ...noStoreHeaders,
       "content-type": "text/event-stream",
       "connection": "keep-alive",
       "x-accel-buffering": "no"
     }));
+    res.statusCompact = url.searchParams.get("compact") === "1";
+    const { app, ...playback } = eventPayload(stored);
     clients.add(res);
-    res.write(`data: ${JSON.stringify(eventPayload())}\n\n`);
+    res.write("data: ");
+    for (const chunk of statusChunks(playback, app, stored, res.statusCompact)) res.write(chunk);
+    res.write("\n\n");
     const heartbeat = setInterval(() => {
       try {
         res.write(`: heartbeat ${Date.now()}\n\n`);
@@ -1155,10 +1444,356 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  if (req.method === "GET" && pathname === "/api/status") {
+  if (req.method === "GET" && ["/api/status", "/api/status/live"].includes(pathname)) {
+    const stored = await statusDelivery.read();
+    if (res.destroyed || res.writableEnded || shuttingDown) return;
+    const { app, ...playback } = eventPayload(stored);
+    res.writeHead(200, responseHeaders({ ...noStoreHeaders, "content-type": "application/json; charset=utf-8" }));
+    for (const chunk of statusChunks(playback, app, stored, pathname === "/api/status/live")) res.write(chunk);
+    return res.end();
+  }
+
+  if (req.method === "GET" && pathname === "/api/recommendation-v2/status") {
     return sendJson(res, 200, {
-      ...eventPayload()
+      ...recommendationEngineV2.status(),
+      sonicProduction: recommendationV2Discovery.getConfig(),
+      liveSonicAnalysis: liveSonicAnalysis.status()
     });
+  }
+
+  if (req.method === "GET" && pathname === "/api/recommendation-v2/production-mode") {
+    return sendJson(res, 200, {
+      sonicProduction: recommendationV2Discovery.getConfig()
+    });
+  }
+
+  if (pathname === "/api/recommendation-v2/coverage" && req.method === "GET") {
+    return sendJson(res, sonicCoverage ? 200 : 503, sonicCoverage?.status() || { error: "Sonic coverage is unavailable." });
+  }
+  if (pathname === "/api/recommendation-v2/analysis" && req.method === "GET") {
+    return sendJson(res, sonicAnalysis ? 200 : 503, sonicAnalysis?.status() || { error: "Sonic analysis is unavailable." });
+  }
+  if (pathname === "/api/recommendation-v2/analysis/evidence" && req.method === "GET") {
+    return sendJson(res, 200, { evidence: sonicAnalysis?.evidence(url.searchParams.get("identityKey") || "") || [], productionApplied: false });
+  }
+  const analysisAction = pathname.match(/^\/api\/recommendation-v2\/analysis\/(start|pause|resume|cancel|configure|compare)$/)?.[1];
+  if (analysisAction && req.method === "POST") {
+    if (!sonicAnalysis) return sendJson(res, 503, { error: "Sonic analysis is unavailable." });
+    const body = await readJson(req);
+    try {
+      if (analysisAction === "start") {
+        const pilot = body.tracks ? null : buildAnalysisPilot(musicMemory.db, { limit: body.limit });
+        const tracks = pilot ? pilot.items.map(x => x.track) : body.tracks;
+        const selected = body.models || sonicAnalysis.settings.models;
+        const queued = sonicAnalysis.enqueue(tracks, { models: selected, allowLocal: Boolean(pilot) });
+        if (pilot) sonicAnalysis.recordPilot(pilot, selected);
+        const status = sonicAnalysis.configure({ enabled: true, paused: false, models: selected });
+        return sendJson(res, 202, { ...status, queued, pilot: pilot ? { count: pilot.items.length, selection: pilot.selection, notes: pilot.notes } : null });
+      }
+      if (analysisAction === "compare") return sendJson(res, 200, sonicAnalysis.observe(body.tracks || [], { anchor: body.anchor }));
+      const result = analysisAction === "pause" ? sonicAnalysis.configure({ paused: true })
+        : analysisAction === "cancel" ? sonicAnalysis.cancel()
+          : analysisAction === "resume" ? sonicAnalysis.resume(body) : sonicAnalysis.configure(body);
+      return sendJson(res, 200, result);
+    } catch (error) { return sendJson(res, 400, { error: error.message }); }
+  }
+  const coverageAction = pathname.match(/^\/api\/recommendation-v2\/coverage\/(start|pause|resume|cancel|configure)$/)?.[1];
+  if (coverageAction && req.method === "POST") {
+    if (!sonicCoverage) return sendJson(res, 503, { error: "Sonic coverage is unavailable." });
+    const body = await readJson(req);
+    const method = coverageAction === "start" ? "startBackfill" : coverageAction;
+    try { return sendJson(res, coverageAction === "start" ? 202 : 200, sonicCoverage[method](body)); }
+    catch (error) { return sendJson(res, 400, { error: error.message }); }
+  }
+
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/production-mode") {
+    const body = await readJson(req);
+    try {
+      const sonicProduction = recommendationV2Discovery.setProductionConfig({
+        mode: body.mode ?? body.productionMode,
+        maxAdjustment: body.maxAdjustment
+      });
+      scheduleBroadcast();
+      return sendJson(res, 200, { ok: true, sonicProduction });
+    } catch (error) {
+      return sendJson(res, 400, {
+        error: error.message,
+        sonicProduction: recommendationV2Discovery.getConfig()
+      });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/recommendation-v2/sonic-review/schema") {
+    return sendJson(res, 200, sonicReviewSessionService.getReviewSchema());
+  }
+
+  if (["GET","HEAD"].includes(req.method) && pathname === "/api/recommendation-v2/sonic-review/blind/audio") {
+    return serveBlindAudio(req,res,sonicBlindReview,url,path.join(__dirname,"..","data","sonic-blind-audio"));
+  }
+  if (req.method === "GET" && pathname === "/api/recommendation-v2/sonic-review/blind") {
+    return sendJson(res,200,sonicBlindReview.get(url.searchParams.get("batchId") || ""));
+  }
+  if (req.method === "GET" && pathname === "/api/recommendation-v2/sonic-review/blind/report") {
+    return sendJson(res,200,sonicBlindReview.report(url.searchParams.get("batchId") || ""));
+  }
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/sonic-review/blind/save") {
+    try { return sendJson(res,200,sonicBlindReview.save(await readJson(req))); }
+    catch (error) { return sendJson(res,400,{ok:false,error:error.message}); }
+  }
+
+  if (req.method === "GET" && pathname === "/api/recommendation-v2/sonic-review/sessions") {
+    return sendJson(res, 200, sonicReviewSessionService.listReviewSessions({
+      status: url.searchParams.get("status") || "",
+      limit: url.searchParams.get("limit") || 20
+    }));
+  }
+
+  if (req.method === "GET" && pathname === "/api/recommendation-v2/sonic-review/session") {
+    const sessionId = url.searchParams.get("sessionId") || url.searchParams.get("id") || "";
+    if (!sessionId) return sendJson(res, 400, { error: "sessionId is required." });
+    try {
+      return sendJson(res, 200, sonicReviewSessionService.getReviewSession(sessionId, {
+        includeDiagnostics: url.searchParams.get("includeDiagnostics") === "true",
+        includeAnchorContext: url.searchParams.get("includeAnchorContext") === "true"
+      }));
+    } catch (error) {
+      return sendJson(res, 404, { error: error.message });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/recommendation-v2/sonic-review/next") {
+    const sessionId = url.searchParams.get("sessionId") || url.searchParams.get("id") || "";
+    if (!sessionId) return sendJson(res, 400, { error: "sessionId is required." });
+    try {
+      return sendJson(res, 200, sonicReviewSessionService.getNextReviewItem(sessionId));
+    } catch (error) {
+      return sendJson(res, 404, { error: error.message });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/recommendation-v2/sonic-review/context") {
+    const sessionId = url.searchParams.get("sessionId") || url.searchParams.get("id") || "";
+    const candidateIdentity = url.searchParams.get("candidateIdentity") || url.searchParams.get("candidate") || "";
+    if (!sessionId) return sendJson(res, 400, { error: "sessionId is required." });
+    try {
+      return sendJson(res, 200, sonicReviewSessionService.getAssistantReviewContext(sessionId, candidateIdentity));
+    } catch (error) {
+      return sendJson(res, 404, { error: error.message });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/recommendation-v2/sonic-review/summary") {
+    const sessionId = url.searchParams.get("sessionId") || url.searchParams.get("id") || "";
+    const candidateIdentity = url.searchParams.get("candidateIdentity") || url.searchParams.get("candidate") || "";
+    if (!sessionId) return sendJson(res, 400, { error: "sessionId is required." });
+    try {
+      return sendJson(res, 200, sonicReviewSessionService.generateReviewContextSummary(sessionId, candidateIdentity));
+    } catch (error) {
+      return sendJson(res, 404, { error: error.message });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/sonic-review/sessions") {
+    const body = await readJson(req);
+    try {
+      return sendJson(res, 200, await sonicReviewSessionService.startReviewSession(body));
+    } catch (error) {
+      return sendJson(res, error.statusCode || (recommendationEngineV2.enabled ? 422 : 503), {
+        error: error.message,
+        recommendationV2: recommendationEngineV2.status()
+      });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/sonic-review/pause") {
+    const body = await readJson(req);
+    if (!body.sessionId) return sendJson(res, 400, { error: "sessionId is required." });
+    try {
+      return sendJson(res, 200, sonicReviewSessionService.pauseReviewSession(body.sessionId));
+    } catch (error) {
+      return sendJson(res, 422, { error: error.message });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/sonic-review/resume") {
+    const body = await readJson(req);
+    if (!body.sessionId) return sendJson(res, 400, { error: "sessionId is required." });
+    try {
+      return sendJson(res, 200, sonicReviewSessionService.resumeReviewSession(body.sessionId));
+    } catch (error) {
+      return sendJson(res, 422, { error: error.message });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/sonic-review/save") {
+    const body = await readJson(req);
+    if (!body.sessionId) return sendJson(res, 400, { error: "sessionId is required." });
+    try {
+      return sendJson(res, 200, await sonicReviewSessionService.saveReviewItem(body));
+    } catch (error) {
+      return sendJson(res, 422, { error: error.message });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/sonic-review/advance") {
+    const body = await readJson(req);
+    if (!body.sessionId) return sendJson(res, 400, { error: "sessionId is required." });
+    try {
+      return sendJson(res, 200, await sonicReviewSessionService.advanceReviewSession(body));
+    } catch (error) {
+      return sendJson(res, 422, { error: error.message });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/sonic-review/queue") {
+    const body = await readJson(req);
+    if (!body.sessionId) return sendJson(res, 400, { error: "sessionId is required." });
+    try {
+      return sendJson(res, 200, await sonicReviewSessionService.queueReviewItem({
+        ...body,
+        zoneId: body.zoneId || defaultRoonZoneId()
+      }));
+    } catch (error) {
+      return sendJson(res, 422, { error: error.message });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/sonic-review/rate") {
+    const body = await readJson(req);
+    if (!body.sessionId) return sendJson(res, 400, { error: "sessionId is required." });
+    try {
+      return sendJson(res, 200, await sonicReviewSessionService.rateReviewItem(body));
+    } catch (error) {
+      return sendJson(res, 422, { error: error.message });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/sonic-review/cancel") {
+    const body = await readJson(req);
+    if (!body.sessionId) return sendJson(res, 400, { error: "sessionId is required." });
+    try {
+      return sendJson(res, 200, sonicReviewSessionService.cancelReviewSession(body.sessionId));
+    } catch (error) {
+      return sendJson(res, 422, { error: error.message });
+    }
+  }
+
+  if (req.method === "GET" && [
+    "/api/recommendation-v2/sonic-profile",
+    "/api/recommendation-v2/sonic-anchor-profile"
+  ].includes(pathname)) {
+    const anchor = url.searchParams.get("anchor") || url.searchParams.get("identityKey") || "";
+    try {
+      return sendJson(res, 200, recommendationEngineV2.getSonicAnchorProfile({ anchor }));
+    } catch (error) {
+      return sendJson(res, recommendationEngineV2.enabled ? 422 : 503, { error: error.message, recommendationV2: recommendationEngineV2.status() });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/beatport/analyze-tidal") {
+    const body = await readJson(req);
+    const reference = body.track || body.tidalUrl || body.tidalId || body.trackId || body.id;
+    if (!reference) return sendJson(res, 400, { error: "A TIDAL track URL, id, or normalized TIDAL track is required." });
+    try {
+      return sendJson(res, 200, await recommendationEngineV2.analyzeBeatportPreviewForTidalTrack(reference, body));
+    } catch (error) {
+      return sendJson(res, recommendationEngineV2.enabled ? (error.statusCode || 422) : 503, {
+        error: error.message,
+        match: error.match || null,
+        tidal: error.tidalTrack || null,
+        beatport: error.beatportTrack || null,
+        identityDiagnostics: error.identityDiagnostics || null,
+        recommendationV2: recommendationEngineV2.status()
+      });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/sonic-anchor/prepare") {
+    const body = await readJson(req);
+    const reference = body.track || body.tidalUrl || body.tidalId || body.trackId || body.reference;
+    if (!reference) return sendJson(res, 400, { error: "A TIDAL track URL, id, or normalized track is required." });
+    try {
+      return sendJson(res, 200, await recommendationEngineV2.prepareSonicAnchor(reference, body));
+    } catch (error) {
+      return sendJson(res, recommendationEngineV2.enabled ? (error.statusCode || 422) : 503, {
+        error: error.message,
+        code: error.code || "SONIC_ANCHOR_PREPARATION_FAILED",
+        needsLocalFile: Boolean(error.needsLocalFile),
+        match: error.match || null,
+        tidal: error.tidalTrack || null,
+        beatport: error.beatportTrack || null,
+        identityDiagnostics: error.identityDiagnostics || null,
+        recommendationV2: recommendationEngineV2.status()
+      });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/analyze") {
+    const body = await readJson(req);
+    const filePath = body.filePath || body.path || body.file;
+    if (!filePath) return sendJson(res, 400, { error: "An audio file path is required." });
+    try {
+      return sendJson(res, 200, recommendationEngineV2.analyzeFile(filePath, body.track || body));
+    } catch (error) {
+      return sendJson(res, recommendationEngineV2.enabled ? 400 : 503, { error: error.message, recommendationV2: recommendationEngineV2.status() });
+    }
+  }
+
+  if (req.method === "POST" && [
+    "/api/recommendation-v2/sonic-neighbors",
+    "/api/recommendation-v2/find-sonic-neighbors"
+  ].includes(pathname)) {
+    const body = await readJson(req);
+    const reference = body.track || body.trackId || body.reference || body.filePath || body.path || body.file;
+    if (!reference) return sendJson(res, 400, { error: "A stored track identity or local audio file is required." });
+    try {
+      return sendJson(res, 200, recommendationEngineV2.findSonicNeighbors(reference, body.count, body));
+    } catch (error) {
+      return sendJson(res, recommendationEngineV2.enabled ? 404 : 503, { error: error.message, recommendationV2: recommendationEngineV2.status() });
+    }
+  }
+
+  if (req.method === "POST" && [
+    "/api/recommendation-v2/sonic-neighbor-candidates",
+    "/api/recommendation-v2/generate-sonic-neighbor-candidates"
+  ].includes(pathname)) {
+    const body = await readJson(req);
+    const anchors = Array.isArray(body.anchors) ? body.anchors : [];
+    const reference = body.anchor || body.track || body.reference || body.trackId;
+    if (!anchors.length && !reference) return sendJson(res, 400, { error: "At least one sonic-neighbor anchor is required." });
+    try {
+      return sendJson(res, 200, await recommendationEngineV2.generateSonicNeighborCandidatesAsync({
+        ...body,
+        ...(anchors.length ? { anchors } : { anchor: reference })
+      }));
+    } catch (error) {
+      return sendJson(res, recommendationEngineV2.enabled ? 422 : 503, { error: error.message, recommendationV2: recommendationEngineV2.status() });
+    }
+  }
+
+  if (req.method === "POST" && [
+    "/api/recommendation-v2/sonic-neighbor-feedback",
+    "/api/recommendation-v2/record-sonic-neighbor-feedback"
+  ].includes(pathname)) {
+    const body = await readJson(req);
+    try {
+      return sendJson(res, 200, recommendationEngineV2.recordSonicNeighborFeedback(body));
+    } catch (error) {
+      return sendJson(res, recommendationEngineV2.enabled ? 422 : 503, { error: error.message, recommendationV2: recommendationEngineV2.status() });
+    }
+  }
+
+  if (req.method === "POST" && [
+    "/api/recommendation-v2/sonic-profile",
+    "/api/recommendation-v2/save-sonic-profile",
+    "/api/recommendation-v2/sonic-anchor-profile"
+  ].includes(pathname)) {
+    const body = await readJson(req);
+    try {
+      return sendJson(res, 200, recommendationEngineV2.saveSonicAnchorProfile(body));
+    } catch (error) {
+      return sendJson(res, recommendationEngineV2.enabled ? 422 : 503, { error: error.message, recommendationV2: recommendationEngineV2.status() });
+    }
   }
 
   if (req.method === "GET" && pathname === "/api/llm-status") {
@@ -1200,6 +1835,65 @@ async function handleApi(req, res, url) {
         error: true
       }));
     }
+  }
+
+  if (req.method === "GET" && pathname === "/api/discogs/oauth/start") {
+    try {
+      const redirectUri = discogsOAuthRedirectUriForRequest(req);
+      const authorizeUrl = await discogsOAuth.createAuthorizationUrl({ redirectUri });
+      res.writeHead(302, { location: authorizeUrl });
+      res.end();
+      return;
+    } catch (error) {
+      return sendHtml(res, 400, oauthPage({
+        title: "Discogs authorization not ready",
+        message: "Rabbit Hole could not start the Discogs login flow.",
+        details: error.message,
+        error: true
+      }));
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/discogs/oauth/callback") {
+    const callbackError = url.searchParams.get("error") || url.searchParams.get("oauth_problem");
+    if (callbackError) {
+      return sendHtml(res, 400, oauthPage({
+        title: "Discogs authorization failed",
+        message: "Discogs returned an error before Rabbit Hole could receive an access token.",
+        details: [callbackError, url.searchParams.get("error_description")].filter(Boolean).join(": "),
+        error: true
+      }));
+    }
+
+    const oauthToken = url.searchParams.get("oauth_token");
+    const verifier = url.searchParams.get("oauth_verifier");
+    if (!oauthToken || !verifier) {
+      return sendHtml(res, 200, oauthPage({
+        title: "Connect Discogs",
+        message: "Open the authorization start URL below. After you approve Rabbit Hole in Discogs, this callback will save the access token locally.",
+        details: `${requestOrigin(req) || getNetworkUrls()[0]}/api/discogs/oauth/start`
+      }));
+    }
+
+    try {
+      const token = await discogsOAuth.exchangeAuthorizationCode({ oauthToken, verifier });
+      return sendHtml(res, 200, oauthPage({
+        title: "Discogs connected",
+        message: "Rabbit Hole saved the Discogs access token locally. The secret is never displayed.",
+        details: token.username ? `Discogs user: ${token.username}` : "Access token: saved locally"
+      }));
+    } catch (error) {
+      return sendHtml(res, 400, oauthPage({
+        title: "Discogs token exchange failed",
+        message: "Rabbit Hole received the callback, but could not exchange it for a Discogs access token.",
+        details: error.message,
+        error: true
+      }));
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/discogs/oauth/status") {
+    return sendJson(res, 200, discogsOAuth.status());
   }
 
   if (req.method === "GET" && pathname === "/api/tidal/oauth/callback") {
@@ -1288,7 +1982,22 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && pathname === "/api/session") {
-    return sendJson(res, 200, sessionSnapshot());
+    const stored = await statusDelivery.read();
+    if (res.destroyed || res.writableEnded || shuttingDown) return;
+    res.writeHead(200, responseHeaders({ ...noStoreHeaders, "content-type": "application/json; charset=utf-8" }));
+    return res.end(stored.session);
+  }
+
+  if (req.method === "GET" && pathname === "/api/discovery/diagnostics") {
+    try {
+      return sendJson(res, 200, discoveryDiagnostics.get({
+        runId: url.searchParams.get("runId") || "",
+        limit: url.searchParams.get("limit") || 10,
+        includeAlternates: url.searchParams.get("includeAlternates") === "true"
+      }));
+    } catch (error) {
+      return sendJson(res, error.statusCode || 500, { error: error.message });
+    }
   }
 
   if (req.method === "GET" && pathname === "/api/taste") {
@@ -1297,6 +2006,15 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && pathname === "/api/memory") {
     return sendJson(res, 200, trackMemory.summary());
+  }
+
+  if (req.method === "GET" && pathname === "/api/database") {
+    try { return sendJson(res, 200, await databaseBrowser.browse(url.searchParams)); }
+    catch (error) { return sendJson(res, error.statusCode || 503, { error: error.message }); }
+  }
+  if (req.method === "GET" && /^\/api\/database\/tracks\/\d+$/.test(pathname)) {
+    try { return sendJson(res, 200, await databaseBrowser.detail(pathname.split("/").at(-1))); }
+    catch (error) { return sendJson(res, error.statusCode || 503, { error: error.message }); }
   }
 
   if (req.method === "GET" && pathname === "/api/music-memory/search") {
@@ -1386,6 +2104,107 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, await tidalProfileMixes.getUserPlaylists({
       force: /^(1|true|yes)$/i.test(String(url.searchParams.get("refresh") || ""))
     }));
+  }
+
+  if (req.method === "POST" && pathname === "/api/tidal/m3u") {
+    const body = await readJson(req);
+    const playlistId = String(body.id || body.playlistId || "").trim();
+    if (!playlistId) return sendJson(res, 400, { error: "A TIDAL playlist or mix id is required." });
+    try {
+      const requestedTitle = String(body.title || "TIDAL collection").trim() || "TIDAL collection";
+      const result = await tidalProfileMixes.getMixTracks(playlistId, {
+        limit: 1000,
+        exportAll: true,
+        includeArtwork: false
+      });
+      if (!result.tracks?.length) return sendJson(res, 422, { error: "TIDAL returned no playable tracks for this collection." });
+      const exportTitle = result.mix?.title || requestedTitle;
+      const format = String(body.format || "m3u").toLowerCase() === "csv" ? "csv" : "m3u";
+      const content = format === "csv"
+        ? buildCsv({ title: exportTitle, tracks: result.tracks })
+        : buildM3u({ title: exportTitle, tracks: result.tracks });
+      const file = await createM3uExport({
+        title: exportTitle,
+        content,
+        extension: format === "csv" ? ".csv" : ".m3u",
+        mimeType: format === "csv" ? "text/csv; charset=utf-8" : "audio/x-mpegurl; charset=utf-8"
+      });
+      return sendJson(res, 200, {
+        ok: true,
+        ...file,
+        format,
+        trackCount: result.tracks.length
+      });
+    } catch (error) {
+      const status = Number(error.status || error.statusCode || 502);
+      return sendJson(res, status, { error: error.message || "TIDAL playlist export failed." });
+    }
+  }
+
+  if (req.method === "GET" && pathname.startsWith("/api/tidal/m3u/download/")) {
+    const token = pathname.slice("/api/tidal/m3u/download/".length).trim();
+    await cleanupM3uExports();
+    const entry = m3uExports.get(token);
+    if (!entry || !/^[a-f0-9-]{20,80}$/i.test(token)) {
+      return sendJson(res, 404, { error: "That export has expired. Create it again." });
+    }
+    try {
+      const content = await fs.promises.readFile(entry.filePath);
+      res.writeHead(200, responseHeaders({
+        ...noStoreHeaders,
+        "content-type": entry.mimeType || "audio/x-mpegurl; charset=utf-8",
+        "content-disposition": `attachment; filename="${entry.filename}"`,
+        "content-length": content.length,
+        "x-content-type-options": "nosniff"
+      }));
+      res.end(content);
+      return;
+    } catch {
+      m3uExports.delete(token);
+      return sendJson(res, 404, { error: "That export is no longer available. Create it again." });
+    }
+  }
+
+  if (req.method === "GET" && (pathname === "/api/tidal/m3u" || pathname === "/api/tidal/export")) {
+    const playlistId = String(url.searchParams.get("id") || "").trim();
+    if (!playlistId) return sendJson(res, 400, { error: "A TIDAL playlist or mix id is required." });
+    try {
+      const title = String(url.searchParams.get("title") || "TIDAL collection").trim() || "TIDAL collection";
+      const format = String(url.searchParams.get("format") || "m3u").toLowerCase() === "csv" ? "csv" : "m3u";
+      const result = await tidalProfileMixes.getMixTracks(playlistId, {
+        limit: 1000,
+        exportAll: true,
+        includeArtwork: false
+      });
+      if (!result.tracks?.length) return sendJson(res, 422, { error: "TIDAL returned no playable tracks for this collection." });
+      const exportTitle = result.mix?.title || title;
+      const content = format === "csv"
+        ? buildCsv({ title: exportTitle, tracks: result.tracks })
+        : buildM3u({ title: exportTitle, tracks: result.tracks });
+      // Keep the direct browser link self-sufficient: create a real temporary
+      // export first, then return it as a normal attachment response. This
+      // works even when the page's JavaScript event handler is unavailable.
+      const file = await createM3uExport({
+        title: exportTitle,
+        content,
+        extension: format === "csv" ? ".csv" : ".m3u",
+        mimeType: format === "csv" ? "text/csv; charset=utf-8" : "audio/x-mpegurl; charset=utf-8"
+      });
+      const contentBuffer = Buffer.from(content, "utf8");
+      res.writeHead(200, responseHeaders({
+        ...noStoreHeaders,
+        "content-type": format === "csv" ? "text/csv; charset=utf-8" : "audio/x-mpegurl; charset=utf-8",
+        "content-disposition": `attachment; filename="${file.filename}"`,
+        "content-length": contentBuffer.length,
+        "x-content-type-options": "nosniff"
+      }));
+      res.end(contentBuffer);
+      return;
+    } catch (error) {
+      const status = Number(error.status || error.statusCode || 502);
+      if (status === 429) res.setHeader("retry-after", "30");
+      return sendJson(res, status, { error: error.message || "TIDAL playlist export failed." });
+    }
   }
 
   if (req.method === "GET" && pathname === "/api/tidal/pinned-mixes") {
@@ -1518,6 +2337,15 @@ async function handleApi(req, res, url) {
     scheduleBroadcast();
     return sendJson(res, 200, { ok: true, result: result || null });
   }
+  if (pathname === "/api/roon/queue-control") {
+    const action = String(body.action || "").trim().toLowerCase();
+    if (action !== "play-from-here") {
+      return sendJson(res, 400, { error: "Unsupported queue action. Roon exposes Play from here; queue removal is not available through the extension API." });
+    }
+    const result = await roon.playFromHere(body.zoneId, body.queueItemId || body.queue_item_id);
+    scheduleBroadcast();
+    return sendJson(res, 200, { ok: true, action, result: result || null });
+  }
   if (pathname === "/api/roon/radio/play") {
     const result = await roon.playRadioStation(body.itemKey || body.id || body.stationId, body.zoneId, {
       hierarchy: body.hierarchy || "",
@@ -1649,13 +2477,14 @@ async function handleApi(req, res, url) {
         similarArtistExpansion: searchBody.similarArtistExpansion || null
       };
       if (enough || tidalUnhealthy) {
-        const guardedPreflight = syncFinalResultVerification(
+        let guardedPreflight = syncFinalResultVerification(
           suppressPreviouslySuggestedResultTracks(roonPreflight, searchBody),
           requestedCount
         );
         voiceExecution.check();
         discoveryHistory.record(guardedPreflight.tracks || []);
         trackMemory.record([...(guardedPreflight.tracks || []), ...(guardedPreflight.alternates || [])]);
+        guardedPreflight = discoveryDiagnostics.record(body, guardedPreflight);
         sessionStore.save(body, guardedPreflight);
         latestResultSource = "discovery";
         scheduleBroadcast();
@@ -1683,7 +2512,14 @@ async function handleApi(req, res, url) {
           tidal,
           options: {
             ...searchBody,
-            discoveryRuntimeMs: Math.max(8_000, Number(budgets.discoveryTimeoutMs || 30_000) - 4_000)
+            // Leave a small completion margin for in-flight TIDAL requests so
+            // the discovery engine can return its diagnostics before the
+            // outer request timeout fires. Hard-duration genre searches have
+            // a deliberately longer catalog crawl, so give them the larger
+            // safety margin as well.
+            discoveryRuntimeMs: Math.max(8_000, Number(budgets.discoveryTimeoutMs || 30_000) - (
+              hardDurationConstraintFor(effectiveBody) ? 8_000 : 4_000
+            ))
           },
           history: discoveryHistory,
           tasteProfile,
@@ -1828,6 +2664,7 @@ async function handleApi(req, res, url) {
     discoveryHistory.record(result.tracks || []);
     trackMemory.record([...(result.tracks || []), ...(result.alternates || [])]);
     rememberMusicObservations(result.tracks || [], "discovery_result");
+    result = discoveryDiagnostics.record(body, result);
     sessionStore.save(body, result);
     latestResultSource = "discovery";
     recordBridgeSyncAlert(result);
@@ -1997,10 +2834,19 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, result);
   }
   if (pathname === "/api/roon/queue-tracks") {
-    const result = await roon.queueTracks(body.tracks || [], body.zoneId, {
+    const sourceTracks = Array.isArray(body.tracks) ? body.tracks : [];
+    const standbyQueue = body.source === "standby";
+    const tracks = standbyQueue
+      ? selectStandbyQueueTracks(sourceTracks, body.targetCount || sourceTracks.length)
+      : sourceTracks;
+    const requestedTargetCount = Number(body.targetCount || tracks.length);
+    const targetCount = standbyQueue && Number.isFinite(requestedTargetCount)
+      ? Math.min(Math.max(1, Math.trunc(requestedTargetCount)), tracks.length)
+      : body.targetCount;
+    const result = await roon.queueTracks(tracks, body.zoneId, {
       mode: body.mode || "append",
       alternates: body.alternates || [],
-      targetCount: body.targetCount,
+      targetCount,
       preferExtendedMixes: booleanFlag(body.preferExtendedMixes || body.prefer_extended_mixes),
       matchPolicy: body.matchPolicy || (booleanFlag(body.allowBridge) ? "strict" : ""),
       allowBridge: booleanFlag(body.allowBridge),
@@ -2064,10 +2910,59 @@ const handleMcpHttp = createRabbitHoleMcpHttpHandler({
 const handleVoice = createVoiceApi({ tools: rabbitHoleMcpTools, router: modelRouter,
   availability: () => ({ synapseAvailable: Boolean(config.ai.openai.enabled && config.ai.openai.apiKey), localAvailable: Boolean(config.openAiCompatibleBaseUrl || config.ollamaBaseUrl) }) });
 
+const lyrionCatalogue=new (require('./lyrionCatalogue').LyrionCatalogue)({tidal});
+const lyrionApi = require("./lyrionApi").createLyrionApi({ roon, readJson, sendJson, catalogue:lyrionCatalogue });
+const soundcloudApi = require("./soundcloudApi").createSoundCloudApi({readJson,sendJson,items:lyrionApi.client.items});
+const siriusxmAccount = new (require("./siriusxmAccount").SiriusXmAccount)();
+const siriusxmOnDemand = require("./siriusxmOnDemandApi").createSiriusXmOnDemandApi({lyrion:lyrionApi,readJson,sendJson});
+const soundSpectrumApi = require("./soundSpectrum").createSoundSpectrumApi({readJson,sendJson,
+  getRoonState: () => ({ connected: Boolean(roon.core), zones: [...roon.zones.values()] }) });
+lyrionApi.siriusxm.liveMetadata=new (require('./siriusxmLiveMetadata').SiriusXmLiveMetadata)();
+const siriusxmBrowser = new (require("./siriusxmBrowserRelay").SiriusXmBrowserRelay)();
+// Browser heartbeats do not prove that SiriusXM refreshed its visible metadata.
+// Keep the experimental relay disabled until source freshness can be verified.
+lyrionApi.installPlaybackHandoffs();
+const lyrionTrackMetadata=require('./lyrionTrackMetadata').createLyrionTrackMetadata(metadataEnrichment,Date.now,lyrionCatalogue);
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
-    if (url.pathname.startsWith("/api/voice/")) {
+    if(url.pathname.startsWith('/api/soundspectrum/')){
+      await soundSpectrumApi.handle(req,res,url);
+    } else if(url.pathname==='/api/lyrion/track-metadata'&&req.method==='POST'){
+      return sendJson(res,200,await lyrionTrackMetadata((await readJson(req)).track));
+    } else if(url.pathname.startsWith("/api/siriusxm/ondemand/")){
+      await siriusxmOnDemand.handle(req,res,url);
+    } else if(url.pathname.startsWith("/api/siriusxm/browser/")){
+      const local=["127.0.0.1","::1","::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
+      const origin=req.headers.origin;
+      if(!local||!['127.0.0.1:3777','localhost:3777'].includes(req.headers.host))return sendJson(res,403,{error:'Browser metadata is local to this PC.'});
+      if(origin&&!/^chrome-extension:\/\/[a-p]{32}$/.test(origin)&&!['http://127.0.0.1:3777','http://localhost:3777'].includes(origin))return sendJson(res,403,{error:'Unsupported browser origin.'});
+      res.setHeader('Cache-Control','no-store');
+      if(origin){res.setHeader('Access-Control-Allow-Origin',origin);res.setHeader('Vary','Origin');}
+      if(req.method==='OPTIONS'){res.setHeader('Access-Control-Allow-Headers','Authorization, Content-Type');res.setHeader('Access-Control-Allow-Methods','POST, GET');res.writeHead(204);return res.end();}
+      if(url.pathname==='/api/siriusxm/browser/status'&&req.method==='GET')return sendJson(res,200,{...siriusxmBrowser.status(),enabled:false,reason:'Visible-page metadata freshness could not be verified.'});
+      if(!siriusxmBrowser.authorized(req.headers.authorization))return sendJson(res,401,{error:'Browser helper is not paired.'});
+      if(url.pathname==='/api/siriusxm/browser/metadata'&&req.method==='POST'){
+        return sendJson(res,409,{error:'Browser metadata relay disabled: visible-page freshness could not be verified.'});
+      }
+      return sendJson(res,404,{error:'Unknown browser metadata action.'});
+    } else if(url.pathname.startsWith("/api/siriusxm/account/")){
+      const local=["127.0.0.1","::1","::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
+      const origin=req.headers.origin;
+      if(!local || (origin && !["http://127.0.0.1:3777","http://localhost:3777"].includes(origin)))return sendJson(res,403,{error:"Connect SiriusXM on the Rabbit Hole computer."});
+      res.setHeader("Cache-Control","no-store");
+      const action=url.pathname.split("/").pop();
+      if(action==="status"&&req.method==="GET")return sendJson(res,200,siriusxmAccount.status());
+      if(action==="start"&&req.method==="POST")return sendJson(res,200,await siriusxmAccount.begin());
+      if(action==="check"&&req.method==="POST")return sendJson(res,200,await siriusxmAccount.check());
+      return sendJson(res,404,{error:"Unknown SiriusXM connection action"});
+    } else if (url.pathname === "/api/siriusxm/metadata" && req.method === "GET") {
+      sendJson(res,200,await lyrionApi.siriusxm.getChannelMetadata(url.searchParams.get("channel")||""));
+    } else if (url.pathname.startsWith("/api/lyrion/")) {
+      await lyrionApi.handle(req, res, url);
+    } else if (url.pathname.startsWith("/api/soundcloud/")) {
+      await soundcloudApi(req,res,url);
+    } else if (url.pathname.startsWith("/api/voice/")) {
       await handleVoice(req, res, url);
     } else if (["/mcp", "/mcp/", "/rabbitholemcp/mcp", "/rabbitholemcp/mcp/"].includes(url.pathname)) {
       await handleMcpHttp(req, res, url);
@@ -2083,19 +2978,61 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+let shuttingDown = false;
+let shutdownCode = 0;
+function finishShutdown(code = shutdownCode) {
+  shutdownCode = code;
+  try { appProcessLock?.release(); } catch (_) {}
+  if (code) process.exitCode = code;
+}
+
+function shutdown(reason, code = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  shutdownCode = code;
+  sonicCoverage?.close();
+  sonicAnalysis?.close();
+  void statusDelivery.close().catch(() => {});
+  void soundSpectrumApi.service.close().catch(() => {});
+  databaseBrowser.close().catch(() => {});
+  console.warn(`[lifecycle] Rabbit Hole shutting down pid=${process.pid} reason=${reason}`);
+  try { roon.stop(); } catch (error) { console.error(`[lifecycle] Roon shutdown failed: ${error.message}`); }
+  try { beatportMemoryBackfillChild?.kill(); } catch (_) {}
+  if (server.listening) server.close(() => finishShutdown(code));
+  else finishShutdown(code);
+}
+
+soundSpectrumApi.attachVideoTransport(server);
+server.on("error", error => {
+  console.error(`[lifecycle] HTTP server error: ${error.message}`);
+  shutdown("http-server-error", 1);
+});
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("exit", () => {
+  try { appProcessLock?.release(); } catch (_) {}
+});
+
 roon.on("zones", () => {
   hqplayerStatus.start();
   scheduleBroadcast();
 });
-roon.start();
-
 server.listen(config.port, config.host, () => {
+  if (shuttingDown) return;
+  try {
+    roon.start();
+  } catch (error) {
+    console.error(`[lifecycle] Roon startup failed: ${error.message}`);
+    shutdown("roon-start-error", 1);
+    return;
+  }
   console.log(`The Rabbit Hole is running at http://localhost:${config.port}`);
   for (const url of getNetworkUrls().filter((candidate) => !candidate.includes("localhost"))) {
     console.log(`Phone/LAN URL: ${url}`);
   }
   console.log("Enable the extension in Roon Settings > Extensions if prompted.");
   scheduleStandbyRefresh(45_000);
+  if (sonicCoverage) { sonicCoverage.autoStart = true; sonicCoverage.schedule(5000); }
   scheduleBeatportMemoryBackfill();
   scheduleBeatportChartRefresh();
 });

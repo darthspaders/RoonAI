@@ -1,5 +1,6 @@
 "use strict";
 const voiceExecution = require("./voiceExecution");
+const { namedRemixEvidence, ORIGINAL_ARTIST_PENALTY } = require("./candidateReviewEvidence");
 const {
   calibrationIssueCount,
   calibrationIssueDetail
@@ -17,6 +18,7 @@ const {
   pruneGenreTerms: pruneOntologyGenreTerms
 } = require("./musicOntology");
 const {
+  queryContextKey,
   queryTemplate,
   rejectionBucketForReason,
   summarizeRecords
@@ -72,16 +74,16 @@ function looksLikeGenreStyleDescriptor(value = "") {
   const raw = cleanText(value);
   const normalized = normalize(raw);
   if (!normalized) return false;
-  const hasGenre = /\b(?:edm|electronic dance music|deep house|tech house|progressive house|melodic house|organic house|house|melodic techno|progressive techno|techno|progressive trance|psytrance|psy trance|trance|ambient|breaks|breakbeat|dubstep)\b/.test(normalized);
+  const hasGenre = /\b(?:edm|electronic dance music|deep house|tech house|progressive house|melodic house|organic house|house|melodic techno|progressive techno|techno|progressive trance|psytrance|psy trance|trance|ambient|breaks|breakbeat|dubstep|rock|metal|alternative|indie)\b/.test(normalized);
   const hasDescriptor = /\b(?:emotional|melodic|progressive|deep|organic|uplifting|dark|cinematic|driving|hypnotic|vocal|instrumental|club|dance|edm)\b/.test(normalized);
-  const hasGenreSeparator = /[\/&|]/.test(raw) || /\b(?:and|x)\b/.test(normalized);
-  return hasGenre && hasDescriptor && (hasGenreSeparator || /\bedm\b/.test(normalized));
+  const hasGenreSeparator = /[,\/&|]/.test(raw) || /\b(?:and|x)\b/.test(normalized);
+  return hasGenre && hasDescriptor && (hasGenreSeparator || /\bedm\b/.test(normalized) || /\b(?:rock|metal)\b/.test(normalized));
 }
 
 function looksLikeStandaloneGenreStylePhrase(value = "") {
   const normalized = normalize(value);
   if (!normalized) return false;
-  const hasGenre = /\b(?:edm|electronic dance music|deep house|tech house|progressive house|melodic house|organic house|house|melodic techno|progressive techno|techno|progressive trance|psytrance|psy trance|trance|ambient|downtempo|breaks|breakbeat|dubstep|drum and bass|dnb)\b/.test(normalized);
+  const hasGenre = /\b(?:edm|electronic dance music|deep house|tech house|progressive house|melodic house|organic house|house|melodic techno|progressive techno|techno|progressive trance|psytrance|psy trance|trance|ambient|downtempo|breaks|breakbeat|dubstep|drum and bass|dnb|rock|metal|alternative|indie)\b/.test(normalized);
   if (!hasGenre) return false;
   return /\b(?:emotional|melodic|progressive|deep|organic|uplifting|dark|cinematic|driving|hypnotic|vocal|instrumental|club|dance|edm)\b/.test(normalized) ||
     /\b(?:journal|journals|journey|journeys|session|sessions|playlist|collection|compilation|selection|essentials|mixes?|vibes?|grooves?|sounds?)\b/.test(normalized);
@@ -175,6 +177,11 @@ function hasHardCountLanguage(options = {}) {
 function shouldBuildWideDiscoveryPool(options = {}, profile = buildDiscoveryProfile(options)) {
   if (profile.scoringMode === "pure" && (profile.requestedArtists || []).length) return false;
   if (profile.scoringMode === "similar") return false;
+  // A plain “use my taste” request should search through the active taste
+  // cluster seeds first. It remains soft personalization, but must not enter
+  // the wide fallback pool that turns an empty genre field into open-catalog
+  // discovery. Explicit branch-out language still enables the wide pool.
+  if (profile.promptIntent?.outsideTasteMode === "taste-profile") return false;
   if (hasExplicitArtistFocus(options, profile) && !requestRequiresFreshArtists(options)) return false;
   if (profile.promptIntent?.allowOutsideTaste && !hasHardCountLanguage(options)) return true;
   return Boolean(
@@ -235,6 +242,14 @@ function noveltyBudgetFor(options = {}, profile = buildDiscoveryProfile(options)
 
 function allowsArtistRepeatFallback(options = {}, profile = buildDiscoveryProfile(options)) {
   if (defaultPerRunArtistCap(options, profile, parseRequestedCount(options)) > 1) return true;
+  // Large explicit genre runs need enough depth to reach the requested count.
+  // Keep the strict one-per-artist behavior for small runs, but allow the
+  // selector to relax it only after the diverse candidates are exhausted.
+  if (
+    profile.isGenreDiscoveryTarget &&
+    parseRequestedCount(options) >= 12 &&
+    !requestRequiresStrictFreshArtists(options)
+  ) return true;
   return /\b(?:allow|include|permit|ok(?:ay)? with)\b.{0,32}\b(?:repeat(?:ed)?|same)\s+artists?\b/i.test(requestText(options));
 }
 
@@ -345,8 +360,28 @@ function requestUsesNowPlayingAsSeed(options = {}) {
   return /\b(?:now playing|current roon|current track|current song|what is playing|this track|this song|use current|like this|like what is playing|around what is playing)\b/.test(text);
 }
 
-function matchingSceneArtist(value) {
-  return PROGRESSIVE_ARTISTS.find((artist) => artistMatchesKnownName(value, artist, { contains: true })) || "";
+function isProgressiveSceneTarget(profile = {}) {
+  return Boolean(profile.isProgressiveTarget || profile.isProgressiveTranceTarget);
+}
+
+function progressiveSceneTargetFor(profile = {}) {
+  if (profile.isProgressiveTranceTarget) return "progressive trance";
+  if (profile.isProgressiveTarget) return "progressive house";
+  return "";
+}
+
+function matchingSceneArtist(value, profile = {}, options = {}) {
+  const artists = profile.isProgressiveTranceTarget ? TRANCE_FORWARD_ARTISTS : PROGRESSIVE_ARTISTS;
+  return artists.find((artist) => artistMatchesKnownName(value, artist, options)) || "";
+}
+
+function matchingSceneRemixer(track = {}, profile = {}) {
+  if (!isProgressiveSceneTarget(profile)) return "";
+  const title = cleanText(track.title || track);
+  if (!title || !/\b(?:remix|rework|dub|edit|mix|version)\b/i.test(title)) return "";
+  const artists = profile.isProgressiveTranceTarget ? TRANCE_FORWARD_ARTISTS : PROGRESSIVE_ARTISTS;
+  const normalizedTitle = normalize(title);
+  return artists.find((artist) => normalizedTitle.includes(normalize(artist))) || "";
 }
 
 function queryStartsWithKnownLabel(query = "", profile = {}) {
@@ -354,7 +389,7 @@ function queryStartsWithKnownLabel(query = "", profile = {}) {
   if (!normalizedQuery) return false;
   const labels = uniqueTerms([
     ...(profile.requestedLabels || []),
-    ...PROGRESSIVE_LABELS
+    ...progressiveSceneLabelsFor(profile)
   ], 80)
     .map((label) => normalize(label))
     .filter(Boolean)
@@ -366,9 +401,12 @@ function queryStartsWithKnownLabel(query = "", profile = {}) {
 function queryTargetArtist(query, profile = {}) {
   const normalizedQuery = normalize(query);
   if (queryStartsWithKnownLabel(query, profile)) return "";
-  return PROGRESSIVE_ARTISTS.find((artist) => {
+  const artists = profile.isProgressiveTranceTarget
+    ? uniqueValues([...TRANCE_FORWARD_ARTISTS, ...PROGRESSIVE_ARTISTS])
+    : PROGRESSIVE_ARTISTS;
+  return artists.find((artist) => {
     const normalizedArtist = normalize(artist);
-    if (!normalizedQuery.startsWith(normalizedArtist)) return false;
+    if (normalizedQuery !== normalizedArtist && !normalizedQuery.startsWith(`${normalizedArtist} `)) return false;
     if (!isCollisionSensitiveArtist(artist)) return true;
     const rawPrefix = cleanText(query).split(/\s+/).slice(0, cleanText(artist).split(/\s+/).length).join(" ");
     return artistNamesMatch(rawPrefix, artist);
@@ -377,13 +415,63 @@ function queryTargetArtist(query, profile = {}) {
 
 function artistMatchesKnownName(value = "", knownName = "", options = {}) {
   const artists = splitArtists(value);
-  const candidates = artists.length ? artists : [value];
+  // Keep group names such as Above & Beyond intact alongside collaboration
+  // credits. A longer, unrelated artist name is never scene identity evidence.
+  const credits = cleanText(value).split(/\s*(?:,|;|\/|\bfeat(?:uring)?\.?\s+|\bft\.?\s+)\s*/i);
+  const candidates = [value, ...credits, ...artists];
   return candidates.some((artist) => artistNamesMatch(artist, knownName, options));
 }
 
 function wantsLongTracks(options = {}) {
   const text = normalize(`${options.request} ${options.mood} ${options.genres}`);
   return /\b(?:long|extended|8 minute|8 min|eight minute|journey|deep mix|club mix)\b/.test(text);
+}
+
+function hardDurationConstraintFor(options = {}) {
+  const directMs = Number(options.minDurationMs ?? options.minimumDurationMs ?? options.min_duration_ms ?? 0);
+  if (Number.isFinite(directMs) && directMs > 0) {
+    return { minimumMs: directMs, source: "explicit milliseconds" };
+  }
+
+  const directSeconds = Number(options.minDurationSeconds ?? options.minimumDurationSeconds ?? options.min_duration_seconds ?? 0);
+  if (Number.isFinite(directSeconds) && directSeconds > 0) {
+    return { minimumMs: directSeconds * 1000, source: "explicit seconds" };
+  }
+
+  const directMinutes = Number(options.minDurationMinutes ?? options.minimumDurationMinutes ?? options.min_duration_minutes ?? 0);
+  if (Number.isFinite(directMinutes) && directMinutes > 0) {
+    return { minimumMs: directMinutes * 60000, source: "explicit minutes" };
+  }
+
+  const text = normalize(requestText(options));
+  const patterns = [
+    /\b(?:at least|minimum(?: of)?|no shorter than|longer than|over|more than)\s+(\d+(?:\.\d+)?)\s*(?:minutes?|mins?)\b/,
+    /\b(\d+(?:\.\d+)?)\s*(?:minutes?|mins?)\s*(?:minimum|or longer|or more|plus)\b/,
+    /\b(\d+(?:\.\d+)?)\s*(?:minutes?|mins?)\s+(?:tracks?|songs?|cuts?)\b/,
+    /\b(\d+(?:\.\d+)?)\s*(?:minutes?|mins?)\b(?=.{0,48}\b(?:tracks?|songs?|cuts?|recommendations?)\b)/
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const minutes = Number(match?.[1] || 0);
+    if (Number.isFinite(minutes) && minutes > 0) {
+      return { minimumMs: minutes * 60000, source: "hard duration language" };
+    }
+  }
+
+  return null;
+}
+
+function durationConstraintReason(track = {}, options = {}) {
+  const constraint = hardDurationConstraintFor(options);
+  if (!constraint) return "";
+  const minimumMinutes = constraint.minimumMs / 60000;
+  const minimumLabel = `${Number.isInteger(minimumMinutes) ? minimumMinutes : minimumMinutes.toFixed(1)} minutes`;
+  const duration = Number(track.durationMs || 0);
+  if (!(duration > 0)) return `No duration available to confirm the hard minimum of ${minimumLabel}.`;
+  if (duration < constraint.minimumMs) {
+    return `Duration ${(duration / 60000).toFixed(1)} minutes is below the hard minimum of ${minimumLabel}.`;
+  }
+  return "";
 }
 
 function requestPrefersExtendedMixes(options = {}) {
@@ -591,8 +679,8 @@ function tasteMatchFor(track = {}, breakdown = {}, profile = {}) {
   const percent = clamp(Math.round(base + adjustment * 4 + (Number(breakdown.artistMatch || 0) / SCORE_MAX.artistMatch) * 14 + (Number(breakdown.labelMatch || 0) / SCORE_MAX.labelMatch) * 10), 0, 100);
 
   for (const reason of breakdown.tasteReasons || []) reasons.push(`Taste profile signal: ${reason}.`);
-  if (adjustment > 0) reasons.push("Boosted by previous Love/Good/candidate signals.");
-  if (adjustment < 0) reasons.push("Reduced by previous Skip/Never Again signals.");
+  if (adjustment > 0) reasons.push("Boosted by previous Love/Like/candidate signals.");
+  if (adjustment < 0) reasons.push("Reduced by previous Dislike/Never Again signals.");
   if (!reasons.length && profile.scoringMode === "pure") reasons.push("Taste weighting is disabled for Pure Search mode.");
   if (!reasons.length) reasons.push("Taste profile has limited direct signal for this track.");
 
@@ -772,13 +860,38 @@ const PROGRESSIVE_FRESH_ANCHORS = [
   "Dmitry Molosh"
 ];
 
+// These names have appeared in learned Progressive House query history. They
+// are kept as negative evidence for other hard genre requests without adding
+// them to the user-facing progressive anchor pool.
+const KNOWN_PROGRESSIVE_TASTE_CONTAMINATION = [
+  "Beckers",
+  "Maze 28",
+  "Fluke"
+];
+
 const TRANCE_FORWARD_ARTISTS = [
   "Solarstone",
   "Scott Bond",
   "Basil O'Glue",
   "Jerome Isma-Ae",
   "Paul Thomas",
-  "Forerunners"
+  "Forerunners",
+  "Andrew Bayer",
+  "ilan Bluestone",
+  "Genix",
+  "Grum",
+  "John 00 Fleming",
+  "Airwave",
+  "Ruben Karapetyan",
+  "Giuseppe Ottaviani",
+  "Aly & Fila",
+  "John O'Callaghan",
+  "Craig Connelly",
+  "The Thrillseekers",
+  "Alex M.O.R.P.H.",
+  "Factor B",
+  "Art Of Trance",
+  "Gai Barone"
 ];
 
 const SCENE_TERMS = [
@@ -790,6 +903,125 @@ const SCENE_TERMS = [
   "melodic house",
   "melodic techno"
 ];
+
+// EDM is a parent discovery domain, not a single catalog genre. Keep this
+// list intentionally broad so an "any EDM lane" request can explore across
+// legitimate electronic scenes without opening the entire TIDAL catalog.
+const ELECTRONIC_DOMAIN_TERMS = [
+  "edm",
+  "electronic",
+  "electronic dance music",
+  "electronic music",
+  "dance music",
+  "house",
+  "deep house",
+  "progressive house",
+  "organic house",
+  "tech house",
+  "melodic house",
+  "melodic techno",
+  "techno",
+  "trance",
+  "progressive trance",
+  "psytrance",
+  "drum and bass",
+  "dnb",
+  "dubstep",
+  "bass music",
+  "experimental bass",
+  "uk bass",
+  "breaks",
+  "breakbeat",
+  "electro",
+  "electronica",
+  "indie dance",
+  "future bass",
+  "bass house",
+  "garage",
+  "synthwave"
+];
+
+// These are discovery anchors, not a taste whitelist. They give an open EDM
+// request a real catalog starting point before any semantic mood/activity
+// wording is considered.
+const EDM_DISCOVERY_ARTISTS = [
+  "Space 92",
+  "HI-LO",
+  "Eli Brown",
+  "Layton Giordani",
+  "Reinier Zonneveld",
+  "UMEK",
+  "Charlotte de Witte",
+  "Amelie Lens",
+  "ARTBAT",
+  "Adam Beyer",
+  "Anyma",
+  "John Summit",
+  "Chris Lake",
+  "FISHER",
+  "Habstrakt",
+  "Malaa",
+  "Skrillex",
+  "Alix Perez",
+  "Of The Trees",
+  "Tape B",
+  "Astrix",
+  "Hybrid",
+  "Bicep"
+];
+
+const EDM_DISCOVERY_LABELS = [
+  "Drumcode",
+  "KNTXT",
+  "Terminal M",
+  "Confession",
+  "Filth on Acid",
+  "Factory 93 Records",
+  "Afterlife",
+  "Defected",
+  "Toolroom",
+  "Solid Grooves",
+  "Dirtybird",
+  "Wakaan",
+  "Deep Dark & Dangerous",
+  "DUPLOC",
+  "1985 Music",
+  "Deep Medi Musik",
+  "Hospital Records",
+  "Critical Music",
+  "Shogun Audio",
+  "Iboga Records"
+];
+
+const SEMANTIC_QUERY_TERMS = new Set([
+  "driving",
+  "drive",
+  "rolling",
+  "underground",
+  "deep cut",
+  "deep cuts",
+  "dark",
+  "hypnotic",
+  "euphoric",
+  "filthy",
+  "melodic",
+  "minimal",
+  "minimal vocals",
+  "vocal",
+  "vocals",
+  "instrumental",
+  "peak time",
+  "peak-time",
+  "club",
+  "club tracks",
+  "night drive",
+  "road trip",
+  "music",
+  "tracks",
+  "songs",
+  "new releases",
+  "new release"
+]);
 
 const PROGRESSIVE_CATALOG_TARGETS = [
   "progressive house",
@@ -843,6 +1075,32 @@ const PROGRESSIVE_LABELS = [
   "Warung Recordings",
   "TRYBESof"
 ];
+
+// These are bounded scene anchors for an explicit Progressive Trance lane.
+// They are admission evidence only when the returned candidate has the
+// matching artist/label identity; they do not bypass catalogue or identity
+// safety checks and are not free-form mood/activity evidence.
+const PROGRESSIVE_TRANCE_LABELS = [
+  "Anjunabeats",
+  "Enhanced Progressive",
+  "Coldharbour",
+  "Coldharbour Recordings",
+  "Pure Trance",
+  "Black Hole",
+  "Black Hole Recordings",
+  "FSOE",
+  "Future Sound of Egypt",
+  "JOOF Recordings",
+  "Subculture",
+  "Armada Captivating",
+  "Vandit",
+  "Perfecto",
+  "WAO138?!"
+];
+
+function progressiveSceneLabelsFor(profile = {}) {
+  return profile.isProgressiveTranceTarget ? PROGRESSIVE_TRANCE_LABELS : PROGRESSIVE_LABELS;
+}
 
 const OMNIVORE_DISCOVERY_LANES = [
   {
@@ -953,6 +1211,10 @@ const SEED_ARTIST_VIBES = [
 ];
 
 const GENRE_DISCOVERY_SEEDS = [
+  ["edm", [
+    ...EDM_DISCOVERY_LABELS,
+    ...EDM_DISCOVERY_ARTISTS
+  ]],
   ["acid house", [
     "Acid Test",
     "Super Rhythm Trax",
@@ -1129,6 +1391,87 @@ const GENRE_DISCOVERY_SEEDS = [
     "Meat Katie",
     "Freestylers",
     "Elite Force"
+  ]],
+  ["dubstep", [
+    "Deep Dark & Dangerous",
+    "DUPLOC",
+    "1985 Music",
+    "Chestplate",
+    "SubCarbon Records",
+    "Disciple",
+    "Never Say Die Records",
+    "Artikal Music",
+    "Deep Medi Musik",
+    "Wakaan",
+    "Ternion Sound",
+    "Truth",
+    "The Widdler",
+    "Distinct Motive",
+    "Alix Perez",
+    "Shades",
+    "EPROM",
+    "Ivy Lab",
+    "Hamdi",
+    "Tape B",
+    "Of The Trees",
+    "PEEKABOO",
+    "Ganja White Night",
+    "LSDREAM",
+    "Mersiv",
+    "Levity",
+    "Subtronics",
+    "Zeds Dead",
+    "REZZ",
+    "Stylust",
+    "Liquid Stranger",
+    "CloZee",
+    "EAZYBAKED",
+    "A Hundred Drums"
+  ]],
+  ["experimental bass", [
+    "Wakaan",
+    "Ternion Sound",
+    "The Widdler",
+    "Alix Perez",
+    "Shades",
+    "EPROM",
+    "Ivy Lab",
+    "Tape B",
+    "Of The Trees",
+    "PEEKABOO",
+    "Ganja White Night",
+    "LSDREAM",
+    "Mersiv",
+    "Levity",
+    "Liquid Stranger",
+    "CloZee",
+    "EAZYBAKED",
+    "Deep Dark & Dangerous",
+    "DUPLOC",
+    "1985 Music",
+    "SubCarbon Records"
+  ]],
+  ["bass music", [
+    "Deep Dark & Dangerous",
+    "DUPLOC",
+    "1985 Music",
+    "Chestplate",
+    "SubCarbon Records",
+    "Disciple",
+    "Artikal Music",
+    "Tape B",
+    "Of The Trees",
+    "PEEKABOO",
+    "Ganja White Night",
+    "LSDREAM",
+    "Mersiv",
+    "Levity",
+    "Subtronics",
+    "Zeds Dead",
+    "REZZ",
+    "Stylust",
+    "Liquid Stranger",
+    "CloZee"
   ]],
   ["synthwave", [
     "The Midnight",
@@ -1313,7 +1656,17 @@ const PARENT_GENRE_TERMS = [
   "garage",
   "disco",
   "electro",
-  "psytrance"
+  "psytrance",
+  "rock",
+  "alternative",
+  "indie",
+  "pop",
+  "metal",
+  "soul",
+  "jazz",
+  "classical",
+  "country",
+  "folk"
 ];
 
 const CHILD_GENRE_KEYWORD_ALIASES = {
@@ -1338,6 +1691,7 @@ const CHILD_GENRE_KEYWORD_ALIASES = {
 };
 
 const GENRE_ARTIST_ANCHORS = [
+  ["edm", EDM_DISCOVERY_ARTISTS],
   ["acid house", ["Phuture", "DJ Pierre", "Adonis", "Tyree Cooper", "Hardfloor", "Josh Wink", "A Guy Called Gerald", "Paranoid London", "Tin Man", "Posthuman", "Luke Vibert", "Ceephax Acid Crew"]],
   ["tech house", [
     "Chris Stussy",
@@ -1381,7 +1735,33 @@ const GENRE_ARTIST_ANCHORS = [
   ]],
   ["melodic techno", ["Adriatique", "Mind Against", "Agents Of Time", "Stephan Bodzin", "Tale Of Us", "Maceo Plex"]],
   ["deep house", ["Jimpster", "Atjazz", "Miguel Migs", "Maya Jane Coles", "Kerri Chandler"]],
-  ["breaks", ["Hybrid", "The Crystal Method", "Stanton Warriors", "Plump DJs", "Meat Katie", "Elite Force"]]
+  ["breaks", ["Hybrid", "The Crystal Method", "Stanton Warriors", "Plump DJs", "Meat Katie", "Elite Force"]],
+  ["dubstep", [
+    "Tape B",
+    "Of The Trees",
+    "PEEKABOO",
+    "Ganja White Night",
+    "LSDREAM",
+    "Mersiv",
+    "Levity",
+    "Subtronics",
+    "Zeds Dead",
+    "REZZ",
+    "Stylust",
+    "Alix Perez",
+    "Shades",
+    "EPROM",
+    "Ivy Lab",
+    "Hamdi",
+    "Distinct Motive",
+    "Truth",
+    "The Widdler",
+    "Ternion Sound",
+    "Liquid Stranger",
+    "CloZee",
+    "EAZYBAKED",
+    "A Hundred Drums"
+  ]]
 ];
 
 function splitArtists(value) {
@@ -1399,11 +1779,24 @@ function containsNormalized(text, term) {
   return normalizedText === normalizedTerm || normalizedText.includes(normalizedTerm);
 }
 
+function normalizeGenreKey(value = "") {
+  return normalize(value)
+    .replace(/\band\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function containsGenreTerm(text = "", term = "") {
+  const source = ` ${normalizeGenreKey(text)} `;
+  const needle = normalizeGenreKey(term);
+  return Boolean(needle && source.includes(` ${needle} `));
+}
+
 function seedGenreMatchesTarget(targetTerms = [], genre = "") {
-  const genreKey = normalize(genre);
+  const genreKey = normalizeGenreKey(genre);
   if (!genreKey) return false;
   return targetTerms.some((term) => {
-    const targetKey = normalize(term);
+    const targetKey = normalizeGenreKey(term);
     if (!targetKey) return false;
     if (targetKey === genreKey) return true;
     if (isBroadGenreTerm(genreKey) || isBroadGenreTerm(targetKey)) return false;
@@ -1421,10 +1814,16 @@ function explicitGenrePhrase(options = {}) {
   const raw = cleanText(options.genres || "");
   if (!raw) return "";
   const first = cleanText(raw.split(/[,;|]/)[0]);
-  const normalized = normalize(first);
+  const normalized = normalizeGenreKey(first);
   if (!normalized || normalized.split(/\s+/).length > 5) return "";
-  if (!parentGenreTermsFor(normalized).length) return "";
-  return normalized;
+  const detected = detectOntologyGenreTerms(first, { includeAliases: true, limit: 12 });
+  const exact = (detected.matches || []).some((match) => (
+    normalizeGenreKey(match.canonical) === normalized ||
+    (match.aliases || []).some((alias) => normalizeGenreKey(alias) === normalized)
+  ));
+  if (exact) return normalized;
+  const detectedTerms = new Set((detected.terms || []).map(normalize).filter(Boolean));
+  return parentGenreTermsFor(normalized).length && detectedTerms.size <= 1 ? normalized : "";
 }
 
 function childGenreKeywordsFor(value = "") {
@@ -1447,7 +1846,14 @@ function learnedGenreProfileFor(options = {}, key = "") {
 
 function dynamicGenreProfileFor(options = {}, targetGenres = []) {
   const explicit = explicitGenrePhrase(options);
-  const primary = explicit || (targetGenres || []).find((term) => parentGenreTermsFor(term).length && !isBroadGenreTerm(term)) || "";
+  // A multi-term lane such as "dubstep experimental bass bass music" is a
+  // discovery target, not a new strict child-genre profile. Only create a
+  // learned/dynamic profile for an exact genre phrase or a single detected
+  // target; otherwise one child term can incorrectly reject the rest of the
+  // requested lane.
+  const primary = explicit || ((targetGenres || []).length === 1
+    ? (targetGenres || []).find((term) => parentGenreTermsFor(term).length && !isBroadGenreTerm(term))
+    : "") || "";
   const key = normalize(primary);
   const learned = learnedGenreProfileFor(options, key);
   const name = cleanText(learned?.name || primary);
@@ -1489,6 +1895,20 @@ function containsEntityTerm(text, term) {
 
 function uniqueTerms(values, limit = 20) {
   return uniqueValues(values.map(cleanText).filter(Boolean)).slice(0, limit);
+}
+
+function uniqueGenreTerms(values, limit = 20) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values || []) {
+    const clean = cleanText(value);
+    const key = normalizeGenreKey(clean);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(clean);
+    if (result.length >= limit) break;
+  }
+  return result;
 }
 
 function pruneBroadGenreTerms(terms = []) {
@@ -1644,8 +2064,22 @@ function normalizeEntityCandidate(value) {
     .trim();
   if (!text || text.length < 2 || text.length > 80) return "";
   if (/\b(?:what is playing|currently playing|current track|now playing)\b/i.test(text)) return "";
+  // "from any EDM lane" and similar request scaffolding is domain intent,
+  // not an artist name. Let the domain gate handle it downstream.
+  if (/^(?:any|all|open|broad|various|different|multiple|no matter|regardless(?: of)?)\s+(?:edm|electronic(?: dance)?(?: music)?|dance music|genres?|lanes?|styles?|music)(?:\s+(?:lane|lanes|genre|genres|style|styles|music))?$/i.test(text)) return "";
   if (/^(?:the\s+)?(?:\d{4}s?|\d0s|19\d0s|20\d0s|2000s|00s|nineties|eighties|seventies|era|decade)$/i.test(text)) return "";
   if (/^(?:this|that|current|playing|now|music|tracks?|songs?|genre|vibe|style|era)$/i.test(text)) return "";
+  if (looksLikeStyleEntityCandidate(text)) return "";
+  return text;
+}
+
+function normalizeLabelCandidate(value) {
+  const text = cleanText(value)
+    .replace(/^(?:the\s+)?(?:label|record label)\s+/i, "")
+    .trim();
+  if (!text || text.length < 2 || text.length > 80) return "";
+  if (/^(?:music|records?|recordings?|sound|sounds|audio|label)$/i.test(text)) return "";
+  if (/^(?:the\s+)?(?:\d{4}s?|\d0s|19\d0s|20\d0s|2000s|00s|nineties|eighties|seventies|era|decade)$/i.test(text)) return "";
   if (looksLikeStyleEntityCandidate(text)) return "";
   return text;
 }
@@ -1679,7 +2113,10 @@ function extractPromptLabels(options = {}) {
   ];
   for (const pattern of patterns) {
     for (const match of request.matchAll(pattern)) {
-      const label = normalizeEntityCandidate(match[1]);
+      // Labels may legitimately end in generic words such as "Music" or
+      // "Records" (for example, "1985 Music"). Artist/style normalization
+      // intentionally strips those suffixes, so labels need their own path.
+      const label = normalizeLabelCandidate(match[1]);
       if (label) found.push(label);
     }
   }
@@ -1696,10 +2133,17 @@ function detectTargetGenres(options = {}) {
     ...detected.terms
   ].filter(Boolean).filter((term) => (
     !explicitPhrase ||
-    normalize(term) === normalize(explicitPhrase) ||
-    !parents.includes(normalize(term))
+    normalizeGenreKey(term) === normalizeGenreKey(explicitPhrase) ||
+    !parents.includes(normalizeGenreKey(term))
   ));
-  return uniqueTerms(pruneBroadGenreTerms(terms), 12);
+  const canonicalTerms = pruneBroadGenreTerms(terms);
+  const seen = new Set();
+  return canonicalTerms.filter((term) => {
+    const key = normalizeGenreKey(term);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 12);
 }
 
 function requestAsksForOmnivoreDiscovery(options = {}, targetGenres = []) {
@@ -1712,6 +2156,140 @@ function requestAsksForOmnivoreDiscovery(options = {}, targetGenres = []) {
   if (anyGenreLanguage) return true;
   if (explicitGenre) return false;
   return /\b(?:surprise me|anything good|good music|great music|best music|best tracks|hidden gems|wide net|open discovery|omnivore|adventurous|branch out|branching out|outside my usual|outside known taste)\b/.test(text);
+}
+
+function isBroadElectronicDiscovery(options = {}, targetGenres = []) {
+  const rawGenre = normalize(options.genres || "");
+  const text = normalize(requestText(options));
+  const broadGenre = /^(?:edm|electronic|electronic music|electronic dance music|dance music)$/.test(rawGenre) ||
+    (targetGenres || []).some((term) => /^(?:edm|electronic|electronic music|electronic dance music|dance music)$/.test(normalize(term)));
+  const broadPhrase = /\b(?:any|all|open|broad|various|different|multiple)\b.{0,32}\b(?:edm|electronic dance music|electronic music|dance music)\b/.test(text) ||
+    /\b(?:edm|electronic dance music|electronic music|dance music)\b.{0,20}\b(?:lane|lanes|genre|genres|style|styles)\b/.test(text);
+  return broadGenre || broadPhrase;
+}
+
+function semanticOnlyQueryFor(query = "", profile = {}) {
+  if (!profile.targetGenres?.length && !profile.isBroadElectronicDiscovery) return false;
+  const promptRoute = cleanText(profile.promptIntent?.route || "").toLowerCase();
+  const normalizedQuery = normalize(query);
+  if (!normalizedQuery) return false;
+
+  // Explicit themes can still be useful catalog anchors (for example,
+  // "love progressive house"). Activity and sonic-descriptor language is not
+  // a reliable TIDAL catalog anchor and belongs in ranking instead.
+  if (promptRoute === "theme" && (profile.promptIntent?.themeTerms || []).some((term) => containsEntityTerm(query, term))) {
+    return false;
+  }
+
+  const entityTerms = uniqueTerms([
+    ...(profile.requestedArtists || []),
+    ...(profile.seedArtists || []),
+    ...(profile.requestedLabels || []),
+    ...(profile.genreProfile?.artists || []),
+    ...(profile.genreProfile?.labels || []),
+    ...genreArtistAnchors(profile),
+    ...genreLabelSeeds(profile),
+    ...ELECTRONIC_DOMAIN_TERMS,
+    ...(profile.targetGenres || []),
+    ...(profile.genreProfile?.parentGenres || [])
+  ], 360)
+    .sort((left, right) => normalize(right).length - normalize(left).length);
+  let remainder = ` ${normalizedQuery} `;
+  for (const term of entityTerms) {
+    const normalizedTerm = normalize(term);
+    if (!normalizedTerm) continue;
+    remainder = remainder.replace(new RegExp(`\\b${normalizedTerm.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\b`, "g"), " ");
+  }
+  const tokens = remainder
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((token) => !/^\d{4}$/.test(token) && !["new", "release", "releases", "track", "tracks", "song", "songs"].includes(token));
+  if (!tokens.length) return false;
+  const semanticTokens = new Set([...SEMANTIC_QUERY_TERMS].flatMap((term) => normalize(term).split(/\s+/)));
+  semanticTokens.add("night");
+  semanticTokens.add("late");
+  return tokens.every((token) => semanticTokens.has(token));
+}
+
+function queryGenerationInfo(query = "", profile = {}, options = {}) {
+  const text = cleanText(query);
+  const knownArtists = uniqueTerms([
+    ...(profile.requestedArtists || []),
+    ...(profile.seedArtists || []),
+    ...(profile.learnedTasteArtists || []),
+    ...(Array.isArray(options.learnedTasteArtists) ? options.learnedTasteArtists : []),
+    ...(profile.genreProfile?.artists || []),
+    ...genreArtistAnchors(profile),
+    ...EDM_DISCOVERY_ARTISTS
+  ], 360);
+  const artist = knownArtists.find((value) => artistNamesMatch(text, value, { contains: true })) || "";
+  const knownLabels = uniqueTerms([
+    ...(profile.requestedLabels || []),
+    ...(profile.learnedTasteLabels || []),
+    ...(Array.isArray(options.learnedTasteLabels) ? options.learnedTasteLabels : []),
+    ...(profile.genreProfile?.labels || []),
+    ...genreLabelSeeds(profile),
+    ...EDM_DISCOVERY_LABELS
+  ], 360);
+  const label = knownLabels.find((value) => entityEvidenceMatches(text, value)) || "";
+  const learnedArtist = (profile.learnedTasteArtists || []).find((value) => artistNamesMatch(text, value, { contains: true })) || "";
+  const learnedLabel = (profile.learnedTasteLabels || []).find((value) => entityEvidenceMatches(text, value)) || "";
+  const semanticOnly = semanticOnlyQueryFor(text, profile);
+  const target = (profile.targetGenres || []).find((term) => containsEntityTerm(text, term) || containsGenreTerm(text, term)) ||
+    (profile.isBroadElectronicDiscovery ? ELECTRONIC_DOMAIN_TERMS.find((term) => containsEntityTerm(text, term)) || "" : "");
+  if (artist) {
+    return {
+      source: (profile.requestedArtists || []).some((value) => artistNamesMatch(value, artist))
+        ? "current-intent artist seed"
+        : (learnedArtist ? "learned taste artist seed" : "trusted artist/scene anchor"),
+      seedType: "artist",
+      seed: artist,
+      priorityTier: 10,
+      semanticOnly: false,
+      target
+    };
+  }
+  if (label) {
+    return {
+      source: (profile.requestedLabels || []).some((value) => entityEvidenceMatches(value, label))
+        ? "requested label seed"
+        : (learnedLabel ? "learned taste label seed" : "trusted label/scene anchor"),
+      seedType: "label",
+      seed: label,
+      priorityTier: 20,
+      semanticOnly: false,
+      target
+    };
+  }
+  if (semanticOnly) {
+    return {
+      source: "semantic/activity expansion",
+      seedType: "semantic",
+      seed: "",
+      priorityTier: 90,
+      semanticOnly: true,
+      target
+    };
+  }
+  if (target) {
+    return {
+      source: "genre/domain lane",
+      seedType: "genre",
+      seed: target,
+      priorityTier: 50,
+      semanticOnly: false,
+      target
+    };
+  }
+  return {
+    source: "catalog exploration",
+    seedType: "exploratory",
+    seed: "",
+    priorityTier: 80,
+    semanticOnly: false,
+    target: ""
+  };
 }
 
 function detectSeedVibes(options = {}, seedArtists = []) {
@@ -1779,7 +2357,9 @@ function intentDebugFor(profile = {}, options = {}) {
     activityContext: promptIntent.activityTerms || [],
     activitySource: promptIntent.activitySource || "not specified",
     outsideTaste: promptIntent.allowOutsideTaste ? "allowed when prompt evidence matches" : "limited",
+    outsideTasteMode: promptIntent.outsideTasteMode || "none",
     tasteInfluence: promptIntent.tasteInfluence || tasteApplicationFor(profile),
+    tastePolicy: promptIntent.tastePolicy || "saved taste is a soft preference, not a genre whitelist",
     genreConstraint: promptIntent.genreConstraint || (profile.targetGenres.length ? "hard" : "none"),
     verificationMethods: promptIntent.verificationMethods || [],
     requestedGenre,
@@ -1790,7 +2370,12 @@ function intentDebugFor(profile = {}, options = {}) {
     requestedCharacteristics: (profile.trackCharacteristics || []).slice(0, 8),
     requestedArtists: (profile.requestedArtists || profile.seedArtists || []).slice(0, 8),
     requestedLabels: profile.requestedLabels.slice(0, 8),
+    querySeedPolicy: profile.querySeedPolicy || "not specified",
+    standbyTasteReservoir: profile.standbyTasteReservoir ? "enabled" : "off",
+    filteredPlanArtists: (profile.filteredPlanArtists || []).slice(0, 12),
+    filteredPlanLabels: (profile.filteredPlanLabels || []).slice(0, 12),
     omnivoreDiscovery: profile.isOmnivoreDiscovery ? "enabled" : "off",
+    electronicDomain: profile.isBroadElectronicDiscovery ? "EDM parent domain" : "off",
     genreProfile: profile.genreProfile?.strict ? {
       name: profile.genreProfile.name,
       parentGenres: profile.genreProfile.parentGenres,
@@ -1801,12 +2386,18 @@ function intentDebugFor(profile = {}, options = {}) {
     scoringMode: profile.scoringMode,
     scoringModeLabel: scoringModeLabel(profile.scoringMode),
     learnedTaste: tasteApplicationFor(profile),
-    progressiveBias: profile.isProgressiveTarget ? "relevant to prompt" : "off unless explicitly requested"
+    progressiveBias: isProgressiveSceneTarget(profile) ? "relevant to prompt" : "off unless explicitly requested"
   };
 }
 
 function genreDiscoverySeeds(profile = {}) {
   if (!profile.targetGenres?.length || profile.isProgressiveTarget) return [];
+  if (profile.isProgressiveTranceTarget) {
+    return uniqueValues([
+      ...progressiveSceneLabelsFor(profile),
+      ...TRANCE_FORWARD_ARTISTS
+    ]);
+  }
   const seedValues = [...(profile.genreProfile?.labels || []), ...(profile.genreProfile?.artists || [])];
   for (const [genre, seeds] of GENRE_DISCOVERY_SEEDS) {
     if (seedGenreMatchesTarget(profile.targetGenres, genre)) {
@@ -1818,6 +2409,7 @@ function genreDiscoverySeeds(profile = {}) {
 
 function genreArtistAnchors(profile = {}) {
   if (!profile.targetGenres?.length || profile.isProgressiveTarget) return [];
+  if (profile.isProgressiveTranceTarget) return TRANCE_FORWARD_ARTISTS.slice();
   const seedValues = [...(profile.genreProfile?.artists || [])];
   for (const [genre, seeds] of GENRE_ARTIST_ANCHORS) {
     if (seedGenreMatchesTarget(profile.targetGenres, genre)) {
@@ -1825,6 +2417,173 @@ function genreArtistAnchors(profile = {}) {
     }
   }
   return uniqueValues(seedValues);
+}
+
+const GENERIC_ENTITY_WORDS = new Set([
+  "music",
+  "records",
+  "recordings",
+  "record",
+  "sound",
+  "sounds",
+  "audio",
+  "label",
+  "official",
+  "group",
+  "ltd",
+  "llc",
+  "inc"
+]);
+
+function entityEvidenceMatches(left = "", right = "") {
+  const leftKey = normalize(left);
+  const rightKey = normalize(right);
+  if (!leftKey || !rightKey) return false;
+  const leftTokens = leftKey.split(/\s+/).filter(Boolean);
+  const rightTokens = rightKey.split(/\s+/).filter(Boolean);
+  const leftMeaningful = leftTokens.filter((token) => !GENERIC_ENTITY_WORDS.has(token));
+  const rightMeaningful = rightTokens.filter((token) => !GENERIC_ENTITY_WORDS.has(token));
+
+  // Generic suffixes such as "Music" and "Records" are not an entity on
+  // their own. In particular, "Music" must not satisfy "1985 Music".
+  if (!leftMeaningful.length || !rightMeaningful.length) return false;
+  if (leftKey === rightKey) return true;
+
+  const shorter = leftTokens.length <= rightTokens.length ? leftMeaningful : rightMeaningful;
+  const longer = leftTokens.length <= rightTokens.length ? rightTokens : leftTokens;
+  return shorter.every((token) => longer.includes(token));
+}
+
+function hardGenreConstraintFor(profile = {}) {
+  return Boolean(
+    profile.targetGenres?.length &&
+    profile.promptIntent?.genreConstraint === "hard" &&
+    !profile.isOmnivoreDiscovery
+  );
+}
+
+function genreSeedUniverseFor(profile = {}) {
+  return uniqueValues([
+    ...genreDiscoverySeeds(profile),
+    ...genreArtistAnchors(profile),
+    ...(isProgressiveSceneTarget(profile)
+      ? [
+        ...(profile.isProgressiveTranceTarget ? TRANCE_FORWARD_ARTISTS : PROGRESSIVE_ARTISTS),
+        ...progressiveSceneLabelsFor(profile)
+      ]
+      : []),
+    ...(profile.genreProfile?.artists || []),
+    ...(profile.genreProfile?.labels || [])
+  ], 220);
+}
+
+function incompatibleGenreSeedUniverseFor(profile = {}) {
+  // Progressive, techno, house, trance, and bass artists are all valid
+  // evidence inside an open EDM domain. They are incompatible only when the
+  // request names a narrower non-progressive lane.
+  if (isProgressiveSceneTarget(profile) || profile.isBroadElectronicDiscovery) return [];
+  return uniqueValues([
+    ...PROGRESSIVE_ARTISTS,
+    ...KNOWN_PROGRESSIVE_TASTE_CONTAMINATION,
+    ...GENRE_ARTIST_ANCHORS
+      // EDM is a parent domain and its anchors span house, techno, trance,
+      // and bass. Do not treat those anchors as incompatible with a child
+      // lane merely because the parent label is not an exact match.
+      .filter(([genre]) => genre !== "edm" && !(profile.targetGenres || []).some((target) => seedGenreMatchesTarget([target], genre)))
+      .flatMap(([, seeds]) => seeds)
+  ], 220);
+}
+
+function isGenreCompatibleSeed(value = "", profile = {}, allowed = []) {
+  if (!hardGenreConstraintFor(profile)) return true;
+  const candidate = cleanText(value);
+  if (!candidate) return false;
+  const explicitlyAllowed = [...(profile.requestedArtists || []), ...allowed]
+    .some((seed) => artistNamesMatch(candidate, seed, { contains: true }) || entityEvidenceMatches(candidate, seed));
+  if (explicitlyAllowed) return true;
+  if (incompatibleGenreSeedUniverseFor(profile).some((seed) => (
+    artistNamesMatch(candidate, seed, { contains: true }) || entityEvidenceMatches(candidate, seed)
+  ))) return false;
+  if (genreSeedUniverseFor(profile).some((seed) => (
+    artistNamesMatch(candidate, seed, { contains: true }) || entityEvidenceMatches(candidate, seed)
+  ))) return true;
+  // Unknown plan artists remain eligible for later metadata scoring. The
+  // hard boundary is against known incompatible seeds, not a requirement
+  // that every artist already exist in the local anchor ontology.
+  return true;
+}
+
+function filterGenreCompatibleSeeds(values = [], profile = {}, allowed = []) {
+  return uniqueValues(values).filter((value) => isGenreCompatibleSeed(value, profile, allowed));
+}
+
+function isGenreCompatibleLabel(value = "", profile = {}, allowed = []) {
+  if (!hardGenreConstraintFor(profile)) return true;
+  const candidate = cleanText(value);
+  if (!candidate) return false;
+  const meaningful = normalize(candidate).split(/\s+/).filter((token) => token && !GENERIC_ENTITY_WORDS.has(token));
+  if (!meaningful.length) return false;
+  if (uniqueValues([
+    ...(profile.requestedLabels || []),
+    ...allowed,
+    ...genreDiscoverySeeds(profile),
+    ...(profile.genreProfile?.labels || [])
+  ]).some((seed) => entityEvidenceMatches(candidate, seed))) return true;
+  if (!isProgressiveSceneTarget(profile) && progressiveSceneLabelsFor(profile).some((label) => entityEvidenceMatches(candidate, label))) return false;
+  // Preserve unknown label candidates for metadata scoring; unlike a generic
+  // "Music" token, an unseen multi-word label can still be a valid lane seed.
+  return true;
+}
+
+function filterGenreCompatibleLabels(values = [], profile = {}, allowed = []) {
+  return uniqueValues(values).filter((value) => isGenreCompatibleLabel(value, profile, allowed));
+}
+
+function queryMentionsIncompatibleSeed(query = "", profile = {}, incompatibleSeeds = []) {
+  if (!hardGenreConstraintFor(profile)) return false;
+  return incompatibleSeeds.some((seed) => (
+    artistNamesMatch(query, seed, { contains: true }) || entityEvidenceMatches(query, seed)
+  ));
+}
+
+function queryIsGenreCompatible(query = "", profile = {}, incompatibleSeeds = []) {
+  if (!hardGenreConstraintFor(profile)) return true;
+  if (queryMentionsIncompatibleSeed(query, profile, incompatibleSeeds)) return false;
+  if (semanticOnlyQueryFor(query, profile)) return false;
+  const terms = [
+    ...(profile.targetGenres || []),
+    ...(profile.genreProfile?.parentGenres || []),
+    ...(profile.genreProfile?.keywords || []),
+    ...(profile.requestedLabels || []),
+    ...(profile.isBroadElectronicDiscovery ? ELECTRONIC_DOMAIN_TERMS : []),
+    ...genreSeedUniverseFor(profile),
+    ...(profile.requestedArtists || [])
+  ];
+  return terms.some((term) => (
+    containsNormalized(query, term) ||
+    ((profile.targetGenres || []).some((target) => normalizeGenreKey(target) === normalizeGenreKey(term)) && containsGenreTerm(query, term)) ||
+    entityEvidenceMatches(query, term) ||
+    artistNamesMatch(query, term, { contains: true })
+  ));
+}
+
+function incompatiblePlanArtistsFor(options = {}, profile = {}) {
+  const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
+  return uniqueTerms([
+    ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
+    ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : []),
+    ...(Array.isArray(plan.relatedArtists) ? plan.relatedArtists : []),
+    ...(Array.isArray(plan.similarArtists) ? plan.similarArtists : [])
+  ].filter((artist) => !isGenericSeedArtist(artist)), 32)
+    .filter((artist) => !isGenreCompatibleSeed(artist, profile, profile.requestedArtists || []));
+}
+
+function filterHardGenreQueries(queries = [], options = {}, profile = {}, limit = Number.MAX_SAFE_INTEGER) {
+  const incompatible = incompatiblePlanArtistsFor(options, profile);
+  return uniqueValues(queries.map(cleanText).filter(Boolean))
+    .filter((query) => !semanticOnlyQueryFor(query, profile))
+    .filter((query) => queryIsGenreCompatible(query, profile, incompatible))
+    .slice(0, limit);
 }
 
 function buildDiscoveryProfile(options = {}) {
@@ -1839,36 +2598,95 @@ function buildDiscoveryProfile(options = {}) {
   const requestedArtists = uniqueTerms([
     ...extractPromptArtists(options),
     ...extractSeedArtists(options)
-  ], 12);
+  ].filter((artist) => !isGenericSeedArtist(artist)), 12);
   const pureRequestedArtistSearch = scoringMode === "pure" && requestedArtists.length;
   const targetGenres = detectTargetGenres(options);
+  const broadElectronicDiscovery = isBroadElectronicDiscovery(options, targetGenres);
   const isOmnivoreDiscovery = requestAsksForOmnivoreDiscovery(options, targetGenres);
+  const standbyTasteReservoir = (
+    /^(?:1|true|yes)$/i.test(String(options.standbyTasteReservoir || "")) ||
+    (/^(?:1|true|yes)$/i.test(String(options.standbyPool || "")) &&
+      !cleanText(options.genres) &&
+      !cleanText(options.mood) &&
+      /\b(?:taste\s+profile|use\s+my\s+taste|based\s+on\s+my\s+taste|current\s+taste)\b/i.test(String(options.request || "")))
+  ) && !cleanText(options.genres) && !cleanText(options.mood);
+  const tasteProfileLed = promptIntent.outsideTasteMode === "taste-profile" || standbyTasteReservoir;
+  const positiveTargetText = normalize(`${options.genres || ""} ${positiveIntentText(options.request || "")}`);
+  const isProgressiveTranceTarget = /\bprogressive trance\b/.test(positiveTargetText) ||
+    targetGenres.some((term) => /\bprogressive trance\b/.test(normalize(term)));
+  const isProgressiveTarget = /\bprogressive house\b|\bmelodic progressive\b|\bdeep progressive\b|\borganic progressive\b/.test(positiveTargetText) ||
+    targetGenres.some((term) => /\bprogressive house\b|\bmelodic progressive\b|\bdeep progressive\b|\borganic progressive\b/.test(normalize(term)));
+  const preliminaryProfile = {
+    targetGenres,
+    isBroadElectronicDiscovery: broadElectronicDiscovery,
+    isOmnivoreDiscovery,
+    isProgressiveTranceTarget,
+    isProgressiveTarget,
+    genreProfile: dynamicGenreProfileFor(options, targetGenres),
+    requestedArtists,
+    promptIntent
+  };
+  const hardGenreConstraint = hardGenreConstraintFor({
+    ...preliminaryProfile,
+    promptIntent
+  });
+  const compatiblePlanArtists = hardGenreConstraint
+    ? filterGenreCompatibleSeeds(planArtists, preliminaryProfile, requestedArtists)
+    : planArtists;
+  const explicitRequestedLabels = uniqueTerms(extractPromptLabels(options), 12);
+  const compatiblePlanLabels = hardGenreConstraint
+    ? filterGenreCompatibleLabels(planLabels, preliminaryProfile, explicitRequestedLabels)
+    : planLabels;
+  const compatiblePlanCandidateArtists = hardGenreConstraint
+    ? filterGenreCompatibleSeeds(
+      Array.isArray(plan.candidateArtists) ? plan.candidateArtists : [],
+      preliminaryProfile,
+      requestedArtists
+    )
+    : planArtists;
+  // Model candidateArtists are current-lane suggestions and may help sparse
+  // catalogue metadata. Model seedArtists, remembered artists, and learned
+  // taste are not current-lane evidence; they must not silently become a
+  // genre whitelist or spend the hard-lane crawl budget.
   const seedArtists = uniqueTerms([
     ...requestedArtists,
-    ...(pureRequestedArtistSearch || isOmnivoreDiscovery ? [] : planArtists.slice(0, 8))
+    ...(pureRequestedArtistSearch || isOmnivoreDiscovery
+      ? []
+      : (hardGenreConstraint ? compatiblePlanCandidateArtists : compatiblePlanArtists).slice(0, 8))
   ], 12);
   const requestedLabels = uniqueTerms([
-    ...extractPromptLabels(options),
-    ...(isOmnivoreDiscovery ? [] : planLabels)
+    ...explicitRequestedLabels,
+    // A taste-profile request may use learned labels as candidate anchors,
+    // but those labels are not explicit user constraints. Promoting them to
+    // requested-label evidence lets a generic catalogue artist (for example
+    // a "Lost & Found" meditation upload) masquerade as a strong match.
+    ...(isOmnivoreDiscovery || hardGenreConstraint || tasteProfileLed ? [] : compatiblePlanLabels)
   ], 12);
-  const genreProfile = dynamicGenreProfileFor(options, targetGenres);
-  const vibeResult = detectSeedVibes(options, seedArtists);
+  const genreProfile = preliminaryProfile.genreProfile;
+  // Standby's neutral taste reservoir contains retrieval policy words such as
+  // "low-exposure", "deep", and "non-obvious". They are not a user request
+  // for one sonic lane. Do not let ontology synonyms turn that policy copy
+  // into hidden positive vibes or literal catalog queries.
+  const vibeResult = standbyTasteReservoir
+    ? { terms: [], explicit: [], inferred: [], source: "not specified" }
+    : detectSeedVibes(options, seedArtists);
   const inferredPromptVibes = cleanText(options.mood) || vibeResult.explicit.length
     ? []
     : (promptIntent.inferredVibes || []);
-  const vibeTerms = uniqueTerms([...vibeResult.terms, ...inferredPromptVibes], 16);
-  const trackCharacteristics = detectTrackCharacteristics(options);
+  const vibeTerms = uniqueTerms(standbyTasteReservoir ? [] : [...vibeResult.terms, ...inferredPromptVibes], 16);
+  const trackCharacteristics = standbyTasteReservoir ? [] : detectTrackCharacteristics(options);
   const releaseRange = parseYearRange(options);
   const explicitTarget = cleanText(options.genres || options.request || "");
-  const positiveTargetText = normalize(`${options.genres || ""} ${positiveIntentText(options.request || "")}`);
-  const isProgressiveTarget = /\bprogressive house\b|\bmelodic progressive\b|\bdeep progressive\b|\borganic progressive\b/.test(positiveTargetText) ||
-    targetGenres.some((term) => /\bprogressive house\b|\bmelodic progressive\b|\bdeep progressive\b|\borganic progressive\b/.test(normalize(term)));
+  // Progressive Trance shares the specialized progressive planner family, but
+  // remains a distinct hard genre. Keep that planning distinction separate
+  // from the progressive-house scoring/admission flag.
+  const isProgressivePlanningTarget = Boolean(isProgressiveTarget || isProgressiveTranceTarget);
   const isGenreOnlyTarget = Boolean(targetGenres.length && !isProgressiveTarget && !seedArtists.length);
   const isGenreDiscoveryTarget = Boolean(targetGenres.length && !isProgressiveTarget);
   const primaryTarget = targetGenres[0] ||
     cleanText(options.genres) ||
     (promptIntent.primarySearchTerm && ["theme", "activity", "open"].includes(promptIntent.route) ? promptIntent.primarySearchTerm : "") ||
-    (isOmnivoreDiscovery ? "" : cleanText(options.request).replace(/\b(?:make|create|find|give me|recommend|playlist|tracks?|songs?|like|similar|based on|seeded)\b/gi, " ").trim());
+    (isOmnivoreDiscovery || tasteProfileLed ? "" : cleanText(options.request).replace(/\b(?:make|create|find|give me|recommend|playlist|tracks?|songs?|like|similar|based on|seeded)\b/gi, " ").trim());
   const hasExplicitDiscoveryIntent = Boolean(
     requestedArtists.length ||
     requestedLabels.length ||
@@ -1900,10 +2718,24 @@ function buildDiscoveryProfile(options = {}) {
     explicitTarget,
     hasExplicitDiscoveryIntent,
     isOmnivoreDiscovery,
+    tasteProfileLed,
+    standbyTasteReservoir,
+    isBroadElectronicDiscovery: broadElectronicDiscovery,
+    isProgressiveTranceTarget,
     isProgressiveTarget,
+    isProgressivePlanningTarget,
     isGenreOnlyTarget,
     isGenreDiscoveryTarget,
-    hasSeedVibe: Boolean(seedArtists.length || vibeTerms.length)
+    hasSeedVibe: Boolean(seedArtists.length || vibeTerms.length),
+    querySeedPolicy: hardGenreConstraint
+      ? "current request is the hard search lane; model/taste seeds are soft suggestions and must earn current-lane metadata"
+      : "prompt and taste seeds allowed by scoring mode",
+    tastePolicy: promptIntent.tastePolicy || "saved taste is a soft preference, not a genre whitelist",
+    filteredPlanArtists: planArtists.filter((artist) => {
+      const queryEligible = hardGenreConstraint ? compatiblePlanCandidateArtists : compatiblePlanArtists;
+      return !queryEligible.some((allowed) => normalize(allowed) === normalize(artist));
+    }),
+    filteredPlanLabels: planLabels.filter((label) => !compatiblePlanLabels.some((allowed) => normalize(allowed) === normalize(label)))
   };
   profile.intent = intentDebugFor(profile, options);
   profile.tasteApplication = profile.intent.learnedTaste;
@@ -1914,11 +2746,12 @@ function labelText(track = {}) {
   return cleanText(track.label || track.tidal?.label || "");
 }
 
-function matchingSceneLabel(value) {
+function matchingSceneLabel(value, profile = {}) {
   const label = normalize(value);
   if (!label) return "";
-  return PROGRESSIVE_LABELS.find((knownLabel) => {
-    return containsEntityTerm(value, knownLabel) || containsEntityTerm(knownLabel, value);
+  const labels = progressiveSceneLabelsFor(profile);
+  return labels.find((knownLabel) => {
+    return entityEvidenceMatches(value, knownLabel);
   }) || "";
 }
 
@@ -2041,22 +2874,74 @@ function branchArtistSeeds(options = {}, profile = buildDiscoveryProfile(options
     options.nowPlaying?.album
   ].map(cleanText).join(" "));
   const requestedKeys = new Set([...(profile.requestedArtists || []), ...(profile.seedArtists || [])].map(artistIdentityKey));
-  return uniqueTerms([...optionSeeds, ...planSeeds, ...remixerSeeds].flatMap(splitArtists), limit)
-    .filter((artist) => !isGenericSeedArtist(artist) && !requestedKeys.has(artistIdentityKey(artist)));
+  return filterGenreCompatibleSeeds(
+    uniqueTerms([...optionSeeds, ...planSeeds, ...remixerSeeds].flatMap(splitArtists), limit),
+    profile,
+    profile.requestedArtists || []
+  ).filter((artist) => !isGenericSeedArtist(artist) && !requestedKeys.has(artistIdentityKey(artist)));
 }
 
 function branchLabelSeeds(options = {}, profile = buildDiscoveryProfile(options), limit = 24) {
   const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
-  return uniqueTerms([
+  return filterGenreCompatibleLabels(uniqueTerms([
     ...(profile.requestedLabels || []),
-    ...(Array.isArray(plan.candidateLabels) ? plan.candidateLabels : []),
-    ...(Array.isArray(plan.relatedLabels) ? plan.relatedLabels : []),
+    ...(profile.tasteProfileLed ? [] : (Array.isArray(plan.candidateLabels) ? plan.candidateLabels : [])),
+    ...(profile.tasteProfileLed ? [] : (Array.isArray(plan.relatedLabels) ? plan.relatedLabels : [])),
     ...optionValues(options, ["branchLabels", "relatedLabels", "radioLabels", "remixerLabels", "labelSeeds"])
-  ], limit);
+  ], limit), profile, profile.requestedLabels || []);
 }
 
 function artistMatchesSeedList(artist = "", seeds = []) {
   return seeds.some((seed) => artistMatchesKnownName(artist, seed));
+}
+
+function tasteAnchorEvidenceFor(track = {}, options = {}, profile = {}) {
+  if (!profile.tasteProfileLed) {
+    return {
+      learnedArtist: "",
+      learnedLabel: "",
+      relatedArtist: "",
+      relatedLabel: ""
+    };
+  }
+
+  const learnedArtists = uniqueTerms([
+    ...(Array.isArray(profile.learnedTasteArtists) ? profile.learnedTasteArtists : []),
+    ...(Array.isArray(options.learnedTasteArtists) ? options.learnedTasteArtists : [])
+  ], 32).filter((artist) => !isGenericSeedArtist(artist));
+  const learnedLabels = uniqueTerms([
+    ...(Array.isArray(profile.learnedTasteLabels) ? profile.learnedTasteLabels : []),
+    ...(Array.isArray(options.learnedTasteLabels) ? options.learnedTasteLabels : [])
+    ], 36);
+  const relatedArtists = optionValues(options, [
+    "similarArtistSeeds",
+    "branchArtistSeeds",
+    "relatedArtistSeeds",
+    "radioArtistSeeds",
+    "artistRadioSeeds"
+  ]).filter((artist) => !isGenericSeedArtist(artist));
+  const relatedLabels = optionValues(options, [
+    "similarLabelSeeds",
+    "branchLabels",
+    "relatedLabels",
+    "radioLabels",
+    "labelSeeds"
+  ]);
+  const relatedArtistEvidence = Array.isArray(options.similarArtistEvidence)
+    ? options.similarArtistEvidence
+    : [];
+
+  return {
+    learnedArtist: learnedArtists.find((artist) => artistMatchesKnownName(track.artist, artist)) || "",
+    learnedLabel: learnedLabels.find((label) => entityEvidenceMatches(labelText(track), label)) || "",
+    relatedArtist: relatedArtists.find((artist) => artistMatchesKnownName(track.artist, artist)) || "",
+    relatedLabel: relatedLabels.find((label) => entityEvidenceMatches(labelText(track), label)) || "",
+    relatedArtistSimilarity: (() => {
+      const match = relatedArtistEvidence.find((item) => artistNamesMatch(track.artist, item?.name, { contains: true }));
+      const score = Number(match?.matchScore || 0);
+      return score > 0 ? Math.max(0, Math.min(1, score)) : 0.5;
+    })()
+  };
 }
 
 function textMentionsSeed(text = "", seeds = []) {
@@ -2071,11 +2956,21 @@ function textMentionsSeed(text = "", seeds = []) {
 function isGenericSeedArtist(value = "") {
   const text = normalize(value);
   if (!text) return true;
-  if (/^(?:various artists?|unknown artist|unknown|n a|na|va|v a|soundtrack)$/i.test(cleanText(value))) return true;
+  if (/^(?:various artists?|unknown artist|unknown|n a|na|va|v a|soundtrack|source|sources|artist|artists)$/.test(text)) return true;
   if (/^(?:house music|techno music|trance music|psytrance|ambient music|electronic dance music|edm|deep house|progressive house|melodic house|organic house|tech house|dance music)$/i.test(cleanText(value))) return true;
   const parts = splitArtists(value);
   if (parts.length >= 3 && /\b(?:house|techno|trance|psytrance|ambient|edm|music)\b/.test(text)) return true;
   return false;
+}
+
+function tasteSeedExclusionNames(options = {}) {
+  const expansion = options.similarArtistExpansion && typeof options.similarArtistExpansion === "object"
+    ? options.similarArtistExpansion
+    : {};
+  return uniqueTerms([
+    ...(Array.isArray(options.tasteSeedExclusions) ? options.tasteSeedExclusions : []),
+    ...(Array.isArray(expansion.skippedSeeds) ? expansion.skippedSeeds.map((item) => item?.artist) : [])
+  ], 48).filter((artist) => !isGenericSeedArtist(artist));
 }
 
 function promptIntentSearchQueries(options = {}, profile = buildDiscoveryProfile(options), limit = 42) {
@@ -2266,10 +3161,77 @@ function omnivoreDriftReason(track = {}, options = {}, profile = buildDiscoveryP
   return "Open any-genre discovery candidate lacks cross-genre taste-bridge evidence.";
 }
 
+function electronicDomainDriftReason(track = {}, options = {}, profile = buildDiscoveryProfile(options)) {
+  if (!profile.isBroadElectronicDiscovery) return "";
+
+  const metadataText = normalize([
+    track.artist,
+    track.title,
+    track.album,
+    labelText(track),
+    track.genre,
+    track.genres,
+    track.subgenre,
+    track.subgenres,
+    track.tidal?.genre,
+    track.tidal?.genres,
+    track.tidal?.artistGenre,
+    track.tidal?.artistGenres,
+    track.beatport?.genre,
+    track.beatport?.subgenre
+  ].flatMap((value) => Array.isArray(value) ? value : [value]).filter(Boolean).join(" "));
+  const officialGenreText = normalize([
+    ...trackGenreValues(track),
+    track.subgenre,
+    track.subgenres,
+    track.beatport?.genre,
+    track.beatport?.subgenre
+  ].flatMap((value) => Array.isArray(value) ? value : [value]).filter(Boolean).join(" "));
+  const nonElectronic = /\b(?:rock|progressive rock|psychedelic rock|country|folk|blues|jazz|classical|metal|hip hop|rap|r and b|soul|soundtrack|film score|original score|spoken word|audiobook|podcast|comedy)\b/.test(officialGenreText || metadataText);
+  const electronicEvidence = ELECTRONIC_DOMAIN_TERMS.some((term) => containsEntityTerm(officialGenreText, term)) ||
+    /\b(?:electronic|edm|dance music|house|techno|trance|dubstep|bass|drum and bass|dnb|breakbeat|electronica)\b/.test(officialGenreText) ||
+    [...(profile.seedArtists || []), ...(profile.requestedArtists || []), ...PROGRESSIVE_ARTISTS, ...TRANCE_FORWARD_ARTISTS, ...genreArtistAnchors(profile)]
+      .some((artist) => artistMatchesKnownName(track.artist, artist)) ||
+    [...EDM_DISCOVERY_LABELS, ...progressiveSceneLabelsFor(profile)]
+      .some((label) => entityEvidenceMatches(labelText(track), label));
+
+  if (nonElectronic && !electronicEvidence) {
+    return "Outside the EDM parent domain; catalog metadata identifies a non-electronic lane.";
+  }
+  return "";
+}
+
 function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDiscoveryProfile(options), history = null, freshArtistAvoidance = null) {
+  const tasteProfileLed = Boolean(
+    profile.tasteProfileLed ||
+    profile.promptIntent?.outsideTasteMode === "taste-profile" ||
+    (/^(?:1|true|yes)$/i.test(String(options.standbyPool || "")) &&
+      !cleanText(options.genres) &&
+      !cleanText(options.mood) &&
+      /\b(?:taste\s+profile|use\s+my\s+taste|based\s+on\s+my\s+taste|current\s+taste)\b/i.test(String(options.request || "")))
+  );
+  if (tasteProfileLed) {
+    const excludedTasteSeeds = new Set(tasteSeedExclusionNames(options).map(artistIdentityKey));
+    profile.learnedTasteArtists = uniqueTerms([
+      ...(Array.isArray(options.learnedTasteArtists) ? options.learnedTasteArtists : []),
+      ...(typeof tasteProfile?.getTopArtists === "function" ? tasteProfile.getTopArtists(36) : [])
+    ].filter((artist) => !isGenericSeedArtist(artist) && !excludedTasteSeeds.has(artistIdentityKey(artist))), 36);
+    profile.learnedTasteLabels = uniqueTerms([
+      ...(Array.isArray(options.learnedTasteLabels) ? options.learnedTasteLabels : []),
+      ...(tasteProfile ? topTasteLabels(tasteProfile, 18) : [])
+    ], 18);
+  }
   const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
+  const hardGenreConstraint = hardGenreConstraintFor(profile);
+  const broadElectronic = Boolean(profile.isBroadElectronicDiscovery);
+  const rawPlanArtists = uniqueTerms([
+    ...(hardGenreConstraint ? [] : (Array.isArray(plan.seedArtists) ? plan.seedArtists : [])),
+    ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : [])
+  ].filter((artist) => !isGenericSeedArtist(artist)), 24);
+  const incompatiblePlanArtists = incompatiblePlanArtistsFor(options, profile);
   const planQueries = filterFreshArtistQueries(
-    uniqueTerms(Array.isArray(plan.searchQueries) ? plan.searchQueries : [], 24),
+    uniqueTerms(Array.isArray(plan.searchQueries) ? plan.searchQueries : [], 24)
+      .filter((query) => queryIsGenreCompatible(query, profile, incompatiblePlanArtists)),
     options,
     history,
     tasteProfile,
@@ -2277,42 +3239,79 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
     freshArtistAvoidance
   );
   const pureRequestedArtistSearch = profile.scoringMode === "pure" && (profile.requestedArtists || []).length;
-  const planArtists = pureRequestedArtistSearch ? [] : uniqueTerms([
-    ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
-    ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : [])
-  ].filter((artist) => !isGenericSeedArtist(artist)), 24);
+  const planArtists = pureRequestedArtistSearch ? [] : filterGenreCompatibleSeeds(
+    rawPlanArtists,
+    profile,
+    profile.requestedArtists || []
+  ).slice(0, 24);
   const branchArtists = pureRequestedArtistSearch ? [] : branchArtistSeeds(options, profile, 24);
-  const planLabels = uniqueTerms(Array.isArray(plan.candidateLabels) ? plan.candidateLabels : [], 24);
+  const planLabels = tasteProfileLed
+    ? []
+    : filterGenreCompatibleLabels(
+      uniqueTerms(Array.isArray(plan.candidateLabels) ? plan.candidateLabels : [], 24),
+      profile,
+      profile.requestedLabels || []
+    );
   const planTargetTerms = uniqueTerms(Array.isArray(plan.targetGenres) ? plan.targetGenres : [], 16);
   const planVibeTerms = uniqueTerms(Array.isArray(plan.vibeTerms) ? plan.vibeTerms : [], 16);
   const request = normalize(`${options.request} ${options.genres} ${options.mood}`);
   const yearRange = parseYearRange(options);
   const yearTerms = yearRange
-    ? Array.from({ length: yearRange.max - yearRange.min + 1 }, (_, index) => String(yearRange.min + index))
+    ? (tasteProfileLed && !cleanText(options.genres)
+      ? [""]
+      : Array.from({ length: yearRange.max - yearRange.min + 1 }, (_, index) => String(yearRange.min + index)))
     : [""];
   const isYearCatalogSearch = Boolean(yearRange && profile.targetGenres.length);
-  const useAnchoredGenreSearch = Boolean(profile.isGenreDiscoveryTarget && !profile.isProgressiveTarget && !pureRequestedArtistSearch);
+  const useAnchoredGenreSearch = Boolean(profile.isGenreDiscoveryTarget && !profile.isProgressivePlanningTarget && !pureRequestedArtistSearch);
   const outsideTastePrompt = Boolean(profile.promptIntent?.allowOutsideTaste && profile.scoringMode === "taste-guided");
-  const tasteArtistSeedLimit = outsideTastePrompt
+  const tasteArtistSeedLimit = tasteProfileLed
+    ? 32
+    : outsideTastePrompt
     ? 4
     : (isYearCatalogSearch ? 34 : 18);
-  const artists = filterFreshArtistSeeds(uniqueTerms([
-    ...(profile.isOmnivoreDiscovery ? [] : planArtists),
-    ...branchArtists,
-    ...buildArtistSeeds(options, tasteArtistSeedLimit, tasteProfile, profile, history, freshArtistAvoidance)
-  ], isYearCatalogSearch ? 42 : 28), options, history, tasteProfile, profile, freshArtistAvoidance);
+  const learnedFirstArtistSeeds = buildArtistSeeds(options, tasteArtistSeedLimit, tasteProfile, profile, history, freshArtistAvoidance);
+  const artists = filterFreshArtistSeeds(uniqueTerms(
+    tasteProfileLed
+      ? [...learnedFirstArtistSeeds, ...branchArtists, ...planArtists]
+      : [
+        ...(profile.isOmnivoreDiscovery ? [] : planArtists),
+        ...branchArtists,
+        ...learnedFirstArtistSeeds
+      ],
+    isYearCatalogSearch ? 42 : 28
+  ), options, history, tasteProfile, profile, freshArtistAvoidance);
+  const artistQuerySeeds = tasteProfileLed
+    ? uniqueTerms([
+      ...learnedFirstArtistSeeds.slice(0, 8),
+      ...branchArtists,
+      ...planArtists,
+      ...learnedFirstArtistSeeds.slice(8)
+    ], 28)
+    : artists;
   const promptQueries = promptIntentSearchQueries(options, profile, isYearCatalogSearch ? 48 : 36);
   const omnivoreQueries = buildOmnivoreDiscoveryQueries(options, tasteProfile, profile, isYearCatalogSearch ? 120 : 84);
   const genreSeeds = genreDiscoverySeeds(profile);
-  const targetTerms = pureRequestedArtistSearch && !profile.targetGenres.length
-    ? [""]
-    : (profile.isOmnivoreDiscovery
-      ? omnivoreTargetTerms(options, 18)
-      : (planTargetTerms.length
-    ? uniqueTerms([...planTargetTerms, ...(profile.isProgressiveTarget ? PROGRESSIVE_CATALOG_TARGETS : [])], 18)
-    : (profile.targetGenres.length
-      ? (profile.isProgressiveTarget ? uniqueTerms([...profile.targetGenres, ...PROGRESSIVE_CATALOG_TARGETS], 18) : profile.targetGenres)
-      : [profile.primaryTarget].filter(Boolean))));
+  let targetTerms = [];
+  if (tasteProfileLed && !profile.targetGenres.length) {
+    targetTerms = [""];
+  } else if (pureRequestedArtistSearch && !profile.targetGenres.length) {
+    targetTerms = [""];
+  } else if (profile.isOmnivoreDiscovery) {
+    targetTerms = omnivoreTargetTerms(options, 18);
+  } else if (broadElectronic) {
+    targetTerms = uniqueTerms(ELECTRONIC_DOMAIN_TERMS, 20);
+  } else if (planTargetTerms.length) {
+    targetTerms = uniqueTerms([
+      ...planTargetTerms,
+      ...(profile.isProgressiveTarget ? PROGRESSIVE_CATALOG_TARGETS : [])
+    ], 18);
+  } else if (profile.targetGenres.length) {
+    targetTerms = profile.isProgressiveTarget
+      ? uniqueTerms([...profile.targetGenres, ...PROGRESSIVE_CATALOG_TARGETS], 18)
+      : profile.targetGenres;
+  } else {
+    targetTerms = [profile.primaryTarget].filter(Boolean);
+  }
   const vibeTerms = uniqueTerms([...planVibeTerms, ...profile.vibeTerms], 24);
   const artistQueries = [];
   const sceneQueries = [];
@@ -2320,29 +3319,51 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
   const tranceQueries = [];
   const catalogYearQueries = [];
   const extendedQueries = [];
+  const electronicAnchorQueries = [];
+  const tasteCatalogQueries = [];
   const sceneAnchorQueries = useAnchoredGenreSearch
     ? buildSceneAnchorRecentQueries(options, tasteProfile, profile, history, freshArtistAvoidance)
     : [];
 
-  for (const artist of artists.slice(0, profile.isProgressiveTarget ? (isYearCatalogSearch ? 28 : 14) : 10)) {
+  if (broadElectronic) {
+    const electronicArtists = uniqueTerms([
+      ...artists,
+      ...EDM_DISCOVERY_ARTISTS
+    ], 48);
+    const electronicLabels = uniqueTerms([
+      ...planLabels,
+      ...EDM_DISCOVERY_LABELS
+    ], 28);
+    for (const artist of electronicArtists.slice(0, 32)) {
+      electronicAnchorQueries.push(cleanText(artist));
+      for (const year of yearTerms.slice(-2)) {
+        if (year) electronicAnchorQueries.push(cleanText(`${artist} ${year}`));
+      }
+    }
+    for (const label of electronicLabels.slice(0, 20)) {
+      electronicAnchorQueries.push(cleanText(label));
+      for (const year of yearTerms.slice(-2)) {
+        if (year) electronicAnchorQueries.push(cleanText(`${label} ${year}`));
+      }
+    }
+  }
+
+  for (const artist of artistQuerySeeds.slice(0, profile.isProgressivePlanningTarget ? (isYearCatalogSearch ? 28 : 14) : (tasteProfileLed ? 22 : 10))) {
     for (const target of targetTerms.slice(0, 4)) {
       for (const year of yearTerms.slice(-2)) artistQueries.push(cleanText(`${artist} ${target} ${year}`));
-    }
-    for (const vibe of vibeTerms.slice(0, 3)) {
-      for (const target of targetTerms.slice(0, 2)) artistQueries.push(cleanText(`${artist} ${target} ${vibe}`));
     }
   }
 
   if (isYearCatalogSearch) {
     const useBroadGenreYearQueries = !useAnchoredGenreSearch || !genreSeeds.length;
     for (const year of yearTerms.slice(-3)) {
-      for (const target of targetTerms.slice(0, profile.isProgressiveTarget ? 10 : 5)) {
+      for (const target of targetTerms.slice(0, profile.isProgressivePlanningTarget ? 10 : 5)) {
         if (useBroadGenreYearQueries) {
           catalogYearQueries.push(cleanText(`${target} ${year}`));
           catalogYearQueries.push(cleanText(`${target} new releases ${year}`));
         }
       }
-      if (profile.isGenreDiscoveryTarget) {
+      if (profile.isGenreDiscoveryTarget && !profile.isProgressivePlanningTarget) {
         for (const seed of genreSeeds.slice(0, 24)) {
           for (const target of targetTerms.slice(0, 2)) {
             catalogYearQueries.push(cleanText(`${seed} ${target} ${year}`));
@@ -2350,10 +3371,10 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
           catalogYearQueries.push(cleanText(`${seed} ${year}`));
         }
       }
-      if (profile.isProgressiveTarget) {
-        for (const label of PROGRESSIVE_LABELS.slice(0, 28)) {
+      if (isProgressiveSceneTarget(profile)) {
+        for (const label of progressiveSceneLabelsFor(profile).slice(0, 28)) {
           catalogYearQueries.push(cleanText(`${label} ${year}`));
-          catalogYearQueries.push(cleanText(`${label} progressive house ${year}`));
+          catalogYearQueries.push(cleanText(`${label} ${progressiveSceneTargetFor(profile)} ${year}`));
         }
         for (const artist of artists.slice(0, 24)) {
           catalogYearQueries.push(cleanText(`${artist} ${year}`));
@@ -2372,37 +3393,60 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
     sceneQueries.push(cleanText(target));
     for (const year of yearTerms.slice(-2)) sceneQueries.push(cleanText(`${target} ${year}`));
     sceneQueries.push(cleanText(`${target} new releases`));
-    sceneQueries.push(cleanText(`${target} underground`));
-    sceneQueries.push(cleanText(`${target} club tracks`));
-    for (const vibe of vibeTerms.slice(0, 6)) {
-      sceneQueries.push(cleanText(`${vibe} ${target}`));
-      sceneQueries.push(cleanText(`${target} ${vibe}`));
+    if (!profile.targetGenres.length && !broadElectronic) {
+      sceneQueries.push(cleanText(`${target} underground`));
+      sceneQueries.push(cleanText(`${target} club tracks`));
     }
   }
 
-  if (profile.isGenreDiscoveryTarget) {
+  if (profile.isGenreDiscoveryTarget && !profile.isProgressivePlanningTarget) {
     for (const seed of genreSeeds.slice(0, isYearCatalogSearch ? 24 : 14)) {
       for (const target of targetTerms.slice(0, 3)) {
         for (const year of yearTerms.slice(-2)) labelQueries.push(cleanText(`${seed} ${target} ${year}`));
       }
-      for (const vibe of vibeTerms.slice(0, 3)) labelQueries.push(cleanText(`${seed} ${vibe}`));
     }
   }
 
   for (const label of uniqueTerms([...branchLabelSeeds(options, profile, 18), ...(profile.isOmnivoreDiscovery ? [] : planLabels)], isYearCatalogSearch ? 24 : 16)) {
-    for (const target of targetTerms.slice(0, 3)) {
-      for (const year of yearTerms.slice(-2)) labelQueries.push(cleanText(`${label} ${target} ${year}`));
-    }
-    for (const vibe of vibeTerms.slice(0, 3)) labelQueries.push(cleanText(`${label} ${vibe}`));
-    labelQueries.push(cleanText(label));
-  }
-
-  if (profile.isProgressiveTarget) {
-    for (const label of PROGRESSIVE_LABELS.slice(0, isYearCatalogSearch ? 28 : 14)) {
       for (const target of targetTerms.slice(0, 3)) {
         for (const year of yearTerms.slice(-2)) labelQueries.push(cleanText(`${label} ${target} ${year}`));
       }
-      for (const vibe of vibeTerms.slice(0, 3)) labelQueries.push(cleanText(`${label} ${vibe} progressive`));
+    labelQueries.push(cleanText(label));
+  }
+
+  if (isProgressiveSceneTarget(profile)) {
+    for (const label of progressiveSceneLabelsFor(profile).slice(0, isYearCatalogSearch ? 28 : 14)) {
+      for (const target of targetTerms.slice(0, 3)) {
+        for (const year of yearTerms.slice(-2)) labelQueries.push(cleanText(`${label} ${target} ${year}`));
+      }
+    }
+  }
+
+  // A taste-profile request is intentionally seed-led. The learned profile
+  // supplies artist/label anchors; mood and activity words stay ranking
+  // signals instead of becoming literal TIDAL catalog queries.
+  const tasteLabels = tasteProfileLed ? (profile.learnedTasteLabels || []) : [];
+  if (tasteLabels.length) {
+    for (const label of tasteLabels.slice(0, 18)) {
+      labelQueries.push(cleanText(label));
+      for (const year of yearTerms.slice(-2)) {
+        if (year) labelQueries.push(cleanText(`${label} ${year}`));
+      }
+    }
+  }
+
+  if (tasteProfileLed) {
+    // A bare artist query repeatedly returns the same popular TIDAL rows.
+    // Add a small, anchored year slice so the reservoir can reach deeper and
+    // newer catalog material without turning vibe words into literal search
+    // text. These remain artist/label queries, not free-form mood searches.
+    const currentYear = new Date().getFullYear();
+    const catalogYears = [currentYear, currentYear - 1, currentYear - 2];
+    for (const artist of artistQuerySeeds.slice(0, 18)) {
+      for (const year of catalogYears.slice(0, 2)) tasteCatalogQueries.push(cleanText(`${artist} ${year}`));
+    }
+    for (const label of tasteLabels.slice(0, 12)) {
+      for (const year of catalogYears.slice(0, 2)) tasteCatalogQueries.push(cleanText(`${label} ${year}`));
     }
   }
 
@@ -2415,7 +3459,7 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
           extendedQueries.push(cleanText(`${artist} ${target} extended mix ${year}`));
         }
       }
-      for (const target of targetTerms.slice(0, profile.isProgressiveTarget ? 8 : 4)) {
+      for (const target of targetTerms.slice(0, profile.isProgressivePlanningTarget ? 8 : 4)) {
         extendedQueries.push(cleanText(`${target} extended mix ${year}`));
         extendedQueries.push(cleanText(`${target} club mix ${year}`));
       }
@@ -2434,15 +3478,34 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
     : (wideDiscoveryPool ? 90 : 42);
   const planQueryLimit = isYearCatalogSearch ? 18 : 12;
   const anchoredQueryLimit = isYearCatalogSearch ? 46 : 18;
-  const progressiveLabelYearQueries = profile.isProgressiveTarget && isYearCatalogSearch
+  const progressiveLabelYearQueries = isProgressiveSceneTarget(profile) && isYearCatalogSearch
     ? uniqueTerms([
-      ...catalogYearQueries.filter((query) => PROGRESSIVE_LABELS.some((label) => normalize(query).includes(normalize(label)))),
+      ...catalogYearQueries.filter((query) => progressiveSceneLabelsFor(profile).some((label) => normalize(query).includes(normalize(label)))),
       ...labelQueries
     ], 44)
     : [];
+  const tasteQueryAnchors = tasteProfileLed
+    ? uniqueTerms([
+      ...artists,
+      ...tasteLabels,
+      ...(Array.isArray(options.learnedTasteArtists) ? options.learnedTasteArtists : []),
+      ...(Array.isArray(options.learnedTasteLabels) ? options.learnedTasteLabels : []),
+      ...(Array.isArray(options.similarArtistSeeds) ? options.similarArtistSeeds : [])
+    ], 96)
+    : [];
+  const isTasteAnchorQuery = (query) => !tasteProfileLed || tasteQueryAnchors.some((anchor) => (
+    artistNamesMatch(query, anchor, { contains: true }) || entityEvidenceMatches(query, anchor)
+  ));
+  const finalizeQueries = (values = [], limit = queryLimit) => Array.from(new Set(values
+    .map(cleanText)
+    .filter(Boolean)
+    .filter((query) => !semanticOnlyQueryFor(query, profile))
+    .filter(isTasteAnchorQuery)
+    .filter((query) => queryIsGenreCompatible(query, profile, incompatiblePlanArtists))
+  )).slice(0, limit);
   if (/^(1|true|yes)$/i.test(String(options.planOnlySearch || options.planQueriesOnly || "")) && planQueries.length) {
     const planOnlyLimit = Math.max(1, Math.min(queryLimit, Number(options.planQueryLimit || planQueries.length || queryLimit)));
-    return Array.from(new Set(planQueries.map(cleanText).filter(Boolean))).slice(0, planOnlyLimit);
+    return finalizeQueries(planQueries, planOnlyLimit);
   }
   if (pureRequestedArtistSearch) {
     const requestedArtists = (profile.requestedArtists || []).map(cleanText).filter(Boolean);
@@ -2454,22 +3517,62 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
           : normalizedQuery.includes(normalize(artist))
       ));
     });
-    return Array.from(new Set([
+    return finalizeQueries([
       ...extendedQueries,
       ...artistQueries,
       ...requestedPlanQueries
-    ].map(cleanText).filter(Boolean))).slice(0, queryLimit);
+    ]);
+  }
+  if (tasteProfileLed) {
+    const tasteAnchors = uniqueTerms([...artists, ...tasteLabels], 48);
+    const anchoredPlanQueries = planQueries.filter((query) => tasteAnchors.some((anchor) => (
+      artistNamesMatch(query, anchor, { contains: true }) || entityEvidenceMatches(query, anchor)
+    )));
+    return finalizeQueries([
+      ...artistQueries.slice(0, 18),
+      ...tasteCatalogQueries,
+      ...labelQueries.slice(0, 18),
+      ...anchoredPlanQueries.slice(0, 12)
+    ]);
+  }
+  if (profile.isProgressiveTranceTarget) {
+    // Progressive Trance is a specialized hard-duration planning lane. Put
+    // trusted direct artists first, reserve the exact genre lane next, and
+    // keep trusted scene labels in the same bounded first-page reservoir.
+    // The requested genre remains unchanged; this only controls query order.
+    const directArtistQueries = uniqueValues([
+      ...tranceQueries,
+      ...(!pureRequestedArtistSearch ? filterFreshArtistSeeds(
+        TRANCE_FORWARD_ARTISTS, options, history, tasteProfile, profile, freshArtistAvoidance
+      ).flatMap(artist => yearTerms.slice(-3).map(year => cleanText(`${artist} ${year}`))) : []),
+      ...artistQueries
+    ].filter((query) => queryGenerationInfo(query, profile, options).seedType === "artist"));
+    const exactRequestedGenre = cleanText(profile.targetGenres?.[0] || "");
+    const exactGenreQueries = uniqueValues([
+      exactRequestedGenre,
+      ...sceneQueries.filter((query) => normalize(query) === normalize(exactRequestedGenre))
+    ]);
+    return finalizeQueries([
+      ...directArtistQueries.slice(0, 8),
+      ...exactGenreQueries.slice(0, 2),
+      ...labelQueries.slice(0, 4),
+      ...directArtistQueries.slice(8, 32),
+      ...exactGenreQueries.slice(2, 12),
+      ...labelQueries.slice(4, 24),
+      ...planQueries.slice(0, planQueryLimit)
+    ], Math.max(queryLimit, 48));
   }
   if (options.autoBroadenLane === "yield-retry" && planQueries.length) {
-    return Array.from(new Set([
+    return finalizeQueries([
       ...extendedQueries,
       ...planQueries,
       ...progressiveLabelYearQueries,
       ...catalogYearQueries,
       ...sceneQueries
-    ].map(cleanText).filter(Boolean))).slice(0, queryLimit);
+    ]);
   }
-  return Array.from(new Set([
+  return finalizeQueries([
+    ...electronicAnchorQueries,
     ...extendedQueries,
     ...omnivoreQueries.slice(0, profile.isOmnivoreDiscovery ? 72 : 48),
     ...promptQueries.slice(0, profile.isOmnivoreDiscovery ? 6 : 24),
@@ -2478,19 +3581,19 @@ function buildSearchQueries(options = {}, tasteProfile = null, profile = buildDi
     ...labelQueries.slice(0, useAnchoredGenreSearch ? (isYearCatalogSearch ? 36 : 18) : 0),
     ...artistQueries.slice(0, useAnchoredGenreSearch ? (isYearCatalogSearch ? 30 : 14) : 0),
     ...planQueries.slice(0, profile.isOmnivoreDiscovery ? 3 : (useAnchoredGenreSearch ? Math.ceil(planQueryLimit / 2) : planQueryLimit)),
-    ...catalogYearQueries.slice(0, profile.isProgressiveTarget ? 36 : (profile.isGenreDiscoveryTarget ? 36 : 16)),
-    ...artistQueries.slice(0, profile.isProgressiveTarget ? (isYearCatalogSearch ? 24 : 12) : 10),
+    ...catalogYearQueries.slice(0, profile.isProgressivePlanningTarget ? 36 : (profile.isGenreDiscoveryTarget ? 36 : 16)),
+    ...artistQueries.slice(0, profile.isProgressivePlanningTarget ? (isYearCatalogSearch ? 24 : 12) : 10),
     ...sceneQueries.slice(0, isYearCatalogSearch ? 22 : 14),
-    ...labelQueries.slice(0, profile.isProgressiveTarget ? (isYearCatalogSearch ? 28 : 12) : (profile.isGenreDiscoveryTarget ? (isYearCatalogSearch ? 32 : 16) : 0)),
+    ...labelQueries.slice(0, profile.isProgressivePlanningTarget ? (isYearCatalogSearch ? 28 : 12) : (profile.isGenreDiscoveryTarget ? (isYearCatalogSearch ? 32 : 16) : 0)),
     ...tranceQueries.slice(0, 5),
     ...artistQueries.slice(24, isYearCatalogSearch ? 42 : 18),
     ...omnivoreQueries.slice(profile.isOmnivoreDiscovery ? 72 : 48),
     ...promptQueries.slice(profile.isOmnivoreDiscovery ? 6 : 24)
-  ].map(cleanText).filter(Boolean))).slice(0, queryLimit);
+  ]);
 }
 
 function buildAdjacentSearchQueries(options = {}, tasteProfile = null, profile = buildDiscoveryProfile(options), history = null, freshArtistAvoidance = null) {
-  if (!profile.isGenreDiscoveryTarget || profile.isProgressiveTarget) return [];
+  if (!profile.isGenreDiscoveryTarget || profile.isProgressivePlanningTarget) return [];
 
   const yearRange = parseYearRange(options);
   const yearTerms = yearRange
@@ -2500,7 +3603,11 @@ function buildAdjacentSearchQueries(options = {}, tasteProfile = null, profile =
   if (!adjacentTerms.length) return [];
 
   const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
-  const planLabels = uniqueTerms(Array.isArray(plan.candidateLabels) ? plan.candidateLabels : [], 16);
+  const planLabels = filterGenreCompatibleLabels(
+    uniqueTerms(Array.isArray(plan.candidateLabels) ? plan.candidateLabels : [], 16),
+    profile,
+    profile.requestedLabels || []
+  );
   const seeds = filterFreshArtistSeeds(uniqueTerms([
     ...branchArtistSeeds(options, profile, 18),
     ...genreDiscoverySeeds(profile),
@@ -2523,7 +3630,7 @@ function buildAdjacentSearchQueries(options = {}, tasteProfile = null, profile =
     }
   }
 
-  return uniqueTerms(queries, yearRange ? 72 : 40);
+  return filterHardGenreQueries(queries, options, profile, yearRange ? 72 : 40);
 }
 
 function buildBranchSearchQueries(options = {}, tasteProfile = null, profile = buildDiscoveryProfile(options), history = null, freshArtistAvoidance = null) {
@@ -2547,11 +3654,12 @@ function buildBranchSearchQueries(options = {}, tasteProfile = null, profile = b
     ...tasteGuidedBranchSeeds,
     ...((profile.scoringMode === "similar" || profile.scoringMode === "explore") ? buildArtistSeeds(options, 10, tasteProfile, profile, history, freshArtistAvoidance) : [])
   ], 32), options, history, tasteProfile, profile, freshArtistAvoidance);
-  const labelSeeds = uniqueTerms([
+  const labelSeeds = filterGenreCompatibleLabels(uniqueTerms([
+    ...(isProgressiveSceneTarget(profile) ? progressiveSceneLabelsFor(profile).slice(0, 14) : []),
     ...branchLabelSeeds(options, profile, 24),
     ...(profile.isOmnivoreDiscovery ? activeOmnivoreDiscoveryLanes(options).flatMap((lane) => lane.anchors.slice(0, 2)) : []),
-    ...(profile.isProgressiveTarget ? PROGRESSIVE_LABELS.slice(0, 14) : [])
-  ], 32);
+    ...(isProgressiveSceneTarget(profile) ? progressiveSceneLabelsFor(profile).slice(14, 28) : [])
+  ], 32), profile, profile.requestedLabels || []);
 
   if (!artistSeeds.length && !labelSeeds.length) return [];
 
@@ -2578,7 +3686,7 @@ function buildBranchSearchQueries(options = {}, tasteProfile = null, profile = b
     }
   }
 
-  return uniqueTerms(queries, yearRange ? 80 : 44);
+  return filterHardGenreQueries(queries, options, profile, yearRange ? 80 : 44);
 }
 
 function recoveryYearTerms(options = {}) {
@@ -2613,6 +3721,14 @@ function recoveryCandidatePairs(options = {}) {
 
 function buildAdaptiveRecoveryQueryFamilies(options = {}, tasteProfile = null, profile = buildDiscoveryProfile(options), artistSeeds = [], usedQueries = new Set(), history = null, freshArtistAvoidance = null) {
   const used = usedQueries instanceof Set ? usedQueries : new Set();
+  const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
+  const rawPlanArtists = uniqueTerms([
+    ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
+    ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : []),
+    ...(Array.isArray(plan.relatedArtists) ? plan.relatedArtists : []),
+    ...(Array.isArray(plan.similarArtists) ? plan.similarArtists : [])
+  ].filter((artist) => !isGenericSeedArtist(artist)), 32);
+  const incompatiblePlanArtists = rawPlanArtists.filter((artist) => !isGenreCompatibleSeed(artist, profile, profile.requestedArtists || []));
   const yearTerms = recoveryYearTerms(options);
   const primaryYear = yearTerms[0] || "";
   const targetTerms = uniqueTerms([
@@ -2624,12 +3740,12 @@ function buildAdaptiveRecoveryQueryFamilies(options = {}, tasteProfile = null, p
     ...(profile.vibeTerms || []),
     ...(Array.isArray(options.llmSearchPlan?.vibeTerms) ? options.llmSearchPlan.vibeTerms : [])
   ], 8);
-  const labelSeeds = uniqueTerms([
+  const labelSeeds = filterGenreCompatibleLabels(uniqueTerms([
     ...(profile.requestedLabels || []),
     ...(Array.isArray(options.llmSearchPlan?.candidateLabels) ? options.llmSearchPlan.candidateLabels : []),
     ...branchLabelSeeds(options, profile, 18),
     ...genreLabelSeeds(profile).slice(0, 14)
-  ], 24);
+  ], 24), profile, profile.requestedLabels || []);
   const requestedArtistSeeds = uniqueTerms([
     ...(profile.requestedArtists || []),
     ...(profile.seedArtists || [])
@@ -2638,8 +3754,8 @@ function buildAdaptiveRecoveryQueryFamilies(options = {}, tasteProfile = null, p
     ? requestedArtistSeeds
     : filterFreshArtistSeeds(uniqueTerms([
       ...requestedArtistSeeds,
-      ...(Array.isArray(options.llmSearchPlan?.candidateArtists) ? options.llmSearchPlan.candidateArtists : []),
-      ...artistSeeds,
+      ...filterGenreCompatibleSeeds(Array.isArray(options.llmSearchPlan?.candidateArtists) ? options.llmSearchPlan.candidateArtists : [], profile, profile.requestedArtists || []),
+      ...filterGenreCompatibleSeeds(artistSeeds, profile, profile.requestedArtists || []),
       ...branchArtistSeeds(options, profile, 18)
     ].filter((artist) => !isGenericSeedArtist(artist)), 28), options, history, tasteProfile, profile, freshArtistAvoidance);
   const genreText = targetTerms.slice(0, 2).join(" ") || cleanText(options.genres) || "electronic music";
@@ -2650,9 +3766,12 @@ function buildAdaptiveRecoveryQueryFamilies(options = {}, tasteProfile = null, p
     .trim()
     .slice(0, 80);
 
-  function family(id, label, lane, queries) {
+  function family(id, label, lane, queries, genreExemptQueries = []) {
+    const exempt = new Set(genreExemptQueries.map((query) => normalize(query)).filter(Boolean));
     const filteredQueries = filterFreshArtistQueries(
-      uniqueTerms(queries, 24),
+      uniqueValues(queries.map(cleanText).filter(Boolean))
+        .filter((query) => exempt.has(normalize(query)) || queryIsGenreCompatible(query, profile, incompatiblePlanArtists))
+        .slice(0, 24),
       options,
       history,
       tasteProfile,
@@ -2666,6 +3785,27 @@ function buildAdaptiveRecoveryQueryFamilies(options = {}, tasteProfile = null, p
       queries: filteredQueries
         .filter((query) => query && !used.has(normalize(query)))
     };
+  }
+
+  // A plain taste-profile refresh is not a semantic text-search request.
+  // Recovery must stay on the learned artist/label reservoir instead of
+  // turning the standby explanation into giant literal catalog queries such
+  // as “sources that fit my current Rabbit Hole taste profile...”.
+  if (profile.tasteProfileLed || profile.promptIntent?.outsideTasteMode === "taste-profile") {
+    const learnedArtists = uniqueTerms([
+      ...(Array.isArray(options.learnedTasteArtists) ? options.learnedTasteArtists : []),
+      ...(Array.isArray(profile.learnedTasteArtists) ? profile.learnedTasteArtists : []),
+      ...artistSeeds
+    ].filter((artist) => !isGenericSeedArtist(artist)), 28);
+    const learnedLabels = uniqueTerms([
+      ...(Array.isArray(options.learnedTasteLabels) ? options.learnedTasteLabels : []),
+      ...(Array.isArray(profile.learnedTasteLabels) ? profile.learnedTasteLabels : []),
+      ...(tasteProfile ? topTasteLabels(tasteProfile, 18) : [])
+    ], 18);
+    return [
+      family("taste-artist", "Learned taste artist recovery", "taste", learnedArtists),
+      family("taste-label", "Learned taste label recovery", "label", learnedLabels)
+    ].filter((item) => item.queries.length);
   }
 
   const exactTitleQueries = [];
@@ -2735,7 +3875,7 @@ function buildAdaptiveRecoveryQueryFamilies(options = {}, tasteProfile = null, p
   }
 
   return [
-    family("exact-title", "Exact title retry", "core", exactTitleQueries),
+    family("exact-title", "Exact title retry", "core", exactTitleQueries, exactTitleQueries),
     family("exact-artist", "Exact artist catalog retry", "core", exactArtistQueries),
     family("genre-year", "Genre/year discovery retry", "core", genreYearQueries),
     family("label-year", "Label/year recovery", "label", labelYearQueries),
@@ -2876,12 +4016,12 @@ function broadenBranchOutQueries(options = {}, profile = buildDiscoveryProfile(o
     ...(profile.isProgressiveTarget ? PROGRESSIVE_ARTISTS.slice(0, 18) : []),
     ...genreArtistAnchors(profile).slice(0, 24)
   ], 44);
-  const labels = uniqueTerms([
+  const labels = filterGenreCompatibleLabels(uniqueTerms([
     ...branchLabelSeeds(options, profile, 28),
     ...(profile.isOmnivoreDiscovery ? activeOmnivoreDiscoveryLanes(options).flatMap((lane) => lane.anchors.slice(0, 3)) : []),
-    ...(profile.isProgressiveTarget ? PROGRESSIVE_LABELS.slice(0, 24) : []),
+    ...(profile.isProgressiveTarget ? progressiveSceneLabelsFor(profile).slice(0, 24) : []),
     ...genreDiscoverySeeds(profile).slice(0, 24)
-  ], 44);
+  ], 44), profile, profile.requestedLabels || []);
   const queries = [];
 
   for (const year of years) {
@@ -2985,7 +4125,7 @@ function yieldRecoveryQueries(options = {}, profile = buildDiscoveryProfile(opti
   const useArtistAnchors = !requestRequiresFreshArtists(options);
   const labels = uniqueTerms([
     ...(profile.requestedLabels || []),
-    ...(profile.isProgressiveTarget ? PROGRESSIVE_LABELS.slice(0, 24) : genreDiscoverySeeds(profile).slice(0, 24))
+    ...(profile.isProgressiveTarget ? progressiveSceneLabelsFor(profile).slice(0, 24) : genreDiscoverySeeds(profile).slice(0, 24))
   ], 32);
   const anchors = uniqueTerms([
     ...(useArtistAnchors ? (profile.seedArtists || []) : []),
@@ -3199,11 +4339,16 @@ function buildSceneAnchorRecentQueries(options = {}, tasteProfile = null, profil
     ? Array.from({ length: yearRange.max - yearRange.min + 1 }, (_, index) => String(yearRange.min + index))
     : [""];
   const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
-  const planArtists = filterFreshArtistSeeds(uniqueTerms([
-    ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
+  const hardGenreConstraint = hardGenreConstraintFor(profile);
+  const planArtists = filterFreshArtistSeeds(filterGenreCompatibleSeeds(uniqueTerms([
+    ...(hardGenreConstraint ? [] : (Array.isArray(plan.seedArtists) ? plan.seedArtists : [])),
     ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : [])
-  ], 18), options, history, tasteProfile, profile, freshArtistAvoidance);
-  const planLabels = uniqueTerms(Array.isArray(plan.candidateLabels) ? plan.candidateLabels : [], 18);
+  ], 18), profile, profile.requestedArtists || []), options, history, tasteProfile, profile, freshArtistAvoidance);
+  const planLabels = filterGenreCompatibleLabels(
+    uniqueTerms(Array.isArray(plan.candidateLabels) ? plan.candidateLabels : [], 18),
+    profile,
+    profile.requestedLabels || []
+  );
   const anchors = uniqueTerms([
     ...filterFreshArtistSeeds(genreArtistAnchors(profile), options, history, tasteProfile, profile, freshArtistAvoidance),
     ...genreDiscoverySeeds(profile),
@@ -3245,11 +4390,12 @@ function buildSceneAnchorRecentQueries(options = {}, tasteProfile = null, profil
     }
   }
 
-  return uniqueTerms(queries, yearRange ? 140 : 56);
+  return filterHardGenreQueries(queries, options, profile, yearRange ? 140 : 56);
 }
 
 function buildArtistSeeds(options = {}, limit = 12, tasteProfile = null, profile = buildDiscoveryProfile(options), history = null, freshArtistAvoidance = null) {
   const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
+  const hardGenreConstraint = hardGenreConstraintFor(profile);
   const pureRequestedArtistSearch = profile.scoringMode === "pure" && (profile.requestedArtists || []).length;
   const yearRange = parseYearRange(options);
   const discoveryBranching = Boolean(
@@ -3261,18 +4407,34 @@ function buildArtistSeeds(options = {}, limit = 12, tasteProfile = null, profile
     !(profile.requestedArtists || []).length &&
     !(profile.seedArtists || extractSeedArtists(options)).length
   );
-  const planArtists = pureRequestedArtistSearch ? [] : uniqueTerms([
-    ...(Array.isArray(plan.seedArtists) ? plan.seedArtists : []),
+  const planArtists = pureRequestedArtistSearch ? [] : filterGenreCompatibleSeeds(uniqueTerms([
+    ...(hardGenreConstraint ? [] : (Array.isArray(plan.seedArtists) ? plan.seedArtists : [])),
     ...(Array.isArray(plan.candidateArtists) ? plan.candidateArtists : [])
-  ], limit);
+  ], limit), profile, profile.requestedArtists || []);
   const seedArtists = profile.seedArtists || extractSeedArtists(options);
   const branchArtists = pureRequestedArtistSearch ? [] : branchArtistSeeds(options, profile, Math.max(4, Math.ceil(limit * 0.45)));
   const seedKeys = new Set(seedArtists.map(artistIdentityKey));
-  const useLearnedArtists = profile.scoringMode === "similar" ||
-    (profile.scoringMode === "taste-guided" && !profile.hasExplicitDiscoveryIntent);
-  const learnedLimit = profile.scoringMode === "similar" ? 12 : 3;
-  const learnedArtists = useLearnedArtists && typeof tasteProfile?.getTopArtists === "function"
-    ? tasteProfile.getTopArtists(learnedLimit)
+  const useLearnedArtists = profile.tasteProfileLed || profile.scoringMode === "similar" ||
+    (profile.scoringMode === "taste-guided" && (
+      !profile.hasExplicitDiscoveryIntent ||
+      // Broad EDM is an explicit domain request, but it is intentionally
+      // open across electronic lanes. Use a small number of learned artists
+      // as personalized seed evidence without turning the profile into a
+      // whitelist or allowing it to outrank trusted scene anchors.
+      profile.isBroadElectronicDiscovery
+    ));
+  const learnedLimit = profile.tasteProfileLed
+    ? 36
+    : (profile.scoringMode === "similar"
+      ? 12
+      : (profile.isBroadElectronicDiscovery ? 6 : 3));
+  const excludedTasteSeeds = new Set(tasteSeedExclusionNames(options).map(artistIdentityKey));
+  const learnedArtists = useLearnedArtists
+    ? uniqueTerms([
+      ...(Array.isArray(profile.learnedTasteArtists) ? profile.learnedTasteArtists : []),
+      ...(Array.isArray(options.learnedTasteArtists) ? options.learnedTasteArtists : []),
+      ...(typeof tasteProfile?.getTopArtists === "function" ? tasteProfile.getTopArtists(learnedLimit) : [])
+    ].filter((artist) => !excludedTasteSeeds.has(artistIdentityKey(artist))), learnedLimit)
     : [];
   const baseFreshYearAnchors = profile.isProgressiveTarget && yearRange
     ? PROGRESSIVE_FRESH_ANCHORS
@@ -3287,8 +4449,11 @@ function buildArtistSeeds(options = {}, limit = 12, tasteProfile = null, profile
     : (profile.isProgressiveTarget ? PROGRESSIVE_ARTISTS : genreArtistAnchors(profile)));
   const priorityKeys = new Set([...seedArtists, ...freshYearAnchors].map(artistIdentityKey));
   const rotatedSceneArtists = shuffled(uniqueValues(sceneArtists).filter((artist) => !seedKeys.has(artistIdentityKey(artist)) && !priorityKeys.has(artistIdentityKey(artist))));
+  const orderedArtists = profile.tasteProfileLed
+    ? [...learnedArtists, ...seedArtists, ...branchArtists, ...planArtists, ...freshYearAnchors, ...rotatedSceneArtists]
+    : [...planArtists, ...seedArtists, ...branchArtists, ...learnedArtists, ...freshYearAnchors, ...rotatedSceneArtists];
   return filterFreshArtistSeeds(
-    uniqueValues([...planArtists, ...seedArtists, ...branchArtists, ...learnedArtists, ...freshYearAnchors, ...rotatedSceneArtists]),
+    uniqueValues(orderedArtists),
     options,
     history,
     tasteProfile,
@@ -3301,12 +4466,13 @@ function requestText(options = {}) {
   return `${options.request || ""} ${options.reference || ""} ${options.genres || ""} ${options.mood || ""}`;
 }
 
+function explicitlyForbidsPreviouslySuggested(options = {}) {
+  return /\b(?:avoid|exclude|skip|without|no|not|do not|don't|stop)\b.{0,35}\b(?:previous|previously|repeat|repeats|repeated|same|old|seen|suggested|suggestions)\b/i.test(requestText(options));
+}
+
 function allowsPreviouslySuggested(options = {}) {
-  const text = requestText(options);
-  if (/\b(?:avoid|exclude|skip|without|no|not|do not|don't|stop)\b.{0,35}\b(?:previous|previously|repeat|repeats|repeated|same|old|seen|suggested|suggestions)\b/i.test(text)) {
-    return false;
-  }
-  return /\b(?:allow repeats|include repeats|show repeats|reuse previous suggestions|include previous suggestions|include previously suggested|show previous suggestions|same tracks again|same songs again|rerun previous)\b/i.test(text);
+  if (explicitlyForbidsPreviouslySuggested(options)) return false;
+  return /\b(?:allow repeats|include repeats|show repeats|reuse previous suggestions|include previous suggestions|include previously suggested|show previous suggestions|same tracks again|same songs again|rerun previous)\b/i.test(requestText(options));
 }
 
 function allowsPreviousDiscoveryFallback(options = {}) {
@@ -3421,12 +4587,20 @@ function freshArtistSeedAvoidanceReason(artist = "", options = {}, history = nul
 }
 
 function filterFreshArtistSeeds(seeds = [], options = {}, history = null, tasteProfile = null, profile = {}, context = null) {
+  // Taste-profile mode still needs familiar artists as retrieval anchors.
+  // “Avoid repeats” applies to returned tracks/artists, not to the artist
+  // pages we must crawl to discover adjacent music.
+  if (profile.tasteProfileLed || profile.promptIntent?.outsideTasteMode === "taste-profile") return seeds;
   const avoidance = freshAvoidanceContext(options, history, tasteProfile, context);
   if (!avoidance.enabled) return seeds;
   return seeds.filter((artist) => !freshArtistSeedAvoidanceReason(artist, options, history, tasteProfile, profile, avoidance));
 }
 
 function filterFreshArtistQueries(queries = [], options = {}, history = null, tasteProfile = null, profile = {}, context = null) {
+  // In taste-profile mode the learned artist is a retrieval anchor, not a
+  // recommendation repeat. Keep the query so its adjacent catalog can be
+  // crawled; freshness is enforced on the returned track candidates.
+  if (profile.tasteProfileLed || profile.promptIntent?.outsideTasteMode === "taste-profile") return queries;
   const avoidance = freshAvoidanceContext(options, history, tasteProfile, context);
   if (!avoidance.enabled) return queries;
   return queries.filter((query) => {
@@ -3669,11 +4843,30 @@ function trackGenreValues(track = {}) {
   ], 12);
 }
 
+function genreTokenSet(value = "") {
+  return new Set(normalize(value).split(/\s+/).filter((token) => token && token !== "and"));
+}
+
+function genreValuesMatchTarget(values = [], targets = []) {
+  const cleanValues = uniqueTerms(values || [], 24);
+  if (!cleanValues.length) return false;
+  if (cleanValues.some((value) => genreTermMatchesTarget(value, targets))) return true;
+
+  const valueTokens = new Set(cleanValues.flatMap((value) => [...genreTokenSet(value)]));
+  return targets.some((target) => {
+    const targetTokens = [...genreTokenSet(target)];
+    if (targetTokens.length < 3) return false;
+    const hasBroadParent = targetTokens.some((token) => isBroadGenreTerm(token));
+    const hasSpecificDescriptor = targetTokens.some((token) => !isBroadGenreTerm(token));
+    return hasBroadParent && hasSpecificDescriptor && targetTokens.every((token) => valueTokens.has(token));
+  });
+}
+
 function genreTermMatchesTarget(term = "", targets = []) {
-  const key = normalize(term);
+  const key = normalizeGenreKey(term);
   if (!key) return false;
   return targets.some((target) => {
-    const targetKey = normalize(target);
+    const targetKey = normalizeGenreKey(target);
     if (!targetKey) return false;
     if (key === targetKey) return true;
     if (isBroadGenreTerm(key)) return targetKey === key;
@@ -3684,7 +4877,7 @@ function genreTermMatchesTarget(term = "", targets = []) {
 
 function ontologyGenreTermsForText(text = "", limit = 16) {
   const detected = detectOntologyGenreTerms(text, { includeAliases: true, limit });
-  return uniqueTerms(detected.terms || [], limit);
+  return uniqueGenreTerms(detected.terms || [], limit);
 }
 
 function ontologyVibeTermsForText(text = "", limit = 16) {
@@ -3702,20 +4895,26 @@ function specificChildGenreEvidenceFor(track = {}, profile = buildDiscoveryProfi
   const metadataText = normalize(`${track.artist} ${track.title} ${track.album} ${labelText(track)} ${trackGenreValues(track).join(" ")}`);
   const labelSeeds = uniqueTerms([...(genreProfile.labels || []), ...genreLabelSeeds(profile)], 48);
   const artistAnchors = uniqueTerms([...(genreProfile.artists || []), ...genreArtistAnchors(profile)], 48);
-  const excludedLabel = (genreProfile.excludeLabels || []).find((seed) => containsEntityTerm(labelText(track), seed)) || "";
+  const excludedLabel = (genreProfile.excludeLabels || []).find((seed) => entityEvidenceMatches(labelText(track), seed)) || "";
   const excludedArtist = (genreProfile.excludeArtists || []).find((seed) => artistMatchesKnownName(track.artist, seed)) || "";
-  const labelSeed = labelSeeds.find((seed) => containsEntityTerm(labelText(track), seed)) || "";
+  const remix = namedRemixEvidence(track);
+  const originalArtistMismatchSoft = Boolean(excludedArtist && remix.named && !remix.versionConflict);
+  const labelSeed = labelSeeds.find((seed) => entityEvidenceMatches(labelText(track), seed)) || "";
   const artistAnchor = artistAnchors.find((seed) => artistMatchesKnownName(track.artist, seed)) || "";
   const seedArtist = (profile.seedArtists || []).find((seed) => artistMatchesKnownName(track.artist, seed)) || "";
-  const sceneLabel = profile.isProgressiveTarget ? matchingSceneLabel(labelText(track)) : "";
-  const sceneArtist = profile.isProgressiveTarget ? matchingSceneArtist(track.artist) : "";
+  const sceneLabel = isProgressiveSceneTarget(profile) ? matchingSceneLabel(labelText(track), profile) : "";
+  const sceneArtist = isProgressiveSceneTarget(profile) ? matchingSceneArtist(track.artist, profile) : "";
+  const sceneRemixer = isProgressiveSceneTarget(profile) ? matchingSceneRemixer(track, profile) : "";
+  const querySceneLabel = isProgressiveSceneTarget(profile) ? matchingSceneLabel(track.query, profile) : "";
+  const querySceneArtist = isProgressiveSceneTarget(profile) ? matchingSceneArtist(track.query, profile, { contains: true }) : "";
   const sceneCatalog = profile.isProgressiveTarget && hasAnyTerm(metadataText, PROGRESSIVE_CATALOG_TARGETS);
-  const exactGenre = hasAnyTerm(metadataText, [genreProfile.name, ...(profile.targetGenres || [])]);
+  const exactGenre = hasAnyTerm(metadataText, [genreProfile.name, ...(profile.targetGenres || [])]) ||
+    genreValuesMatchTarget(trackGenreValues(track), [genreProfile.name, ...(profile.targetGenres || [])]);
   const childKeyword = (genreProfile.keywords || []).find((keyword) => containsNormalized(metadataText, keyword)) || "";
   const parentContext = hasAnyTerm(metadataText, genreProfile.parentGenres || []);
   const corroborates = Boolean(
     !excludedLabel &&
-    !excludedArtist &&
+    (!excludedArtist || originalArtistMismatchSoft) &&
     (
       exactGenre ||
       labelSeed ||
@@ -3723,8 +4922,10 @@ function specificChildGenreEvidenceFor(track = {}, profile = buildDiscoveryProfi
       seedArtist ||
       sceneLabel ||
       sceneArtist ||
+      sceneRemixer ||
       sceneCatalog ||
-      (childKeyword && (parentContext || labelSeed || artistAnchor))
+      (childKeyword && (parentContext || labelSeed || artistAnchor)) ||
+      ((querySceneLabel || querySceneArtist) && parentContext)
     )
   );
   return {
@@ -3737,9 +4938,13 @@ function specificChildGenreEvidenceFor(track = {}, profile = buildDiscoveryProfi
     seedArtist,
     sceneLabel,
     sceneArtist,
+    sceneRemixer,
+    querySceneLabel,
+    querySceneArtist,
     sceneCatalog,
     excludedLabel,
-    excludedArtist
+    excludedArtist,
+    originalArtistMismatchSoft
   };
 }
 
@@ -3852,7 +5057,10 @@ function vibeInferenceFor(track = {}, query = "", profile = {}) {
 
 function genreLabelSeeds(profile = {}) {
   const artistKeys = new Set(genreArtistAnchors(profile).map(artistIdentityKey));
-  return genreDiscoverySeeds(profile).filter((seed) => !artistKeys.has(artistIdentityKey(seed)));
+  return uniqueValues([
+    ...genreDiscoverySeeds(profile),
+    ...(isProgressiveSceneTarget(profile) ? progressiveSceneLabelsFor(profile) : [])
+  ]).filter((seed) => !artistKeys.has(artistIdentityKey(seed)));
 }
 
 function tasteGenreEvidenceFor(track = {}, tasteProfile = null) {
@@ -3936,6 +5144,9 @@ function genreInferenceFor(track = {}, query = "", options = {}, profile = build
 
   if (isStrictChildGenreTarget(profile)) {
     const childEvidence = specificChildGenreEvidenceFor(track, profile);
+    if (childEvidence.originalArtistMismatchSoft) {
+      add("original-artist-profile", `${childEvidence.excludedArtist} original-artist profile mismatch (named remix)`, -ORIGINAL_ARTIST_PENALTY, { corroborating: false, weak: true });
+    }
     if (childEvidence.exactGenre) {
       add("metadata", `${profile.genreProfile.name} metadata`, 34, { genre: profile.genreProfile.name });
     } else if (childEvidence.childKeyword && childEvidence.parentContext) {
@@ -3944,6 +5155,14 @@ function genreInferenceFor(track = {}, query = "", options = {}, profile = build
       add("label", `${childEvidence.sceneLabel} label scene`, 34, { genre: profile.genreProfile.name });
     } else if (childEvidence.sceneArtist) {
       add("artist", `${childEvidence.sceneArtist} artist scene`, 18, { genre: profile.genreProfile.name });
+    } else if (childEvidence.sceneRemixer) {
+      add("remixer", `${childEvidence.sceneRemixer} remixer scene`, 18, { genre: profile.genreProfile.name });
+    } else if (childEvidence.querySceneLabel || childEvidence.querySceneArtist) {
+      add("query-scene", `${childEvidence.querySceneLabel || childEvidence.querySceneArtist} trusted scene query with parent metadata`, 8, {
+        genre: profile.genreProfile.name,
+        queryOnly: true,
+        corroborating: false
+      });
     } else if (childEvidence.seedArtist) {
       add("artist", `${childEvidence.seedArtist} branch seed`, 12, { genre: profile.genreProfile.name, weak: true });
     }
@@ -3954,16 +5173,29 @@ function genreInferenceFor(track = {}, query = "", options = {}, profile = build
     add("metadata", `${term} adjacent metadata`, isBroadGenreTerm(term) ? 8 : 18, { genre: term });
   }
 
-  if (profile.isProgressiveTarget) {
-    const sceneLabel = matchingSceneLabel(label);
-    const sceneArtist = matchingSceneArtist(track.artist);
-    if (sceneLabel) add("label", `${sceneLabel} label scene`, 38, { genre: "progressive house" });
-    if (sceneArtist) add("artist", `${sceneArtist} artist scene`, sceneLabel || metadataTargets.length ? 22 : 14, {
-      genre: "progressive house",
+  if (isProgressiveSceneTarget(profile)) {
+    const sceneLabel = matchingSceneLabel(label, profile);
+    const sceneArtist = matchingSceneArtist(track.artist, profile);
+    const sceneRemixer = matchingSceneRemixer(track, profile);
+    const sceneGenre = progressiveSceneTargetFor(profile);
+    const labelAlreadyCorroborated = sceneLabel && evidence.some((item) => (
+      item.source === "label" && normalize(item.label).includes(normalize(sceneLabel))
+    ));
+    if (sceneLabel && !labelAlreadyCorroborated) add("label", `${sceneLabel} label scene`, 38, { genre: sceneGenre });
+    if (sceneArtist && !evidence.some((item) => (
+      item.source === "artist" && normalize(item.label).includes(normalize(sceneArtist))
+    ))) add("artist", `${sceneArtist} artist scene`, sceneLabel || metadataTargets.length ? 22 : 18, {
+      genre: sceneGenre,
       corroborating: Boolean(sceneLabel || metadataTargets.length)
     });
-    if (hasAnyTerm(metadataText, PROGRESSIVE_CATALOG_TARGETS)) {
-      add("metadata", "progressive catalogue terms", 22, { genre: "progressive house" });
+    if (sceneRemixer && !evidence.some((item) => (
+      item.source === "remixer" && normalize(item.label).includes(normalize(sceneRemixer))
+    ))) add("remixer", `${sceneRemixer} remixer scene`, sceneLabel || metadataTargets.length ? 22 : 18, {
+      genre: sceneGenre,
+      corroborating: Boolean(sceneLabel || metadataTargets.length)
+    });
+    if (profile.isProgressiveTarget && hasAnyTerm(metadataText, PROGRESSIVE_CATALOG_TARGETS)) {
+      add("metadata", "progressive catalogue terms", 22, { genre: sceneGenre });
     }
   }
 
@@ -3971,8 +5203,10 @@ function genreInferenceFor(track = {}, query = "", options = {}, profile = build
     add("requested-label", `${requestedLabelMatch(track, profile)} requested label`, 32, { genre: targetGenres[0] || "" });
   }
 
-  const labelSeed = genreLabelSeeds(profile).find((seed) => containsEntityTerm(label, seed)) || "";
-  if (labelSeed) add("label", `${labelSeed} scene label`, 36, { genre: targetGenres[0] || "" });
+  const labelSeed = genreLabelSeeds(profile).find((seed) => entityEvidenceMatches(label, seed)) || "";
+  if (labelSeed && !evidence.some((item) => normalize(item.label).includes(normalize(labelSeed)))) {
+    add("label", `${labelSeed} scene label`, 36, { genre: targetGenres[0] || "" });
+  }
 
   const artistAnchor = genreArtistAnchors(profile).find((seed) => artistMatchesKnownName(track.artist, seed)) || "";
   if (artistAnchor) {
@@ -3987,6 +5221,13 @@ function genreInferenceFor(track = {}, query = "", options = {}, profile = build
     add("seed-artist", "requested artist seed", profile.scoringMode === "pure" ? 14 : 10, {
       genre: targetGenres[0] || "",
       corroborating: false
+    });
+  }
+
+  const canonicalOfficialTarget = targetGenres.find((target) => genreValuesMatchTarget(officialGenreValues, [target])) || "";
+  if (canonicalOfficialTarget && !officialTerms.some((term) => genreTermMatchesTarget(term, targetGenres))) {
+    add("official-genre", `${canonicalOfficialTarget} canonical official genre`, 18, {
+      genre: canonicalOfficialTarget
     });
   }
 
@@ -4006,8 +5247,22 @@ function genreInferenceFor(track = {}, query = "", options = {}, profile = build
     }
   }
 
-  if (hasAnyTerm(queryText, targetGenres)) {
-    add("query", `${targetGenres.find((term) => containsNormalized(queryText, term)) || targetGenres[0]} search query`, 7, {
+  if (targetGenres.some((term) => containsGenreTerm(queryText, term))) {
+    add("query", `${targetGenres.find((term) => containsGenreTerm(queryText, term)) || targetGenres[0]} search query`, 7, {
+      genre: targetGenres[0] || "",
+      queryOnly: true,
+      corroborating: false
+    });
+  }
+  if (isProgressiveSceneTarget(profile)) {
+    const querySceneLabel = matchingSceneLabel(queryText, profile);
+    const querySceneArtist = matchingSceneArtist(queryText, profile, { contains: true });
+    if (querySceneLabel) add("query-scene", `${querySceneLabel} trusted scene query`, 6, {
+      genre: targetGenres[0] || "",
+      queryOnly: true,
+      corroborating: false
+    });
+    else if (querySceneArtist) add("query-scene", `${querySceneArtist} trusted scene query`, 6, {
       genre: targetGenres[0] || "",
       queryOnly: true,
       corroborating: false
@@ -4063,22 +5318,28 @@ function sceneEvidenceFor(track = {}, query = "", options = {}, profile = buildD
   const labelSeeds = genreLabelSeeds(profile);
   const artistAnchors = genreArtistAnchors(profile);
   const adjacentTerms = adjacentLaneTerms(profile, options);
-  const labelSeed = labelSeeds.find((seed) => containsEntityTerm(labelText(track), seed)) || "";
+  const labelSeed = labelSeeds.find((seed) => entityEvidenceMatches(labelText(track), seed)) || "";
   const artistAnchor = artistAnchors.find((seed) => artistMatchesKnownName(track.artist, seed)) || "";
   const metadataTarget = hasAnyTerm(metadataText, profile.targetGenres || []);
   const metadataAdjacent = hasAnyTerm(metadataText, adjacentTerms);
-  const queryTarget = hasAnyTerm(query, profile.targetGenres || []);
+  const queryTarget = (profile.targetGenres || []).some((term) => containsGenreTerm(query, term));
+  const sceneLabel = isProgressiveSceneTarget(profile) ? matchingSceneLabel(labelText(track), profile) : "";
+  const sceneArtist = isProgressiveSceneTarget(profile) ? matchingSceneArtist(track.artist, profile) : "";
+  const sceneRemixer = isProgressiveSceneTarget(profile) ? matchingSceneRemixer(track, profile) : "";
   const queryLabel = hasAnyTerm(query, labelSeeds);
 
   return {
     labelSeed,
     artistAnchor,
+    sceneLabel,
+    sceneArtist,
     metadataTarget,
     metadataAdjacent,
     queryTarget,
     queryLabel,
-    metadataSceneEvidence: Boolean(labelSeed || metadataTarget || metadataAdjacent || queryLabel),
-    sceneEvidence: Boolean(labelSeed || metadataTarget || metadataAdjacent || queryTarget || queryLabel)
+    metadataSceneEvidence: Boolean(labelSeed || sceneLabel || sceneArtist || sceneRemixer || metadataTarget || metadataAdjacent || queryLabel),
+    sceneEvidence: Boolean(labelSeed || artistAnchor || sceneLabel || sceneArtist || sceneRemixer || metadataTarget || metadataAdjacent || queryTarget || queryLabel),
+    sceneRemixer
   };
 }
 
@@ -4087,18 +5348,22 @@ function metadataCorroboratesRequestedGenre(track = {}, query = "", options = {}
   if (isStrictChildGenreTarget(profile) && !specificChildGenreEvidenceFor(track, profile).corroborates) return false;
   const metadataText = normalize(`${track.artist} ${track.title} ${track.album} ${labelText(track)}`);
   const genreInference = genreInferenceFor(track, query, options, profile);
-  const progressiveMetadata = profile.isProgressiveTarget && Boolean(
-    matchingSceneArtist(track.artist) ||
-    matchingSceneLabel(labelText(track)) ||
+  const canonicalOfficialGenre = genreValuesMatchTarget(trackGenreValues(track), profile.targetGenres);
+  const progressiveMetadata = isProgressiveSceneTarget(profile) && Boolean(
+    matchingSceneArtist(track.artist, profile) ||
+    matchingSceneRemixer(track, profile) ||
+    matchingSceneLabel(labelText(track), profile) ||
     hasAnyTerm(metadataText, PROGRESSIVE_CATALOG_TARGETS)
   );
   const scene = sceneEvidenceFor(track, query, options, profile);
   return Boolean(
+    canonicalOfficialGenre ||
     progressiveMetadata ||
     requestedLabelMatch(track, profile) ||
     hasSeedArtistMatch(track, options, profile) ||
     genreInference.corroboratesRequested ||
     scene.labelSeed ||
+    (profile.isProgressiveTranceTarget && scene.artistAnchor) ||
     (scene.artistAnchor && scene.metadataSceneEvidence) ||
     scene.metadataTarget ||
     scene.metadataAdjacent
@@ -4176,13 +5441,13 @@ function looksLikeGenericGenreKeywordUploadTitle(title = "", album = "") {
   if (!normalizedTitle) return false;
   const rawAlbum = cleanText(album);
   const titleEqualsAlbum = normalizedTitle && normalizedTitle === normalize(rawAlbum);
-  const hasGenre = /\b(?:deep house|tech house|afro house|electro house|progressive house|melodic house|organic house|house|melodic techno|progressive techno|deep techno|hypnotic techno|techno|progressive trance|psytrance|psy trance|trance|ambient|downtempo|breaks|breakbeat|uk garage|garage|dubstep|edm)\b/.test(normalizedTitle);
+  const hasGenre = /\b(?:deep house|tech house|afro house|electro house|progressive house|melodic house|organic house|house|melodic techno|progressive techno|deep techno|hypnotic techno|techno|progressive trance|psytrance|psy trance|trance|ambient|downtempo|breaks|breakbeat|uk garage|garage|dubstep|edm|rock|metal|alternative rock|indie rock|psychedelic rock|progressive rock|art rock|space rock)\b/.test(normalizedTitle);
   if (!hasGenre) return false;
 
-  const genreWords = normalizedTitle.match(/\b(?:edm|electronic|dance|melodic|progressive|deep|organic|hypnotic|dark|afro|electro|uk|garage|house|techno|trance|ambient|downtempo|breaks|breakbeat|dubstep)\b/g) || [];
+  const genreWords = normalizedTitle.match(/\b(?:edm|electronic|dance|melodic|progressive|psychedelic|deep|organic|hypnotic|dark|afro|electro|uk|garage|house|techno|trance|ambient|downtempo|breaks|breakbeat|dubstep|rock|metal|alternative|indie|art|space)\b/g) || [];
   const versionWords = /\b(?:mix|version|edit|remix|loop|club|dub|rework)\b/.test(normalizedTitle);
-  const parentheticalGenre = /\([^)]*\b(?:house|techno|trance|garage|ambient|downtempo|breaks|breakbeat|dubstep|edm)\b[^)]*\)/i.test(rawTitle);
-  const coreGenres = normalizedTitle.match(/\b(?:house|techno|trance|garage|ambient|downtempo|breaks|breakbeat|dubstep|edm)\b/g) || [];
+  const parentheticalGenre = /\([^)]*\b(?:house|techno|trance|garage|ambient|downtempo|breaks|breakbeat|dubstep|edm|rock|metal)\b[^)]*\)/i.test(rawTitle);
+  const coreGenres = normalizedTitle.match(/\b(?:house|techno|trance|garage|ambient|downtempo|breaks|breakbeat|dubstep|edm|rock|metal)\b/g) || [];
   const titleWords = normalizedTitle.split(/\s+/).filter(Boolean);
   const genreDominated = genreWords.length >= 2 && genreWords.length >= titleWords.length - 2;
   const multiGenreSoup = new Set(coreGenres).size >= 2 && genreWords.length >= 3;
@@ -4209,7 +5474,7 @@ function seoSpamReason(track = {}, options = {}, profile = buildDiscoveryProfile
     ...(profile.targetGenres || []),
     ...adjacentLaneTerms(profile, options)
   ], 32);
-  const broadGenreTitle = /\b(?:deep tech house|deep tech|tech house|deep house|melodic house|organic house|progressive house|progressive trance|psytrance|psy trance|psychedelic trance|goa trance|melodic techno|progressive techno|deep techno|hypnotic techno|techno|trance|ambient|downtempo|breaks|breakbeat|drum and bass|dnb|dubstep|house)\b/i.test(titleAlbum);
+  const broadGenreTitle = /\b(?:deep tech house|deep tech|tech house|deep house|melodic house|organic house|progressive house|progressive trance|psytrance|psy trance|psychedelic trance|goa trance|melodic techno|progressive techno|deep techno|hypnotic techno|techno|trance|ambient|downtempo|breaks|breakbeat|drum and bass|dnb|dubstep|house|rock|metal|alternative rock|indie rock|psychedelic rock|progressive rock|art rock|space rock)\b/i.test(titleAlbum);
   const hasTargetGenreInTitle = broadGenreTitle || (catalogGenreTerms.length
     ? hasAnyTerm(titleAlbum, catalogGenreTerms)
     : false);
@@ -4228,8 +5493,10 @@ function seoSpamReason(track = {}, options = {}, profile = buildDiscoveryProfile
   const genreStyleParenthetical = rawTitle.match(/\([^)]{8,140}\)/g)?.some(looksLikeGenreStyleDescriptor) || false;
   const slashGenreStyleDescriptor = looksLikeSlashSeparatedGenreStyleDescriptor(rawTitle) ||
     looksLikeSlashSeparatedGenreStyleDescriptor(rawAlbum);
+  const dashGenreStyleTail = rawTitle.split(/\s+[–—-]\s+/).length >= 2 &&
+    rawTitle.split(/\s+[–—-]\s+/).slice(1).some(looksLikeStandaloneGenreStylePhrase);
   const artistLooksLikeMusicChannel = /\b(?:music|official|channel|sounds?|records?|recordings?)\b/i.test(rawArtist);
-  const genreYearTag = /\|\s*[^|]*(?:house|techno|trance|ambient|breaks|breakbeat)[^|]*\|\s*(?:19\d{2}|20\d{2})\b/i.test(`${rawTitle} ${rawAlbum}`);
+  const genreYearTag = /\|\s*[^|]*(?:house|techno|trance|ambient|breaks|breakbeat|rock|metal)[^|]*\|\s*(?:19\d{2}|20\d{2})\b/i.test(`${rawTitle} ${rawAlbum}`);
   const titleEqualsAlbum = normalize(rawTitle) && normalize(rawTitle) === normalize(rawAlbum);
   const genreCataloguePhrase = hasTargetGenreInTitle && catalogFillerNoun &&
     (titleEqualsAlbum || artistLooksLikeMusicChannel || normalize(rawTitle).split(/\s+/).length >= 5 || normalize(rawAlbum).split(/\s+/).length >= 4);
@@ -4250,10 +5517,19 @@ function seoSpamReason(track = {}, options = {}, profile = buildDiscoveryProfile
   const seasonalCatalogueFiller = embeddedMarketingYear &&
     /\b(?:happy new year songs?|new year|new beginnings?)\b/i.test(`${rawTitle} ${rawAlbum}`) &&
     (distributorLabel || normalize(rawArtist) === normalize(rawLabel) || /\b(?:lofi|songs?|catalogue|catalog)\b/i.test(raw));
+  const obviousCompilationMarker = /\b(?:various artists?|compilation|playlist|chart hits?|top\s*\d+|best\s+(?:of\s+)?|continuous mix|mixed by|dj mix)\b/i.test(`${rawTitle} ${rawAlbum}`) ||
+    (normalize(rawArtist) && normalize(rawArtist) === normalize(rawLabel) && /\b(?:vol(?:ume)?\.?\s*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)|pt\.?\s*\d+|part\s*\d+)\b/i.test(`${rawTitle} ${rawAlbum}`));
+  const broadcastSeriesCompilation = /\b(?:future sound of egypt|a state of trance|state of trance|group therapy|global dj broadcast|essential mix)\b/i.test(titleAlbum) &&
+    (/\b(?:disc|cd|episode|ep\.?|radio|show|series)\b/i.test(titleAlbum) || /\b\d{2,4}\b/.test(titleAlbum));
+  const numberedLongDjSet = durationMinutes(track) >= 30 &&
+    /\bmix\s*(?:\d+|one|two|three|four)\b/i.test(rawTitle);
+  const mixedCompilationExcerpt = /[([]\s*(?:mixed|mix cut)\s*[)\]]/i.test(rawTitle) ||
+    /^(?:mixed|mix cut)$/i.test(cleanText(track.version));
 
   if (audiobookChapter) return "Audiobook chapter result, not a music track.";
   if (titleOnlyYear) return "Title is only a year, not a useful track match.";
   if (obviousCoverOrKaraoke) return "Cover/karaoke/tribute catalogue result.";
+  if (obviousCompilationMarker || broadcastSeriesCompilation || numberedLongDjSet || mixedCompilationExcerpt) return "Compilation/chart-style catalogue filler.";
   if (functionalMusicText || functionalMusicArtist) return "Functional/background music result looks like SEO catalogue filler.";
   if (genericGenreArtistName(rawArtist, profile)) return "Artist name looks like genre/SEO catalogue filler.";
   if (labelAsArtist) return "Artist name looks like a label/catalogue account, not a real artist.";
@@ -4264,6 +5540,9 @@ function seoSpamReason(track = {}, options = {}, profile = buildDiscoveryProfile
   if (shortGenreYearTitle) return "Title is just genre/year keywords, not a real track title.";
   if (genreStyleParenthetical && (titleEqualsAlbum || artistLooksLikeMusicChannel || hasTargetGenreInTitle)) {
     return "Title uses genre/style descriptor keywords like SEO catalogue filler.";
+  }
+  if (dashGenreStyleTail && hasTargetGenreInTitle) {
+    return "Title uses a dash-separated genre/style descriptor tail like SEO catalogue filler.";
   }
   if (slashGenreStyleDescriptor && (titleEqualsAlbum || artistLooksLikeMusicChannel || hasTargetGenreInTitle || longKeywordTitle)) {
     return "Title uses slash-separated genre/style descriptor keywords like SEO catalogue filler.";
@@ -4288,8 +5567,10 @@ function seoSpamReason(track = {}, options = {}, profile = buildDiscoveryProfile
   return "";
 }
 
-function belowMinimumSoftRejectReason(candidate = {}, profile = {}) {
+function belowMinimumSoftRejectReason(candidate = {}, profile = {}, options = {}) {
   if (!candidate.belowMinimum || !profile.targetGenres?.length) return "";
+  const hardDurationReason = durationConstraintReason(candidate.tidal || candidate, options);
+  if (hardDurationReason) return hardDurationReason;
   const breakdown = candidate.scoreBreakdown || {};
   const score = Number(candidate.score || breakdown.total || 0);
   const minimumScore = Number(candidate.minimumScore || 0);
@@ -4427,6 +5708,7 @@ function poolDiagnosticBucketFor(item = {}) {
   if (!reason) return "Other discarded";
   if (/\b(?:previously suggested|held back|history|already suggested|already recommended|not recommended before|repeat)\b/.test(reason)) return "Previously suggested";
   if (/\b(?:release|year|date|outside|range|canonical|reissue|remaster|older)\b/.test(reason)) return "Date/range mismatch";
+  if (/\b(?:duration|minutes?|shorter than|too short|hard minimum)\b/.test(reason)) return "Duration constraint";
   if (/\b(?:seo|catalogue|catalog|filler|functional|background|keyword|genre year|genre date|compilation|chart style|playlist|audiobook|audio book|chapter)\b/.test(reason)) return "SEO/catalog sludge";
   if (/\b(?:below minimum|minimum|weak prompt|not close enough|weak requested genre)\b/.test(reason)) return "Below minimum / weak match";
   if (/\b(?:outside the requested|genre vibe|requested genre|scene|wrong genre|corroborat|metadata does not confirm|query only)\b/.test(reason)) return "Weak genre/scene evidence";
@@ -4466,6 +5748,7 @@ function buildPoolDiagnostics({
   countFillCandidates = [],
   belowMinimumCountFillKept = 0,
   previousCandidates = [],
+  previousFallbackKept = 0,
   artistNoveltyCandidates = [],
   artistNoveltyFallbackKept = 0,
   requestedCount = 0,
@@ -4475,7 +5758,13 @@ function buildPoolDiagnostics({
   budgetExhausted = false,
   laneSelection = {},
   queryYield = {},
-  queryRecovery = {}
+  queryRecovery = {},
+  querySelectionDiagnostics = [],
+  catalogPaginationDiagnostics = [],
+  candidateCollectionDiagnostics = {},
+  searchStopDiagnostics = [],
+  queryExecutionDiagnostics = [],
+  deepCatalog = {}
 } = {}) {
   function artistCountMapFor(list = []) {
     const counts = new Map();
@@ -4554,6 +5843,7 @@ function buildPoolDiagnostics({
   const notes = [];
   if (budgetExhausted) notes.push("Runtime budget was exhausted before every crawl/search path could finish.");
   if (previousCandidates.length) notes.push(`${previousCandidates.length} previously suggested candidate${previousCandidates.length === 1 ? "" : "s"} held back for novelty.`);
+  if (previousFallbackKept) notes.push(`${previousFallbackKept} previously suggested candidate${previousFallbackKept === 1 ? "" : "s"} promoted only as a fallback after the fresh pool undershot.`);
   if (artistNoveltyCandidates.length) notes.push(`${artistNoveltyCandidates.length} repeated-artist candidate${artistNoveltyCandidates.length === 1 ? "" : "s"} held back for artist novelty.`);
   if (artistNoveltyFallbackKept) notes.push(`${artistNoveltyFallbackKept} least-repeated artist fallback${artistNoveltyFallbackKept === 1 ? "" : "s"} kept because the fresh-artist search undershot.`);
   if (minimumRescueCandidates.length) notes.push(`${minimumRescueCandidates.length} below-floor candidate${minimumRescueCandidates.length === 1 ? "" : "s"} were eligible as branch-out fallback.`);
@@ -4585,6 +5875,7 @@ function buildPoolDiagnostics({
     budgetExhausted: Boolean(budgetExhausted),
     scoreFiltered: scoreFiltered.length,
     previousHeldBack: previousCandidates.length,
+    previousFallbackKept: Number(previousFallbackKept || 0),
     artistNoveltyHeldBack: artistNoveltyCandidates.length,
     artistNoveltyFallbackKept: Number(artistNoveltyFallbackKept || 0),
     rescueAvailable: minimumRescueCandidates.length,
@@ -4628,6 +5919,55 @@ function buildPoolDiagnostics({
       errors: Number(queryYield.errorCount || 0),
       pruned: Number(queryYield.prunedCount || 0),
       laneBudgetStops: Array.isArray(queryYield.laneBudgetStops) ? queryYield.laneBudgetStops.length : 0
+    },
+    querySelectionDiagnostics: Array.isArray(querySelectionDiagnostics)
+      ? querySelectionDiagnostics.slice(0, 160)
+      : [],
+    queryExecution: Array.isArray(queryExecutionDiagnostics)
+      ? queryExecutionDiagnostics.slice(0, 160)
+      : [],
+    catalogPagination: Array.isArray(catalogPaginationDiagnostics)
+      ? catalogPaginationDiagnostics.slice(0, 160)
+      : [],
+    candidateAccumulation: {
+      rawCandidates: Number(candidateCollectionDiagnostics.rawCount || 0),
+      uniqueCandidatesBeforeSelection: Number(candidateCollectionDiagnostics.acceptedCount || 0),
+      validDurationCandidatesBeforeSelection: Number(candidateCollectionDiagnostics.validDurationCount || 0),
+      freshCandidatesBeforeNovelty: Number(candidateCollectionDiagnostics.freshBeforeNoveltyCount || 0),
+      freshCandidatesAfterNovelty: Number(candidateCollectionDiagnostics.freshAfterNoveltyCount || 0),
+      duplicateCandidates: Number(candidateCollectionDiagnostics.duplicateCount || 0),
+      invalidIdentityCandidates: Number(candidateCollectionDiagnostics.invalidIdentityCount || 0),
+      duplicateExamples: Array.isArray(candidateCollectionDiagnostics.duplicateExamples)
+        ? candidateCollectionDiagnostics.duplicateExamples.slice(0, 8)
+        : [],
+      durationCandidates: Array.isArray(candidateCollectionDiagnostics.durationCandidates)
+        ? candidateCollectionDiagnostics.durationCandidates.slice(0, 160)
+        : []
+    },
+    finalSelection: {
+      candidatesBeforeSelection: Number(candidateCollectionDiagnostics.acceptedCount || 0),
+      selected: tracks.length,
+      alternates: alternates.length,
+      lostToSelection: Math.max(0, Number(candidateCollectionDiagnostics.acceptedCount || 0) - tracks.length - alternates.length),
+      diversityCapHeld: Number(capHeldDiagnostics.total || 0),
+      selectionDiagnostics: laneQuota?.selectionDiagnostics || null
+    },
+    acceptedQueryFamilies: [...(candidateCollectionDiagnostics.acceptedByFamily instanceof Map
+      ? candidateCollectionDiagnostics.acceptedByFamily.values()
+      : [])].slice(0, 80),
+    searchStops: Array.isArray(searchStopDiagnostics)
+      ? searchStopDiagnostics.slice(0, 240)
+      : [],
+    deepCatalog: {
+      enabled: Boolean(deepCatalog?.enabled),
+      triggered: Boolean(deepCatalog?.triggered),
+      pageCount: Number(deepCatalog?.pageCount || 1),
+      attempted: Number(deepCatalog?.attempted || 0),
+      returned: Number(deepCatalog?.returned || 0),
+      accepted: Number(deepCatalog?.accepted || 0),
+      duplicateCount: Number(deepCatalog?.duplicateCount || 0),
+      stoppedReason: cleanText(deepCatalog?.stoppedReason || ""),
+      anchors: Array.isArray(deepCatalog?.anchors) ? deepCatalog.anchors.slice(0, 8) : []
     },
     queryRecovery: {
       enabled: Boolean(queryRecovery?.enabled),
@@ -4680,15 +6020,19 @@ function isLikelySceneCandidate(track = {}, query = "", options = {}, profile = 
   const metadataText = normalize(`${track.artist} ${track.title} ${track.album} ${labelText(track)}`);
   const text = normalize(`${metadataText} ${query}`);
   const wanted = normalize(`${options.request} ${options.genres} ${options.mood}`);
-  const artistMatch = Boolean(matchingSceneArtist(track.artist));
+  const artistMatch = Boolean(matchingSceneArtist(track.artist, profile));
+  const labelMatch = Boolean(matchingSceneLabel(labelText(track), profile));
+  const remixerMatch = Boolean(matchingSceneRemixer(track, profile));
   const genreInference = profile.targetGenres.length ? genreInferenceFor(track, query, options, profile) : {};
 
   if (profile.isProgressiveTarget && wantsProgressiveHouseOnly(options)) {
-    if (isTranceForwardArtist(track.artist)) return false;
+    const remix = namedRemixEvidence(track);
+    if (isTranceForwardArtist(track.artist) && !(remix.named && !remix.versionConflict)) return false;
     if (/\b(?:progressive trance|uplifting|psytrance|goa|vocal trance)\b/.test(text)) return false;
   }
 
   if (profile.isProgressiveTarget && artistMatch) return true;
+  if (profile.isProgressiveTranceTarget && (artistMatch || labelMatch || remixerMatch)) return true;
   if (profile.isProgressiveTarget && wanted.includes("progressive")) {
     if (/\b(?:progressive|melodic|deep|organic|anjuna|anjunadeep|sudbeat|lost found|meanwhile|balance|bedrock|songspire|this never happened)\b/.test(text)) {
       return true;
@@ -4702,16 +6046,17 @@ function isLikelySceneCandidate(track = {}, query = "", options = {}, profile = 
     if (genreInference.corroboratesRequested && Number(genreInference.confidence || 0) >= 28) return true;
     if (requestedLabelMatch(track, profile)) return true;
     if (hasSeedArtistMatch(track, options, profile)) return true;
+    if (scene.sceneArtist || scene.sceneLabel || scene.sceneRemixer) return true;
+    if (profile.isProgressiveTranceTarget && scene.artistAnchor) return true;
     if (scene.artistAnchor && scene.metadataSceneEvidence) return true;
     if (scene.artistAnchor && !scene.metadataSceneEvidence) return false;
     if (scene.labelSeed) return true;
     if (track.discoveryLane === "recent") return false;
+    if (genreValuesMatchTarget(trackGenreValues(track), profile.targetGenres)) return true;
     if (hasAnyTerm(metadataText, profile.targetGenres)) return true;
-    if (hasAnyTerm(query, profile.targetGenres) && hasAnyTerm(metadataText, profile.vibeTerms)) return true;
     if (track.discoveryLane === "adjacent") {
       const adjacentTerms = adjacentLaneTerms(profile, options);
       if (hasAnyTerm(metadataText, adjacentTerms)) return true;
-      if (hasAnyTerm(query, adjacentTerms) && hasAnyTerm(metadataText, profile.vibeTerms)) return true;
     }
     if (profile.isGenreDiscoveryTarget) return false;
   }
@@ -4720,15 +6065,26 @@ function isLikelySceneCandidate(track = {}, query = "", options = {}, profile = 
 }
 
 function artistMatchesRequested(trackArtist = "", requestedArtists = []) {
-  const actualArtists = splitArtists(trackArtist);
-  if (!actualArtists.length || !requestedArtists.length) return false;
-  return requestedArtists.some((requested) => actualArtists.some((actual) => artistNamesMatch(actual, requested, { contains: true })));
+  return requestedArtists.some((requested) => artistMatchesKnownName(trackArtist, requested));
 }
 
 function requestedArtistMismatchReason(track = {}, profile = {}) {
   if (profile.scoringMode !== "pure" || !profile.requestedArtists?.length) return "";
   if (artistMatchesRequested(track.artist, profile.requestedArtists)) return "";
   return `Pure Search requested ${profile.requestedArtists.join(", ")}, but TIDAL returned ${track.artist || "unknown artist"}.`;
+}
+
+function identityCorrectnessReasonFor(track = {}, options = {}, profile = buildDiscoveryProfile(options)) {
+  const targetArtist = queryTargetArtist(track.query, profile);
+  if (targetArtist) {
+    const target = normalize(targetArtist);
+    const matchedTarget = artistMatchesKnownName(track.artist, targetArtist) ||
+      normalize(`${track.title} ${track.album}`).includes(target);
+    if (!matchedTarget && !sceneCorroboratesArtistDrift(track, options, profile)) {
+      return `Search was for ${targetArtist}, but TIDAL returned ${track.artist}.`;
+    }
+  }
+  return requestedArtistMismatchReason(track, profile);
 }
 
 function sceneCorroboratesArtistDrift(track = {}, options = {}, profile = buildDiscoveryProfile(options)) {
@@ -4754,17 +6110,8 @@ function rejectReason(track = {}, options = {}, profile = buildDiscoveryProfile(
     profile.requestedArtists?.length &&
     artistMatchesRequested(track.artist, profile.requestedArtists)
   );
-  const targetArtist = queryTargetArtist(track.query, profile);
-  if (targetArtist) {
-    const target = normalize(targetArtist);
-    const matchedTarget = artistMatchesKnownName(track.artist, targetArtist, { contains: true }) ||
-      normalize(`${track.title} ${track.album}`).includes(target);
-    if (!matchedTarget && !sceneCorroboratesArtistDrift(track, options, profile)) {
-      return `Search was for ${targetArtist}, but TIDAL returned ${track.artist}.`;
-    }
-  }
-  const requestedMismatch = requestedArtistMismatchReason(track, profile);
-  if (requestedMismatch) return requestedMismatch;
+  const identityReason = identityCorrectnessReasonFor(track, options, profile);
+  if (identityReason) return identityReason;
   if (yearRange?.dateSpecific && !track.releaseDate) return `No TIDAL release date for ${yearRange.label}.`;
   if (yearRange?.dateSpecific && !hasCanonicalReleaseForRange(track, yearRange)) return `No canonical TIDAL album/track release date for ${yearRange.label}.`;
   if (yearRange?.dateSpecific && !yearFits(track.year, yearRange, track.releaseDate)) return `TIDAL release date ${track.releaseDate || track.year || "unknown"} is outside ${yearRange.label}.`;
@@ -4775,9 +6122,13 @@ function rejectReason(track = {}, options = {}, profile = buildDiscoveryProfile(
   if (yearRange && hasOutOfRangeEmbeddedYear(track, yearRange)) return `Title or album references an older year outside ${yearRange.label}.`;
   const seoReason = seoSpamReason(track, options, profile);
   if (seoReason) return seoReason;
+  const electronicDomainReason = electronicDomainDriftReason(track, options, profile);
+  if (electronicDomainReason) return electronicDomainReason;
   const omnivoreReason = omnivoreDriftReason(track, options, profile);
   if (omnivoreReason) return omnivoreReason;
   if (isShortEdit(track)) return "Short/radio edit.";
+  const hardDurationReason = durationConstraintReason(track, options);
+  if (hardDurationReason) return hardDurationReason;
   if (profile.targetGenres.length && !pureRequestedArtistMatch) {
     const scene = sceneEvidenceFor(track, track.query, options, profile);
     if (scene.artistAnchor && !scene.metadataSceneEvidence) {
@@ -4790,6 +6141,196 @@ function rejectReason(track = {}, options = {}, profile = buildDiscoveryProfile(
   return "";
 }
 
+function admissionRejectionStageFor(reason = "", diagnostics = {}) {
+  if (!diagnostics.identityCorrectness?.passed) return "identity-correctness";
+  if (!diagnostics.catalogueQuality?.passed) return "catalogue-quality";
+  if (!diagnostics.durationConstraints?.passed) return "duration-constraints";
+  if (!diagnostics.genreLaneCompatibility?.passed) return "genre-lane-compatibility";
+  const text = normalize(reason);
+  if (/below minimum|minimum .* floor|score .* below|score threshold|score floor/.test(text)) return "score-threshold";
+  if (/previously suggested|already suggested|held back|history|already recommended|repeat/.test(text)) return "novelty-policy";
+  if (/artist novelty|fresh artist/.test(text)) return "artist-novelty-policy";
+  if (/requested genre|genre\/scene|outside .*genre|specific child genre|weak requested-genre|genre lane/.test(text)) return "genre-lane-compatibility";
+  if (/radio edit|short edit|version|remaster/.test(text)) return "version-safety";
+  if (/tidal|roon|queue|provider|verification/.test(text)) return "provider-safety";
+  return reason ? "post-search-admission" : "";
+}
+
+function admissionDiagnosticsFor(track = {}, options = {}, profile = buildDiscoveryProfile(options), decision = {}) {
+  const identityReason = identityCorrectnessReasonFor(track, options, profile);
+  const catalogueReason = seoSpamReason(track, options, profile);
+  const durationReason = durationConstraintReason(track, options);
+  const durationConstraint = hardDurationConstraintFor(options);
+  const pureRequestedArtistMatch = Boolean(
+    profile.scoringMode === "pure" &&
+    profile.requestedArtists?.length &&
+    artistMatchesRequested(track.artist, profile.requestedArtists)
+  );
+  const genreInference = profile.targetGenres?.length
+    ? genreInferenceFor(track, track.query, options, profile)
+    : { confidence: 0, evidence: [], summary: "", queryOnly: false, corroboratesRequested: true };
+  const vibeInference = profile.vibeTerms?.length
+    ? vibeInferenceFor(track, track.query, profile)
+    : { confidence: 0, evidence: [], summary: "", queryOnly: false, corroboratesRequested: true, matchedTerms: [] };
+  const scene = profile.targetGenres?.length
+    ? sceneEvidenceFor(track, track.query, options, profile)
+    : {};
+  const childGenreEvidence = profile.targetGenres?.length && isStrictChildGenreTarget(profile)
+    ? specificChildGenreEvidenceFor(track, profile)
+    : {};
+  const parentGenreTerms = profile.genreProfile?.parentGenres || [];
+  const metadataForGenreEvidence = normalize(`${track.artist} ${track.title} ${track.album} ${labelText(track)} ${trackGenreValues(track).join(" ")}`);
+  const parentMetadataMatches = parentGenreTerms.filter((term) => hasAnyTerm(metadataForGenreEvidence, [term]));
+  const parentOfficialMatches = parentGenreTerms.filter((term) => trackGenreValues(track).some((value) => containsNormalized(value, term)));
+  const querySceneLabel = isProgressiveSceneTarget(profile) ? matchingSceneLabel(track.query, profile) : "";
+  const querySceneArtist = isProgressiveSceneTarget(profile) ? matchingSceneArtist(track.query, profile, { contains: true }) : "";
+  const explicitNonTranceGenre = /\b(?:rock|metal|country|folk|classical|jazz|hip hop|rap|r and b|soul|soundtrack|film score|spoken word|audiobook|podcast)\b/i.test(trackGenreValues(track).join(" "));
+  const matchedSeedArtist = (profile.seedArtists || []).find((artist) => (
+    artistMatchesKnownName(track.artist, artist)
+  )) || "";
+  const sceneAnchorReason = profile.targetGenres?.length && !pureRequestedArtistMatch && scene.artistAnchor && !scene.metadataSceneEvidence
+    ? `Artist name matches ${scene.artistAnchor}, but TIDAL metadata does not confirm the requested genre/scene.`
+    : "";
+  const genreReason = profile.targetGenres?.length && !pureRequestedArtistMatch
+    ? (sceneAnchorReason || sourceQualityReason(track, options, profile) ||
+      (!isLikelySceneCandidate(track, track.query, options, profile) ? "Outside the requested genre lane." : ""))
+    : "";
+  const exactGenreConflictDetected = Boolean(
+    genreReason &&
+    explicitNonTranceGenre &&
+    !childGenreEvidence.corroborates &&
+    !parentMetadataMatches.length &&
+    !parentOfficialMatches.length
+  );
+  const scoreBeforeRejection = Number(decision.scoreBeforeRejection);
+  const rejectionStage = cleanText(decision.rejectionStage || "") || admissionRejectionStageFor(decision.hardFailReason || "", {
+    catalogueQuality: { passed: !catalogueReason },
+    identityCorrectness: { passed: !identityReason },
+    durationConstraints: { passed: !durationReason },
+    genreLaneCompatibility: { passed: !genreReason }
+  });
+  const hardFailReason = cleanText(decision.hardFailReason || "");
+  const hasScoreBeforeRejection = Number.isFinite(scoreBeforeRejection) && scoreBeforeRejection > 0;
+
+  return {
+    candidate: {
+      artist: cleanText(track.artist),
+      title: cleanText(track.title)
+    },
+    normalizedRequestedGenre: (profile.targetGenres || []).map(normalizeGenreKey).filter(Boolean),
+    candidateGenreEvidence: {
+      official: trackGenreValues(track),
+      inferred: genreInference.evidence || [],
+      confidence: Number(genreInference.confidence || 0),
+      canonicalOfficialMatch: genreValuesMatchTarget(trackGenreValues(track), profile.targetGenres || []),
+      child: {
+        exact: Boolean(childGenreEvidence.exactGenre),
+        keyword: cleanText(childGenreEvidence.childKeyword || ""),
+        corroborates: childGenreEvidence.corroborates !== false,
+        sceneRemixer: cleanText(childGenreEvidence.sceneRemixer || "")
+      },
+      parent: {
+        requested: parentGenreTerms,
+        metadataMatches: parentMetadataMatches,
+        officialMatches: parentOfficialMatches
+      }
+    },
+    childGenreEvidence: {
+      exact: Boolean(childGenreEvidence.exactGenre),
+      keyword: cleanText(childGenreEvidence.childKeyword || ""),
+      corroborates: childGenreEvidence.corroborates !== false,
+      sceneLabel: cleanText(childGenreEvidence.sceneLabel || ""),
+      sceneArtist: cleanText(childGenreEvidence.sceneArtist || ""),
+      sceneRemixer: cleanText(childGenreEvidence.sceneRemixer || ""),
+      querySceneLabel: cleanText(childGenreEvidence.querySceneLabel || ""),
+      querySceneArtist: cleanText(childGenreEvidence.querySceneArtist || "")
+    },
+    parentGenreEvidence: {
+      requested: parentGenreTerms,
+      metadataMatches: parentMetadataMatches,
+      officialMatches: parentOfficialMatches
+    },
+    artistSceneEvidence: {
+      trustedSceneArtist: cleanText(scene.sceneArtist || ""),
+      trustedRemixer: cleanText(scene.sceneRemixer || childGenreEvidence.sceneRemixer || ""),
+      storedGenreProfileArtist: cleanText(scene.artistAnchor || ""),
+      seedArtist: cleanText(matchedSeedArtist),
+      metadataCorroboration: Boolean(scene.metadataSceneEvidence)
+    },
+    labelSceneEvidence: {
+      trustedSceneLabel: cleanText(scene.sceneLabel || ""),
+      storedGenreProfileLabel: cleanText(scene.labelSeed || ""),
+      requestedLabel: cleanText(requestedLabelMatch(track, profile)),
+      metadataCorroboration: Boolean(scene.metadataSceneEvidence)
+    },
+    querySceneEvidence: {
+      query: cleanText(track.query || ""),
+      targetGenreMatch: Boolean(scene.queryTarget),
+      trustedSceneLabel: cleanText(querySceneLabel),
+      trustedSceneArtist: cleanText(querySceneArtist),
+      trustedSceneMatch: Boolean(querySceneLabel || querySceneArtist || scene.queryLabel),
+      queryLabelMatch: Boolean(scene.queryLabel)
+    },
+    exactGenreConflictDetected,
+    catalogueQuality: {
+      hard: true,
+      passed: !catalogueReason,
+      reason: catalogueReason,
+      evidence: catalogueReason ? [catalogueReason] : []
+    },
+    identityCorrectness: {
+      hard: true,
+      passed: !identityReason,
+      reason: identityReason,
+      evidence: identityReason ? [identityReason] : []
+    },
+    genreLaneCompatibility: {
+      hard: true,
+      passed: !genreReason,
+      reason: genreReason,
+      confidence: Number(genreInference.confidence || 0),
+      evidence: genreInference.evidence || [],
+      canonicalOfficialMatch: genreValuesMatchTarget(trackGenreValues(track), profile.targetGenres || [])
+    },
+    vibeMoodCompatibility: {
+      // Vibe is intentionally diagnostic/ranking evidence only. It never
+      // overrides the catalogue-quality, identity, genre, or duration gates.
+      hard: false,
+      passed: !profile.vibeTerms?.length || Boolean(vibeInference.corroboratesRequested),
+      reason: profile.vibeTerms?.length && !vibeInference.corroboratesRequested
+        ? "Vibe evidence is incomplete; retained as a soft ranking signal."
+        : "",
+      confidence: Number(vibeInference.confidence || 0),
+      evidence: vibeInference.evidence || [],
+      matchedTerms: vibeInference.matchedTerms || [],
+      enforcement: "ranking-only"
+    },
+    durationConstraints: {
+      hard: Boolean(durationConstraint),
+      passed: !durationReason,
+      reason: durationReason,
+      constraint: durationConstraint
+    },
+    durationResult: {
+      status: durationReason ? "failed" : "passed",
+      reason: durationReason,
+      constraint: durationConstraint,
+      durationMs: Number(track.durationMs || track.tidal?.durationMs || 0) || null
+    },
+    scoreBeforeRejection: hasScoreBeforeRejection ? scoreBeforeRejection : null,
+    rejectionStage,
+    hardFailReason,
+    hardFail: Boolean(decision.hardFail ?? [
+      "catalogue-quality",
+      "identity-correctness",
+      "duration-constraints",
+      "genre-lane-compatibility",
+      "version-safety",
+      "provider-safety"
+    ].includes(rejectionStage))
+  };
+}
+
 function hasSeedArtistMatch(track = {}, options = {}, profile = null) {
   const seedKeys = new Set((profile?.seedArtists || extractSeedArtists(options)).map(artistIdentityKey));
   if (!seedKeys.size) return false;
@@ -4799,12 +6340,17 @@ function hasSeedArtistMatch(track = {}, options = {}, profile = null) {
 function requestedLabelMatch(track = {}, profile = {}) {
   const label = labelText(track);
   if (!label || !profile.requestedLabels?.length) return "";
-  return profile.requestedLabels.find((requested) => containsEntityTerm(label, requested) || containsEntityTerm(requested, label)) || "";
+  return profile.requestedLabels.find((requested) => entityEvidenceMatches(label, requested)) || "";
 }
 
 function lengthPreferenceIsRelevant(options = {}, profile = {}) {
   if (wantsLongTracks(options)) return true;
   if (profile.isProgressiveTarget) return true;
+  // A neutral standby taste reservoir is still primarily electronic/catalog
+  // discovery in this app. Its operational wording is intentionally removed
+  // from vibe parsing, so preserve the normal dance-track length signal here
+  // without turning "long" or "underground" into a searchable vibe.
+  if (profile.tasteProfileLed && /\bstandby\s+pool\b/i.test(String(options.request || ""))) return true;
   const text = normalize([
     options.request,
     options.genres,
@@ -4920,8 +6466,8 @@ function serendipityBaseAdjustmentFor(track = {}, options = {}, profile = {}, co
   const strongLength = Boolean((minutes >= 5 && minutes <= 10.5) || Number(components.lengthPreference || 0) >= 8);
   const genreConfidence = Number(components.genreInference?.confidence || 0);
   const scene = sceneEvidenceFor(track, track.query, options, profile);
-  const sceneLabel = profile.isProgressiveTarget ? matchingSceneLabel(labelText(track)) : "";
-  const sceneArtist = profile.isProgressiveTarget ? matchingSceneArtist(track.artist) : "";
+  const sceneLabel = isProgressiveSceneTarget(profile) ? matchingSceneLabel(labelText(track), profile) : "";
+  const sceneArtist = isProgressiveSceneTarget(profile) ? matchingSceneArtist(track.artist, profile) : "";
   const metadataText = normalize(`${track.artist} ${track.title} ${track.album} ${labelText(track)} ${track.query}`);
   const metadataTarget = hasAnyTerm(metadataText, profile.targetGenres || []) || Boolean(components.vibeInference?.corroboratesRequested);
   const requestedLabel = requestedLabelMatch(track, profile);
@@ -4981,8 +6527,8 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
   const metadataText = normalize(`${track.artist} ${track.title} ${track.album} ${labelText(track)}`);
   const queryText = normalize(track.query);
   const text = normalize(`${metadataText} ${queryText}`);
-  const sceneArtist = profile.isProgressiveTarget ? matchingSceneArtist(track.artist) : "";
-  const sceneLabel = profile.isProgressiveTarget ? matchingSceneLabel(labelText(track)) : "";
+  const sceneArtist = isProgressiveSceneTarget(profile) ? matchingSceneArtist(track.artist, profile) : "";
+  const sceneLabel = isProgressiveSceneTarget(profile) ? matchingSceneLabel(labelText(track), profile) : "";
   const sceneEvidence = profile.targetGenres.length ? sceneEvidenceFor(track, track.query, options, profile) : {};
   const genreInference = profile.targetGenres.length
     ? genreInferenceFor(track, track.query, options, profile, tasteProfile)
@@ -4991,6 +6537,7 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
     ? vibeInferenceFor(track, track.query, profile)
     : { confidence: 0, evidence: [], summary: "", queryOnly: false, corroboratesRequested: true, matchedTerms: [] };
   const promptIntentEvidence = promptIntentEvidenceFor(track, track.query, profile);
+  const tasteAnchor = tasteAnchorEvidenceFor(track, options, profile);
   const minutes = durationMinutes(track);
   const currentYear = new Date().getFullYear();
   const prefersExtendedMixes = requestPrefersExtendedMixes(options);
@@ -5018,9 +6565,15 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
   if (requestedLabel) labelMatch = SCORE_MAX.labelMatch;
   else if (sceneLabel) labelMatch = 17;
   else if (labelText(track)) labelMatch = profile.targetGenres.length || profile.requestedLabels.length ? 7 : 3;
+  // In a plain taste-profile request, an artist or label selected as a
+  // retrieval anchor is real evidence of personal relevance. Keep it softer
+  // than an explicitly requested artist/label, but do not score the result as
+  // if it came from an unrelated catalogue query.
+  if (tasteAnchor.learnedLabel) labelMatch = Math.max(labelMatch, 14);
+  else if (tasteAnchor.relatedLabel) labelMatch = Math.max(labelMatch, 10);
   if (sceneLabel && wanted.includes(normalize(sceneLabel))) labelMatch += 2;
   if (profile.isGenreDiscoveryTarget && labelText(track)) {
-    const seedLabel = genreLabelSeeds(profile).find((seed) => containsEntityTerm(labelText(track), seed));
+    const seedLabel = genreLabelSeeds(profile).find((seed) => entityEvidenceMatches(labelText(track), seed));
     labelMatch = Math.max(labelMatch, seedLabel ? 16 : 6);
   }
   labelMatch = clamp(labelMatch, 0, SCORE_MAX.labelMatch);
@@ -5029,6 +6582,8 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
   if (hasSeedArtistMatch(track, options, profile)) artistMatch = SCORE_MAX.artistMatch;
   else if (sceneArtist) artistMatch = 15;
   else if (wanted && splitArtists(track.artist).some((artist) => !isCollisionSensitiveArtist(artist) && wanted.includes(normalize(artist)))) artistMatch = 11;
+  if (tasteAnchor.learnedArtist) artistMatch = Math.max(artistMatch, 17);
+  else if (tasteAnchor.relatedArtist) artistMatch = Math.max(artistMatch, 13);
   if (profile.isGenreDiscoveryTarget && track.artist) {
     const seedArtist = sceneEvidence.artistAnchor && sceneEvidence.metadataSceneEvidence ? sceneEvidence.artistAnchor : "";
     artistMatch = Math.max(artistMatch, seedArtist ? 15 : 5);
@@ -5146,7 +6701,13 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
   let tasteMin = profile.isGenreDiscoveryTarget ? -4 : -12;
   let tasteMax = profile.isGenreDiscoveryTarget ? 6 : 12;
   if (profile.scoringMode === "taste-guided" && profile.hasExplicitDiscoveryIntent) tasteMax = Math.min(tasteMax, 4);
-  if (profile.scoringMode === "taste-guided" && profile.promptIntent?.allowOutsideTaste) {
+  // An explicit genre is a new search lane, not an instruction to discard
+  // taste. Keep the familiar-artist/label boost bounded for that lane, but
+  // reserve the smaller outside-taste cap for explicit branch-out/open
+  // requests where the user is actively asking to leave the known cluster.
+  if (profile.scoringMode === "taste-guided" &&
+    profile.promptIntent?.allowOutsideTaste &&
+    profile.promptIntent?.outsideTasteMode !== "genre-lane") {
     tasteMin = Math.max(tasteMin, -4);
     tasteMax = Math.min(tasteMax, 2);
   }
@@ -5170,6 +6731,12 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
 
   if (lastfmTaste.value < 0) tasteMin = Math.min(tasteMin, -10);
   tasteAdjustment += lastfmTaste.value;
+  const relatedTasteReasons = [];
+  if (profile.tasteProfileLed && tasteAnchor.relatedArtist) {
+    const relatedBoost = clamp(Math.round(2 + Number(tasteAnchor.relatedArtistSimilarity || 0.5) * 4), 2, 6);
+    tasteAdjustment += relatedBoost;
+    relatedTasteReasons.push(`${tasteAnchor.relatedArtist} related-artist evidence +${relatedBoost}`);
+  }
 
   if (isShortEdit(track)) {
     lengthPreference = Math.min(lengthPreference, 4);
@@ -5189,6 +6756,7 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
     genreInference,
     vibeInference,
     promptIntentEvidence,
+    tasteAnchor,
     tasteAdjustment,
     calibrationAdjustment
   });
@@ -5213,8 +6781,9 @@ function scoreBreakdownFor(track = {}, options = {}, tasteProfile = null, profil
     genreInference,
     vibeInference,
     promptIntentEvidence,
+    tasteAnchorEvidence: tasteAnchor,
     tasteAdjustment,
-    tasteReasons: [...(taste.reasons || []), ...lastfmTaste.reasons],
+    tasteReasons: [...(taste.reasons || []), ...lastfmTaste.reasons, ...relatedTasteReasons],
     lastfmAdjustment: lastfmTaste.value,
     lastfmReasons: lastfmTaste.reasons,
     lastfmRecentRepeat: lastfmTaste.recentRepeat,
@@ -5248,8 +6817,8 @@ function reasonFor(track = {}, options = {}, breakdown = null, profile = buildDi
   const score = breakdown || scoreBreakdownFor(track, options, null, profile);
   const parts = [];
   const minutes = durationMinutes(track);
-  const sceneArtist = profile.isProgressiveTarget ? matchingSceneArtist(track.artist) : "";
-  const sceneLabel = profile.isProgressiveTarget ? matchingSceneLabel(labelText(track)) : "";
+  const sceneArtist = isProgressiveSceneTarget(profile) ? matchingSceneArtist(track.artist, profile) : "";
+  const sceneLabel = isProgressiveSceneTarget(profile) ? matchingSceneLabel(labelText(track), profile) : "";
   const metadataText = `${track.artist} ${track.title} ${track.album} ${labelText(track)}`;
   const releaseValue = releaseValueForDisplay(track);
   if (releaseValue) parts.push(`${releaseValue} TIDAL release`);
@@ -5266,6 +6835,9 @@ function reasonFor(track = {}, options = {}, breakdown = null, profile = buildDi
   } else if (score.vibeInference?.queryOnly) {
     parts.push("trait words only found in search query");
   }
+  if (score.tasteAnchorEvidence?.learnedArtist) parts.push(`learned taste artist anchor: ${score.tasteAnchorEvidence.learnedArtist}`);
+  else if (score.tasteAnchorEvidence?.learnedLabel) parts.push(`learned taste label anchor: ${score.tasteAnchorEvidence.learnedLabel}`);
+  else if (score.tasteAnchorEvidence?.relatedArtist) parts.push(`related-artist taste branch: ${score.tasteAnchorEvidence.relatedArtist}`);
   if (!sceneArtist && hasAnyTerm(`${metadataText} ${track.query}`, profile.targetGenres)) parts.push(`${profile.targetGenres[0]} target fit`);
   if (track.discoveryLane === "adjacent") parts.push("adjacent-lane discovery");
   if (track.discoveryLane === "omnivore") parts.push("cross-genre taste-bridge discovery");
@@ -5862,8 +7434,8 @@ function discoveryStatusFor(track = {}, historyEntry = null, recent = false, scr
 function whyBulletsFor(track = {}, options = {}, breakdown = {}, historyEntry = null, profile = buildDiscoveryProfile(options)) {
   const bullets = [];
   const label = labelText(track);
-  const sceneLabel = profile.isProgressiveTarget ? matchingSceneLabel(label) : "";
-  const sceneArtist = profile.isProgressiveTarget ? matchingSceneArtist(track.artist) : "";
+  const sceneLabel = isProgressiveSceneTarget(profile) ? matchingSceneLabel(label, profile) : "";
+  const sceneArtist = isProgressiveSceneTarget(profile) ? matchingSceneArtist(track.artist, profile) : "";
   const minutes = durationMinutes(track);
   const text = normalize(`${track.artist} ${track.title} ${track.album} ${label} ${track.query}`);
 
@@ -5981,7 +7553,7 @@ function buildDiscoveryEvidenceLedger(track = {}, {
   if (label) pushEvidence(proof.label, `${label} label metadata`);
   const requestedLabel = requestedLabelMatch(sourceTrack, profile);
   if (requestedLabel) pushEvidence(proof.label, `${requestedLabel} requested label match`);
-  const sceneLabel = matchingSceneLabel(label);
+  const sceneLabel = matchingSceneLabel(label, profile);
   if (sceneLabel) pushEvidence(proof.label, `${sceneLabel} scene label match`);
   if (breakdown.labelMatch !== undefined) {
     pushEvidence(proof.label, `label score ${breakdown.labelMatch}/${breakdown.max?.labelMatch || SCORE_MAX.labelMatch}`);
@@ -6114,12 +7686,13 @@ async function mapWithConcurrency(items, limit, mapper) {
   return results;
 }
 
-async function discoverTracks({ tidal, options = {}, history, tasteProfile = null, scrobbleHistory = null, queryYieldTracker = null } = {}) {
+async function discoverTracks({ tidal, options = {}, history, tasteProfile = null, scrobbleHistory = null, queryYieldTracker = null, directCandidates = null } = {}) {
   if (!tidal?.isConfigured?.()) {
     throw new Error("TIDAL is not configured. Add TIDAL_CLIENT_ID/TIDAL_CLIENT_SECRET or TIDAL_ACCESS_TOKEN to .env.");
   }
 
   const startedAt = Date.now();
+  if (typeof tasteProfile?.createReadView === "function") tasteProfile = tasteProfile.createReadView();
   const runtimeMs = Math.max(0, Number(options.discoveryRuntimeMs || options.maxRuntimeMs || 0));
   const deadlineAt = runtimeMs ? startedAt + runtimeMs : 0;
   let budgetExhausted = false;
@@ -6177,24 +7750,317 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
   const artistNoveltyCandidates = [];
   const byKey = new Map();
   const seenCandidateKeys = new Set();
+  const candidateCollectionDiagnostics = {
+      rawCount: 0,
+      acceptedCount: 0,
+      validDurationCount: 0,
+      freshBeforeNoveltyCount: 0,
+      freshAfterNoveltyCount: 0,
+      duplicateCount: 0,
+    invalidIdentityCount: 0,
+    duplicateExamples: [],
+    acceptedByFamily: new Map(),
+    durationCandidates: []
+  };
+  const accumulatedCandidateKeys = new Set();
+
+  function durationCandidateDiagnosticFor(candidate = {}, result = {}, context = null, admissionDiagnostics = null) {
+    const key = candidateIdentityKeys(candidate)[0];
+    const durationConstraint = hardDurationConstraintFor(options);
+    const durationSubject = candidate.tidal || candidate || result;
+    if (!key || !durationConstraint || durationConstraintReason(durationSubject, options)) return null;
+    let diagnostic = candidateCollectionDiagnostics.durationCandidates.find(item => item.key === key);
+    if (!diagnostic) {
+      const genre = admissionDiagnostics?.genreLaneCompatibility || {};
+      const catalogue = admissionDiagnostics?.catalogueQuality || {};
+      const identity = admissionDiagnostics?.identityCorrectness || {};
+      const duration = admissionDiagnostics?.durationConstraints || admissionDiagnostics?.durationResult || {};
+      const raw = result || candidate.tidal || candidate;
+      const child = admissionDiagnostics?.childGenreEvidence || {};
+      const parent = admissionDiagnostics?.parentGenreEvidence || {};
+      const artistScene = admissionDiagnostics?.artistSceneEvidence || {};
+      const labelScene = admissionDiagnostics?.labelSceneEvidence || {};
+      const queryScene = admissionDiagnostics?.querySceneEvidence || {};
+      diagnostic = {
+        key,
+        artist: cleanText(candidate.artist || result.artist),
+        title: cleanText(candidate.title || result.title),
+        durationMs: Number(candidate.durationMs || result.durationMs || 0) || null,
+        query: cleanText(result.query || context?.query || candidate.tidal?.query || ""),
+        source: cleanText(candidate.discoverySource || result.discoverySource || "discovery"),
+        lane: cleanText(candidate.discoveryLane || result.discoveryLane || context?.lane || "core"),
+        rawTidalResult: {
+          id: raw.id || raw.tidalId || raw.trackId || null,
+          tidalUrl: cleanText(raw.tidalUrl || raw.tidal?.tidalUrl || ""),
+          artist: cleanText(raw.artist),
+          title: cleanText(raw.title),
+          album: cleanText(raw.album),
+          label: cleanText(raw.label || raw.tidal?.label || ""),
+          genre: raw.genre || raw.genres || raw.tidal?.genre || raw.tidal?.genres || [],
+          durationMs: Number(raw.durationMs || raw.tidal?.durationMs || 0) || null,
+          query: cleanText(raw.query || context?.query || ""),
+          discoverySource: cleanText(raw.discoverySource || candidate.discoverySource || ""),
+          discoveryLane: cleanText(raw.discoveryLane || candidate.discoveryLane || context?.lane || "")
+        },
+        normalizedMetadata: {
+          artist: normalize(candidate.artist || result.artist),
+          title: normalize(candidate.title || result.title),
+          album: normalize(candidate.album || result.album),
+          label: normalize(candidate.label || result.label || raw.label || "")
+        },
+        // Reaching consider() means the provider/catalog mapper accepted the
+        // result. Keep that distinct from the downstream catalogue-quality
+        // safety gate, which is reported under qualityResult.catalogue.
+        catalogAccepted: true,
+        catalogQualityAccepted: catalogue.passed !== false,
+        durationAccepted: duration.passed !== false && duration.status !== "failed",
+        genreEvidence: {
+          confidence: Number(genre.confidence || 0),
+          evidence: Array.isArray(genre.evidence) ? genre.evidence.slice(0, 8) : [],
+          canonicalOfficialMatch: Boolean(genre.canonicalOfficialMatch),
+          child: child,
+          parent: parent
+        },
+        childGenreEvidence: child,
+        parentGenreEvidence: parent,
+        artistSceneEvidence: artistScene,
+        labelSceneEvidence: labelScene,
+        querySceneEvidence: queryScene,
+        exactGenreConflictDetected: Boolean(admissionDiagnostics?.exactGenreConflictDetected),
+        qualityResult: {
+          catalogue: {
+            passed: catalogue.passed !== false,
+            reason: cleanText(catalogue.reason || ""),
+            evidence: Array.isArray(catalogue.evidence) ? catalogue.evidence.slice(0, 8) : []
+          },
+          identity: {
+            passed: identity.passed !== false,
+            reason: cleanText(identity.reason || ""),
+            evidence: Array.isArray(identity.evidence) ? identity.evidence.slice(0, 8) : []
+          },
+          genre: {
+            passed: genre.passed !== false,
+            reason: cleanText(genre.reason || ""),
+            confidence: Number(genre.confidence || 0)
+          }
+        },
+        durationResult: {
+          passed: duration.passed !== false && duration.status !== "failed",
+          status: cleanText(duration.status || "passed"),
+          reason: cleanText(duration.reason || ""),
+          constraint: duration.constraint || null
+        },
+        noveltyResult: {
+          status: "pending",
+          previouslySuggested: false,
+          reason: ""
+        },
+        candidateAccumulation: {
+          status: "pending",
+          stage: "candidate-accumulation",
+          reason: ""
+        },
+        queryYieldAccepted: false,
+        candidateAccumulationAccepted: false,
+        scoreBeforeRejection: null,
+        droppedStage: "",
+        droppedReason: ""
+      };
+      candidateCollectionDiagnostics.durationCandidates.push(diagnostic);
+    }
+    return diagnostic;
+  }
+
+  function updateDurationCandidateDiagnostic(candidate = {}, patch = {}) {
+    const key = candidateIdentityKeys(candidate)[0];
+    if (!key || !hardDurationConstraintFor(options)) return;
+    const diagnostic = candidateCollectionDiagnostics.durationCandidates.find(item => item.key === key);
+    if (!diagnostic) return;
+    Object.assign(diagnostic, patch);
+  }
+
+  function recordCandidateAccumulation(candidate = {}, context = null, result = null) {
+    const keys = candidateIdentityKeys(candidate);
+    const key = keys[0];
+    if (!key || accumulatedCandidateKeys.has(key)) return false;
+    accumulatedCandidateKeys.add(key);
+    candidateCollectionDiagnostics.acceptedCount += 1;
+    const source = result || candidate.tidal || candidate;
+    const familyKey = [
+      context?.lane || candidate.discoveryLane || "core",
+      candidate.discoverySource || source.discoverySource || "discovery",
+      cleanText(source.query || context?.query || "unattributed")
+    ].join("|");
+    const family = candidateCollectionDiagnostics.acceptedByFamily.get(familyKey) || {
+      query: cleanText(source.query || context?.query || "unattributed"),
+      lane: context?.lane || candidate.discoveryLane || "core",
+      source: candidate.discoverySource || source.discoverySource || "discovery",
+      accepted: 0
+    };
+    family.accepted += 1;
+    candidateCollectionDiagnostics.acceptedByFamily.set(familyKey, family);
+    return true;
+  }
+
+  function discardWithDiagnostics(candidate = {}, reason = "", scoringOptions = options, scoringProfile = profile, stage = "") {
+    const source = candidate.tidal && typeof candidate.tidal === "object"
+      ? {
+        ...candidate.tidal,
+        query: candidate.query || candidate.tidal.query,
+        discoveryLane: candidate.discoveryLane || candidate.tidal.discoveryLane,
+        discoverySource: candidate.discoverySource || candidate.tidal.discoverySource
+      }
+      : candidate;
+    let score = Number(candidate.score);
+    let scoreBreakdown = candidate.scoreBreakdown || null;
+    if (!scoreBreakdown && !(score > 0)) {
+      try {
+        scoreBreakdown = scoreBreakdownFor(source, scoringOptions, tasteProfile, scoringProfile, scrobbleHistory);
+        score = Number(scoreBreakdown?.total || 0);
+      } catch {
+        scoreBreakdown = null;
+      }
+    }
+    const diagnosticsSeed = candidate.admissionDiagnostics || admissionDiagnosticsFor(source, scoringOptions, scoringProfile);
+    const rejectionStage = cleanText(stage || admissionRejectionStageFor(reason, diagnosticsSeed));
+    const hardStages = new Set([
+      "catalogue-quality",
+      "identity-correctness",
+      "duration-constraints",
+      "genre-lane-compatibility",
+      "version-safety",
+      "provider-safety"
+    ]);
+    const diagnostics = admissionDiagnosticsFor(source, scoringOptions, scoringProfile, {
+      scoreBeforeRejection: Number.isFinite(score) && score > 0 ? score : null,
+      rejectionStage,
+      hardFail: hardStages.has(rejectionStage),
+      hardFailReason: reason
+    });
+    return {
+      ...candidate,
+      reason,
+      scoreBeforeRejection: Number.isFinite(score) && score > 0 ? score : null,
+      admissionDiagnostics: diagnostics,
+      rejectionStage
+    };
+  }
+
   const allowPreviousSuggestions = allowsPreviouslySuggested(options);
   const allowPreviousFallback = allowsPreviousDiscoveryFallback(options);
   const queryYieldRecords = new Map();
   const queryYieldAdjustments = [];
   const queryYieldPruned = [];
   const laneBudgetStops = [];
+  const querySelectionDiagnostics = [];
+  const catalogPaginationDiagnostics = [];
+  const latestCatalogPageByQuery = new Map();
+  const searchStopDiagnostics = [];
+  const queryExecutionDiagnostics = [];
+  const promisingCatalogAnchors = new Map();
+  const deepCatalog = {
+    enabled: Boolean(profile.isProgressivePlanningTarget && hardDurationConstraintFor(options)),
+    triggered: false,
+    triggerReason: "",
+    pageCount: 2,
+    attempted: 0,
+    returned: 0,
+    accepted: 0,
+    duplicateCount: 0,
+    stoppedReason: "",
+    anchors: []
+  };
+  // Hard-duration genre requests need enough candidates to fill the requested
+  // result set and absorb diversity caps, but they do not need the much wider
+  // reservoir used by ordinary discovery. Keep the broader targets in the
+  // diagnostics; use a bounded fill target for the expensive crawl lanes so
+  // pagination/recovery can finish before the request budget expires.
+  const discoveryFillTarget = deepCatalog.enabled
+    ? Math.min(usefulCandidateTarget, Math.max(requestedCount + 4, requestedCount * 2))
+    : usefulCandidateTarget;
+  const quotaCalibration = typeof tasteProfile?.read === "function" ? tasteProfile.read().calibration : null;
+  let selectionPoolSize = -1;
+  let selectionPoolCount = 0;
+  function selectableCandidateCount() {
+    if (selectionPoolSize !== byKey.size) {
+      selectionPoolSize = byKey.size;
+      selectionPoolCount = selectDiscoveryLaneCandidates(
+        [...byKey.values()], requestedCount, options, profile, quotaCalibration
+      ).tracks.length;
+    }
+    return selectionPoolCount;
+  }
+  function reachedDiscoveryTarget(target = discoveryFillTarget) {
+    // Raw candidates can all belong to the same artist/release. Keep crawling
+    // within the existing budget until the real selector can fill the request.
+    return byKey.size >= target && selectableCandidateCount() >= requestedCount;
+  }
+  const tidalErrors = [];
+  const artistExpansionArtists = [];
+  const queryTasteContext = profile.tasteProfileLed ? "taste-profile" : profile.genreProfile?.key;
+  function queryTasteContextFor(query = "") {
+    if (!profile.tasteProfileLed) return queryTasteContext;
+    const normalizedQuery = normalize(query);
+    if (!normalizedQuery) return queryTasteContext;
+    for (const facet of Array.isArray(options.tasteFacets) ? options.tasteFacets : []) {
+      const facetName = cleanText(facet?.name);
+      if (!facetName) continue;
+      const artists = Array.isArray(facet?.artistEvidence) && facet.artistEvidence.length
+        ? facet.artistEvidence.map((item) => item?.name)
+        : (Array.isArray(facet?.artists) ? facet.artists : []);
+      const labels = Array.isArray(facet?.labelEvidence) && facet.labelEvidence.length
+        ? facet.labelEvidence.map((item) => item?.name)
+        : (Array.isArray(facet?.labels) ? facet.labels : []);
+      if ([...artists, ...labels].filter(Boolean).some((anchor) => (
+        artistNamesMatch(normalizedQuery, anchor, { contains: true }) || entityEvidenceMatches(normalizedQuery, anchor)
+      ))) {
+        return `${queryTasteContext}:${normalize(facetName)}`;
+      }
+    }
+    return queryTasteContext;
+  }
+  const debugQuerySelection = Boolean(
+    options.debugDiscovery ||
+    options.debugQuerySelection ||
+    process.env.RABBIT_HOLE_DEBUG_DISCOVERY === "1"
+  );
+  const refreshExcludedQueryKeys = new Set(
+    (Array.isArray(options.discoveryExcludedQueries) ? options.discoveryExcludedQueries : [])
+      .map(normalize)
+      .filter(Boolean)
+  );
+  const neutralStandbyCatalog = /^(1|true|yes)$/i.test(String(options.standbyPool || "")) && profile.tasteProfileLed;
 
   function searchConcurrencyFor(lane = "core") {
+    if (deepCatalog.enabled) return 1;
     if (strictRoonMode) return 2;
     if (options.autoBroadenLane === "relaxed-vibe") return 1;
     if (isYearCatalogSearch) return smallExactYearSearch ? 2 : 2;
+    if (neutralStandbyCatalog) return 3;
     return lane === "recent" ? 1 : 2;
   }
 
   function reserveForRemainingLanes(lane = "core") {
     if (!deadlineAt) return 0;
+    // Neutral standby has one more expensive lane after search: the deferred
+    // artist-album crawl. Without a reserve, the initial search pass can use
+    // the entire window and the deeper catalog path never gets a chance to
+    // run. Keep enough time for that crawl while preserving the existing
+    // lane ordering and all candidate-quality gates.
+    if (neutralStandbyCatalog) {
+      // The initial standby pass is the only pass that may need to leave
+      // extra time for deferred album expansion. Refill passes have their
+      // own short runtime window and must be allowed to search inside it.
+      return options.autoBroadenLane ? 2_500 : 6_000;
+    }
     if (options.autoBroaden) return 2_500;
     if (!profile.isGenreDiscoveryTarget) return 2_500;
+    if (deepCatalog?.enabled && lane === "core") return 15_000;
+    // Deep pagination itself requires an 8s check-in reserve. Keep the
+    // trusted branch window above that threshold so branch queries cannot
+    // consume the time that was explicitly reserved for page-2 recovery.
+    if (deepCatalog?.enabled && lane === "branch") return 10_000;
+    if (deepCatalog?.enabled && lane === "adjacent") return 4_000;
     if (lane === "core") return yearRange ? 10_000 : 6_000;
     if (lane === "branch") return yearRange ? 5_000 : 3_500;
     if (lane === "adjacent") return yearRange ? 5_000 : 3_500;
@@ -6223,6 +8089,18 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
         query: text,
         template,
         lane: lane || "core",
+        contextKey: queryContextKey({
+          targetGenres: profile.targetGenres,
+          parentGenres: profile.genreProfile?.parentGenres,
+          activityTerms: profile.promptIntent?.activityTerms,
+          vibes: profile.vibeTerms,
+          tasteCluster: queryTasteContextFor(text)
+        }),
+        genres: profile.targetGenres,
+        parentGenres: profile.genreProfile?.parentGenres || [],
+        activityTerms: profile.promptIntent?.activityTerms || [],
+        vibes: profile.vibeTerms,
+        compatibleSeeds: genreSeedUniverseFor(profile),
         attempts: 0,
         returned: 0,
         accepted: 0,
@@ -6235,26 +8113,261 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     return queryYieldRecords.get(key);
   }
 
-  function rankTrackedQueries(list = [], lane = "core") {
-    if (!queryYieldTracker || typeof queryYieldTracker.rankQueries !== "function") return list;
-    try {
-      const ranked = queryYieldTracker.rankQueries(list, {
+  function queryIntentContribution(query = "") {
+    const text = normalize(query);
+    const targetHits = (profile.targetGenres || []).filter((term) => containsNormalized(text, term)).length;
+    const parentHits = (profile.genreProfile?.parentGenres || []).filter((term) => containsNormalized(text, term)).length;
+    const vibeHits = (profile.vibeTerms || []).filter((term) => containsNormalized(text, term)).length;
+    const activityHits = (profile.promptIntent?.activityTerms || []).filter((term) => containsNormalized(text, term)).length;
+    const labelHits = (profile.requestedLabels || []).filter((term) => entityEvidenceMatches(text, term)).length;
+    return clamp(targetHits * 35 + parentHits * 12 + labelHits * 24 + vibeHits * 6 + activityHits * 4, 0, 100);
+  }
+
+  function queryGenreCompatibility(query = "", incompatibleSeeds = []) {
+    if (!profile.targetGenres?.length) return 0;
+    if (queryMentionsIncompatibleSeed(query, profile, incompatibleSeeds)) return 0;
+    const targetHits = (profile.targetGenres || []).filter((term) => containsNormalized(query, term)).length;
+    const labelHits = (profile.requestedLabels || []).filter((term) => entityEvidenceMatches(query, term)).length;
+    const seedHits = genreSeedUniverseFor(profile).filter((term) => (
+      containsNormalized(query, term) || artistNamesMatch(query, term, { contains: true })
+    )).length;
+    const parentHits = (profile.genreProfile?.parentGenres || []).filter((term) => containsNormalized(query, term)).length;
+    return clamp(targetHits * 70 + labelHits * 22 + seedHits * 18 + parentHits * 10, 0, 100);
+  }
+
+  function hardDurationQueryPriority(query = "") {
+    const generation = queryGenerationInfo(query, profile, options);
+    const normalizedQuery = normalize(query);
+    const targetMatch = (profile.targetGenres || []).some((term) => containsNormalized(normalizedQuery, term));
+    const trustedLabelMatch = uniqueTerms([
+      ...(profile.requestedLabels || []),
+      ...(profile.genreProfile?.labels || []),
+      ...(isProgressiveSceneTarget(profile) ? progressiveSceneLabelsFor(profile) : []),
+      ...genreLabelSeeds(profile)
+    ], 260).some((label) => entityEvidenceMatches(normalizedQuery, label));
+    const learnedArtistMatch = (profile.learnedTasteArtists || []).some((artist) => artistNamesMatch(normalizedQuery, artist, { contains: true }));
+    const learnedLabelMatch = (profile.learnedTasteLabels || []).some((label) => entityEvidenceMatches(normalizedQuery, label));
+
+    if (profile.isProgressiveTranceTarget) {
+      // Historical query yield can rank within this lane, but it must not move
+      // a direct trusted artist behind low-yield label searches. Keep the
+      // exact genre and a trusted label branch in the reserved first window.
+      if (generation.seedType === "artist") return 0;
+      if (generation.seedType === "genre" && targetMatch) return 1;
+      if (trustedLabelMatch) return 2;
+    }
+
+    // For a hard duration+genre request, current-lane and trusted scene/label
+    // searches are the first budget tier. Learned taste anchors remain useful,
+    // but cannot consume the crawl window before direct genre branches run.
+    if (trustedLabelMatch && !learnedLabelMatch) return 0;
+    if (targetMatch && !learnedArtistMatch) return 1;
+    if (generation.source === "trusted artist/scene anchor") return 2;
+    if (learnedArtistMatch || learnedLabelMatch) return 6;
+    if (generation.seedType === "genre") return 3;
+    if (generation.seedType === "artist" || generation.seedType === "label") return 4;
+    return 7;
+  }
+
+  function orderHardDurationQueries(list = []) {
+    if (!deepCatalog.enabled) return list;
+    return list
+      .map((query, index) => ({ query, index, priority: hardDurationQueryPriority(query) }))
+      .sort((left, right) => left.priority - right.priority || left.index - right.index)
+      .map((item) => item.query);
+  }
+
+  function recordQuerySelection(query, lane, source, rankedItem = null) {
+    const generation = queryGenerationInfo(query, profile, options);
+    const genreCompatibilityScore = queryGenreCompatibility(query, profile.filteredPlanArtists || []);
+    const currentIntentContribution = queryIntentContribution(query);
+    const tasteSeedArtists = uniqueTerms([
+      ...(profile.seedArtists || []),
+      ...(profile.learnedTasteArtists || []),
+      ...(Array.isArray(options.learnedTasteArtists) ? options.learnedTasteArtists : [])
+    ], 48);
+    const tasteContribution = hardGenreConstraintFor(profile)
+      ? 0
+      : (tasteSeedArtists.some((artist) => artistNamesMatch(query, artist, { contains: true })) ? 8 : 0);
+    const historicalYieldContribution = Number(rankedItem?.quality || 0);
+    const whySelected = [];
+    if (genreCompatibilityScore > 0) whySelected.push("genre-compatible query");
+    if (currentIntentContribution > 0) whySelected.push("matches current intent");
+    if (historicalYieldContribution > 0) whySelected.push("positive contextual query yield");
+    if (generation.source) whySelected.push(generation.source);
+    const diagnostic = {
+      query: cleanText(query),
+      // Preserve the long-standing source label in normal verification output.
+      // The richer generation provenance is attached when query debugging is
+      // enabled so existing consumers remain compatible while operators can
+      // inspect the upstream selection policy on demand.
+      source: debugQuerySelection ? (generation.source || cleanText(source) || "discovery") : (cleanText(source) || "discovery"),
+      lane: cleanText(lane) || "core",
+      genreCompatibilityScore,
+      whySelected,
+      historicalYieldContribution,
+      tasteContribution,
+      tasteRole: hardGenreConstraintFor(profile)
+        ? "ranking-only; excluded from hard-lane query selection"
+        : (profile.promptIntent?.tasteInfluence === "not at all" ? "disabled" : "query/style guidance allowed"),
+      currentIntentContribution,
+      budgetCost: 1,
+      queryContextKey: queryContextKey({
+        targetGenres: profile.targetGenres,
+        parentGenres: profile.genreProfile?.parentGenres,
+        activityTerms: profile.promptIntent?.activityTerms,
+        vibes: profile.vibeTerms,
+        tasteCluster: queryTasteContextFor(query)
+      })
+    };
+    if (debugQuerySelection) {
+      Object.assign(diagnostic, {
+        selectionStage: cleanText(source) || "discovery",
+        seedType: generation.seedType,
+        seed: generation.seed,
+        priorityTier: generation.priorityTier,
+        semanticOnly: generation.semanticOnly,
+        budgetPosition: querySelectionDiagnostics.length + 1
+      });
+    }
+    querySelectionDiagnostics.push(diagnostic);
+    if (debugQuerySelection) console.info("[discovery-query]", JSON.stringify(diagnostic));
+  }
+
+  function rankTrackedQueries(list = [], lane = "core", source = "discovery") {
+    const eligibleList = list.filter((query) => !refreshExcludedQueryKeys.has(normalize(query)));
+    if (!eligibleList.length) return [];
+    const originalIndexes = new Map(eligibleList.map((query, index) => [normalize(query), index]));
+    const groups = new Map();
+    for (const query of eligibleList) {
+      const contextKey = queryTasteContextFor(query);
+      if (!groups.has(contextKey)) groups.set(contextKey, []);
+      groups.get(contextKey).push(query);
+    }
+    const rankedGroups = [];
+    for (const [tasteCluster, queries] of groups) {
+      const context = {
         lane,
         scoringMode: profile.scoringMode,
         genres: profile.targetGenres,
+        targetGenres: profile.targetGenres,
+        parentGenres: profile.genreProfile?.parentGenres,
+        activityTerms: profile.promptIntent?.activityTerms,
         vibes: profile.vibeTerms,
+        compatibleSeeds: genreSeedUniverseFor(profile),
+        tasteCluster,
+        contextKey: queryContextKey({
+          targetGenres: profile.targetGenres,
+          parentGenres: profile.genreProfile?.parentGenres,
+          activityTerms: profile.promptIntent?.activityTerms,
+          vibes: profile.vibeTerms,
+          tasteCluster
+        }),
         prune: true
-      });
-      for (const item of ranked.adjustments || []) {
-        queryYieldAdjustments.push({ ...item, lane });
+      };
+      if (!queryYieldTracker || typeof queryYieldTracker.rankQueries !== "function") {
+        rankedGroups.push(queries.map((query) => ({ query, score: 0 })));
+        continue;
       }
-      for (const item of ranked.pruned || []) {
-        queryYieldPruned.push({ ...item, lane });
+      try {
+        const ranked = queryYieldTracker.rankQueries(queries, context);
+        const protectedPruned = deepCatalog.enabled
+          ? (ranked.pruned || []).filter((item) => (
+            queryGenreCompatibility(item.query, profile.filteredPlanArtists || []) >= 70 ||
+            // A trusted scene/label anchor is a deliberate hard-lane branch,
+            // even when historical yield says the bare label query was weak.
+            // Keep it eligible for the reserved first-page window; the
+            // catalogue and identity gates still decide every returned item.
+            hardDurationQueryPriority(item.query) <= 2
+          ))
+          : [];
+        const actualPruned = (ranked.pruned || []).filter((item) => !protectedPruned.includes(item));
+        for (const item of ranked.adjustments || []) queryYieldAdjustments.push({ ...item, lane });
+        for (const item of protectedPruned) {
+          queryYieldAdjustments.push({
+            ...item,
+            lane,
+            protection: "hard-duration genre anchor retained despite historical low yield"
+          });
+        }
+        for (const item of actualPruned) {
+          queryYieldPruned.push({ ...item, lane });
+          recordSearchStop({
+            query: item.query,
+            lane,
+            source,
+            reason: "pruned-low-yield",
+            attempted: false
+          });
+        }
+        const protectedItems = protectedPruned.map((item) => ({
+          ...item,
+          score: Number(item.quality || 0),
+          entryScope: item.entryScope || "historical-protected"
+        }));
+        const rankedItems = new Map([
+          ...(ranked.ranked || []),
+          ...protectedItems
+        ].map((item) => [normalize(item.query), item]));
+        const selectedItems = [...(ranked.queries || queries), ...protectedItems.map((item) => item.query)]
+          .filter((query, index, list) => list.findIndex((item) => normalize(item) === normalize(query)) === index)
+          .map((query) => rankedItems.get(normalize(query)) || { query, score: 0 })
+          // Query-yield can optimize within a lane, but it must not promote a
+          // historical semantic phrase over a current artist/label/domain
+          // anchor. The generation tier is the upstream priority boundary.
+          .sort((left, right) => {
+            if (deepCatalog.enabled) {
+              const leftHardDurationPriority = hardDurationQueryPriority(left.query);
+              const rightHardDurationPriority = hardDurationQueryPriority(right.query);
+              if (leftHardDurationPriority !== rightHardDurationPriority) {
+                return leftHardDurationPriority - rightHardDurationPriority;
+              }
+            }
+            const leftTier = queryGenerationInfo(left.query, profile, options).priorityTier;
+            const rightTier = queryGenerationInfo(right.query, profile, options).priorityTier;
+            return leftTier - rightTier || Number(right.score || 0) - Number(left.score || 0) ||
+              (originalIndexes.get(normalize(left.query)) || 0) - (originalIndexes.get(normalize(right.query)) || 0);
+          });
+        rankedGroups.push(selectedItems);
+      } catch {
+        rankedGroups.push(queries.map((query) => ({ query, score: 0 })));
       }
-      return ranked.queries || list;
-    } catch {
-      return list;
     }
+    // Keep the reservoir multi-faceted: one query from each learned region is
+    // allowed to run before a single region can consume the lane budget.
+    const selectedItems = [];
+    for (let index = 0; ; index += 1) {
+      let added = false;
+      for (const group of rankedGroups) {
+        if (group[index]) {
+          selectedItems.push(group[index]);
+          added = true;
+        }
+      }
+      if (!added) break;
+    }
+    for (const item of selectedItems) recordQuerySelection(item.query, lane, source, item);
+    return selectedItems.map((item) => item.query);
+  }
+
+  function recordTidalError(query, lane, error, endpoint = "searchTracks") {
+    const rawMessage = cleanText(error?.message || error || "TIDAL request failed");
+    const message = rawMessage
+      .replace(/(?:access|refresh|catalog(?:ue)?)[-_ ]?token[^;,.]*/gi, "TIDAL token error")
+      .slice(0, 240);
+    const status = Number(error?.status || error?.statusCode || 0) || null;
+    const authFallbackAttempted = /also tried the TIDAL profile OAuth token/i.test(rawMessage);
+    const item = {
+      query: cleanText(query),
+      lane: cleanText(lane) || "core",
+      endpoint,
+      status,
+      category: cleanText(error?.category || error?.code || (status === 401 ? "catalog-token-rejected" : "request-failed")),
+      authFallbackAttempted,
+      authFallbackResult: authFallbackAttempted ? "rejected" : "not-attempted",
+      message
+    };
+    tidalErrors.push(item);
   }
 
   function recordQueryAttempt(query, lane, returned) {
@@ -6268,6 +8381,12 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     const record = queryYieldRecordFor(query, lane);
     if (!record) return;
     record.accepted += 1;
+    const page = latestCatalogPageFor(query, lane);
+    if (page) {
+      page.qualityAcceptedCount = Number(page.qualityAcceptedCount || 0) + 1;
+      page.queryYieldAcceptedCount = Number(page.queryYieldAcceptedCount || 0) + 1;
+      page.candidateAccumulationAcceptedCount = Number(page.candidateAccumulationAcceptedCount || 0) + 1;
+    }
   }
 
   function recordQueryRejected(query, lane, reason) {
@@ -6277,13 +8396,192 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     record.rejected += 1;
     if (bucket === "seo") record.seoRejects += 1;
     if (bucket === "genre") record.genreRejects += 1;
+    const page = latestCatalogPageFor(query, lane);
+    if (page) {
+      page.qualityRejectedCount = Number(page.qualityRejectedCount || 0) + 1;
+      page.queryYieldRejectedCount = Number(page.queryYieldRejectedCount || 0) + 1;
+    }
   }
 
-  function recordQueryError(query, lane) {
+  function recordQueryError(query, lane, error = null) {
     const record = queryYieldRecordFor(query, lane);
     if (!record) return;
     record.attempts += 1;
     record.errorCount += 1;
+    if (error) recordTidalError(query, lane, error);
+  }
+
+  function catalogPageDiagnosticFor(query, lane, info = {}) {
+    const numberOrNull = value => {
+      if (value === null || value === undefined || value === "") return null;
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    };
+    const page = {
+      source: cleanText(info.source || "tidal") || "tidal",
+      anchor: cleanText(info.anchor || query),
+      query: cleanText(info.query || query),
+      requestedCursor: cleanText(info.requestedCursor || "") || null,
+      requestedPage: numberOrNull(info.requestedPage),
+      requestedOffset: numberOrNull(info.requestedOffset),
+      nextCursor: cleanText(info.nextCursor || "") || null,
+      nextPage: numberOrNull(info.nextPage),
+      nextOffset: numberOrNull(info.nextOffset),
+      returnedCount: Number(info.returnedCount || 0),
+      duplicateCount: Number(info.duplicateCount || 0),
+      acceptedCount: Number(info.acceptedCount || 0),
+      catalogAcceptedCount: Number(info.acceptedCount || 0),
+      qualityAcceptedCount: 0,
+      queryYieldAcceptedCount: 0,
+      candidateAccumulationAcceptedCount: 0,
+      rejectedCount: Number(info.rejectedCount || 0),
+      catalogRejectedCount: Number(info.rejectedCount || 0),
+      qualityRejectedCount: 0,
+      queryYieldRejectedCount: 0,
+      budgetCost: Number(info.budgetCost || 0),
+      progressResumed: Boolean(info.progressResumed),
+      cacheHit: Boolean(info.cacheHit),
+      cursorRecovery: Boolean(info.cursorRecovery),
+      exhausted: Boolean(info.exhausted),
+      error: cleanText(info.error || "")
+    };
+    const queryText = page.query || cleanText(query) || page.anchor;
+    const queryKey = `${normalize(queryText)}|${cleanText(lane) || "core"}`;
+    let diagnostic = [...querySelectionDiagnostics].reverse().find(item => (
+      normalize(item.query) === normalize(queryText) && item.lane === (cleanText(lane) || "core")
+    ));
+    if (!diagnostic) {
+      diagnostic = {
+        query: queryText,
+        source: cleanText(lane) || "catalog",
+        lane: cleanText(lane) || "core",
+        budgetCost: 0,
+        queryContextKey: queryContextKey({
+          targetGenres: profile.targetGenres,
+          parentGenres: profile.genreProfile?.parentGenres,
+          activityTerms: profile.promptIntent?.activityTerms,
+          vibes: profile.vibeTerms,
+          tasteCluster: queryTasteContextFor(queryText)
+        })
+      };
+      querySelectionDiagnostics.push(diagnostic);
+    }
+    if (!Array.isArray(diagnostic.catalogPages)) diagnostic.catalogPages = [];
+    diagnostic.catalogPages.push(page);
+    diagnostic.catalogPagination = page;
+    diagnostic.catalogSource = page.source;
+    diagnostic.catalogAnchor = page.anchor;
+    diagnostic.catalogRequestedCursor = page.requestedCursor;
+    diagnostic.catalogRequestedPage = page.requestedPage;
+    diagnostic.catalogNextCursor = page.nextCursor;
+    diagnostic.catalogNextPage = page.nextPage;
+    diagnostic.catalogReturnedCount = page.returnedCount;
+    diagnostic.catalogDuplicateCount = page.duplicateCount;
+    diagnostic.catalogAcceptedCount = page.acceptedCount;
+    diagnostic.catalogRejectedCount = page.rejectedCount;
+    diagnostic.catalogBudgetCost = page.budgetCost;
+    diagnostic.catalogProgressResumed = page.progressResumed;
+    diagnostic.budgetCost = Number(diagnostic.budgetCost || 0) + Number(page.budgetCost || 0);
+    catalogPaginationDiagnostics.push(page);
+    latestCatalogPageByQuery.set(queryKey, page);
+    return page;
+  }
+
+  function catalogPageReporter(query, lane) {
+    return info => catalogPageDiagnosticFor(query, lane, info);
+  }
+
+  function latestCatalogPageFor(query, lane) {
+    return latestCatalogPageByQuery.get(`${normalize(query)}|${cleanText(lane) || "core"}`) || null;
+  }
+
+  function paginationAvailableFor(page = null) {
+    return Boolean(page && !page.exhausted && (page.nextCursor || page.nextPage || page.nextOffset));
+  }
+
+  function recordSearchStop({
+    query = "",
+    lane = "core",
+    source = "discovery",
+    reason = "",
+    returned = 0,
+    accepted = 0,
+    rejected = 0,
+    duplicates = 0,
+    attempted = false
+  } = {}) {
+    if (searchStopDiagnostics.length >= 240) return;
+    const page = latestCatalogPageFor(query, lane);
+    searchStopDiagnostics.push({
+      query: cleanText(query),
+      source: cleanText(source) || "discovery",
+      lane: cleanText(lane) || "core",
+      attempted: Boolean(attempted),
+      returned: Number(returned || 0),
+      accepted: Number(accepted || 0),
+      rejected: Number(rejected || 0),
+      duplicates: Number(duplicates || 0),
+      stopReason: cleanText(reason) || "completed",
+      paginationAvailable: paginationAvailableFor(page),
+      nextCursor: page?.nextCursor || null,
+      nextPage: page?.nextPage ?? null,
+      nextOffset: page?.nextOffset ?? null,
+      catalogExhausted: page ? Boolean(page.exhausted) : null,
+      catalogSource: page?.source || null,
+      catalogAnchor: page?.anchor || null
+    });
+  }
+
+  function queryExecutionTypeFor(query = "", lane = "core", source = "") {
+    if (cleanText(lane) === "branch" || /branch/i.test(cleanText(source))) return "branch";
+    const generation = queryGenerationInfo(query, profile, options);
+    if (generation.seedType === "artist") return "artist";
+    if (generation.seedType === "genre") return "genre";
+    if (generation.seedType === "label" || queryStartsWithKnownLabel(query, profile)) return "label";
+    return "search";
+  }
+
+  function recordQueryExecution({
+    query = "",
+    lane = "core",
+    source = "discovery",
+    startedAt = Date.now(),
+    returned = 0,
+    accepted = 0,
+    error = false,
+    deepPagination = false
+  } = {}) {
+    if (queryExecutionDiagnostics.length >= 160) return;
+    queryExecutionDiagnostics.push({
+      query: cleanText(query),
+      queryType: queryExecutionTypeFor(query, lane, source),
+      lane: cleanText(lane) || "core",
+      source: cleanText(source) || "discovery",
+      runtimeMs: Math.max(0, Date.now() - Number(startedAt || Date.now())),
+      returned: Number(returned || 0),
+      currentRunAccepted: Number(accepted || 0),
+      remainingBudgetMs: deadlineAt ? Math.max(0, deadlineAt - Date.now()) : null,
+      deepPagination: Boolean(deepPagination),
+      error: Boolean(error)
+    });
+  }
+
+  function notePromisingCatalogAnchor({ query = "", lane = "core", source = "discovery", accepted = 0 } = {}) {
+    const page = latestCatalogPageFor(query, lane);
+    // Page-2 recovery is only useful when the current run admitted at least
+    // one candidate. A paginated sludge/zero-yield source must not consume the
+    // reserved deep-catalog budget.
+    if (!paginationAvailableFor(page) || Number(accepted || 0) <= 0) return;
+    const key = `${normalize(query)}|${cleanText(lane) || "core"}`;
+    const existing = promisingCatalogAnchors.get(key);
+    const item = {
+      query: cleanText(query),
+      lane: cleanText(lane) || "core",
+      source: cleanText(source) || "discovery",
+      accepted: Math.max(Number(existing?.accepted || 0), Number(accepted || 0)),
+      genreCompatibilityScore: queryGenreCompatibility(query, profile.filteredPlanArtists || [])
+    };
+    promisingCatalogAnchors.set(key, item);
   }
 
   function queryYieldSnapshot() {
@@ -6326,18 +8624,109 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
   }
 
   function consider(result, scoringOptions = options, scoringProfile = profile, queryContext = null) {
+    candidateCollectionDiagnostics.rawCount += 1;
     if (typeof options.standbyAcceptCandidate === "function" && !options.standbyAcceptCandidate(result)) return;
+    // TIDAL search results do not always carry the query that produced them.
+    // Keep the search context attached for the admission/evidence pipeline so
+    // a trusted genre or label branch can corroborate parent-genre metadata.
+    // This is context propagation only; it does not turn query text into
+    // standalone genre evidence or bypass any hard gate.
+    const context = queryContextFor(result, queryContext);
+    if ((!result.query || !cleanText(result.query)) && context.query) {
+      result = { ...result, query: context.query };
+    }
+    if ((!result.discoveryLane || !cleanText(result.discoveryLane)) && context.lane) {
+      result = { ...result, discoveryLane: context.lane };
+    }
     const keys = candidateIdentityKeys(result);
     const key = keys[0];
-    if (!key || keys.some((candidateKey) => seenCandidateKeys.has(candidateKey))) return;
-    const context = queryContextFor(result, queryContext);
-    const historyEntry = typeof history?.entryFor === "function" ? history.entryFor(result) : null;
-    const reason = rejectReason(result, scoringOptions, scoringProfile);
-    if (reason) {
-      if (context.tracked) recordQueryRejected(context.query, context.lane, reason);
-      discarded.push({ ...result, reason });
+    if (!key) {
+      candidateCollectionDiagnostics.invalidIdentityCount += 1;
       return;
     }
+    if (keys.some((candidateKey) => seenCandidateKeys.has(candidateKey))) {
+      candidateCollectionDiagnostics.duplicateCount += 1;
+      if (candidateCollectionDiagnostics.duplicateExamples.length < 8) {
+        candidateCollectionDiagnostics.duplicateExamples.push({
+          artist: cleanText(result.artist),
+          title: cleanText(result.title),
+          query: cleanText(result.query || queryContext?.query || ""),
+          reason: "duplicate identity key"
+        });
+      }
+      return;
+    }
+    const historyEntry = typeof history?.entryFor === "function" ? history.entryFor(result) : null;
+    const hardDurationConstraint = hardDurationConstraintFor(scoringOptions);
+    const durationAccepted = Boolean(hardDurationConstraint && !durationConstraintReason(result, scoringOptions));
+    const preAdmissionDiagnostics = durationAccepted
+      ? admissionDiagnosticsFor(result, scoringOptions, scoringProfile)
+      : null;
+    const durationCandidateDiagnostic = durationAccepted
+      ? durationCandidateDiagnosticFor(result, result, context, preAdmissionDiagnostics)
+      : null;
+    const reason = rejectReason(result, scoringOptions, scoringProfile);
+    if (reason) {
+      if (durationCandidateDiagnostic) {
+        const rejectedDiagnostics = admissionDiagnosticsFor(result, scoringOptions, scoringProfile, {
+          hardFailReason: reason
+        });
+        const rejectionStage = admissionRejectionStageFor(reason, rejectedDiagnostics);
+        updateDurationCandidateDiagnostic(result, {
+          catalogAccepted: true,
+          catalogQualityAccepted: rejectedDiagnostics.catalogueQuality?.passed !== false,
+          durationAccepted: rejectedDiagnostics.durationConstraints?.passed !== false,
+          qualityResult: {
+            catalogue: rejectedDiagnostics.catalogueQuality,
+            identity: rejectedDiagnostics.identityCorrectness,
+            genre: rejectedDiagnostics.genreLaneCompatibility
+          },
+          genreEvidence: {
+            confidence: Number(rejectedDiagnostics.genreLaneCompatibility?.confidence || 0),
+            evidence: rejectedDiagnostics.genreLaneCompatibility?.evidence || [],
+            canonicalOfficialMatch: Boolean(rejectedDiagnostics.genreLaneCompatibility?.canonicalOfficialMatch),
+            child: rejectedDiagnostics.childGenreEvidence || {},
+            parent: rejectedDiagnostics.parentGenreEvidence || {}
+          },
+          childGenreEvidence: rejectedDiagnostics.childGenreEvidence || {},
+          parentGenreEvidence: rejectedDiagnostics.parentGenreEvidence || {},
+          artistSceneEvidence: rejectedDiagnostics.artistSceneEvidence || {},
+          labelSceneEvidence: rejectedDiagnostics.labelSceneEvidence || {},
+          querySceneEvidence: rejectedDiagnostics.querySceneEvidence || {},
+          exactGenreConflictDetected: Boolean(rejectedDiagnostics.exactGenreConflictDetected),
+          queryYieldAccepted: false,
+          candidateAccumulationAccepted: false,
+          candidateAccumulation: { status: "dropped", stage: rejectionStage, reason },
+          droppedStage: rejectionStage,
+          droppedReason: reason
+        });
+      }
+      if (context.tracked) recordQueryRejected(context.query, context.lane, reason);
+      discarded.push(discardWithDiagnostics(result, reason, scoringOptions, scoringProfile));
+      return;
+    }
+
+    // Query yield measures whether the search produced a candidate that
+    // passed the hard admission gates. Score floors, novelty, and diversity
+    // are later policy stages and must not make an otherwise useful query
+    // appear to have produced zero yield.
+    if (context.tracked) {
+      recordQueryAccepted(context.query, context.lane);
+      updateDurationCandidateDiagnostic(result, {
+        queryYieldAccepted: true
+      });
+    }
+
+    // Count candidates that passed catalogue, identity, genre, and hard
+    // duration admission before novelty, score-floor, or diversity policy can
+    // hold them back. This keeps pool-fill diagnostics honest when a valid
+    // track is temporarily withheld for repeat protection.
+    if (hardDurationConstraint && durationAccepted) {
+      candidateCollectionDiagnostics.validDurationCount += 1;
+      if (!historyEntry) candidateCollectionDiagnostics.freshBeforeNoveltyCount += 1;
+    }
+
+    const admissionDiagnostics = preAdmissionDiagnostics || admissionDiagnosticsFor(result, scoringOptions, scoringProfile);
 
     const baseScoreBreakdown = scoreBreakdownFor(result, scoringOptions, tasteProfile, scoringProfile, scrobbleHistory);
     const artistDiversity = artistDiversityAdjustmentFor(result, history, scoringProfile, scoringOptions);
@@ -6386,9 +8775,26 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
         discoveryOmnivoreTarget: omnivoreBridge.target
       } : {}),
       statusChecks: [...discoveryStatusFor(result, historyEntry, false, scrobbleHistory), ...artistDiversityChecks, ...recentNoveltyChecks],
+      admissionDiagnostics,
       verificationSource: "tidal"
     };
     candidate.feedback = typeof tasteProfile?.getFeedbackFor === "function" ? tasteProfile.getFeedbackFor(candidate) : "";
+    if (durationCandidateDiagnostic) {
+      durationCandidateDiagnostic.scoreBeforeRejection = Number(candidate.score || 0) || null;
+      durationCandidateDiagnostic.noveltyResult = historyEntry
+        ? {
+          status: "held-back",
+          previouslySuggested: true,
+          shownCount: Number(historyEntry.shownCount || 0),
+          recent: Boolean(history?.isRecent?.(candidate)),
+          reason: "Previously suggested; held back initially for discovery novelty."
+        }
+        : {
+          status: "fresh",
+          previouslySuggested: false,
+          reason: "No matching discovery-history entry."
+        };
+    }
     for (const candidateKey of keys) seenCandidateKeys.add(candidateKey);
 
     if (minScore && candidate.score < minScore) {
@@ -6398,7 +8804,33 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       candidate.minimumScoreLabel = minScoreLabel;
       candidate.reason = `${candidate.reason}; below ${minScoreLabel} floor`;
       candidate.statusChecks = [...candidate.statusChecks, belowMinimumReason];
-      const softRejectReason = belowMinimumSoftRejectReason(candidate, scoringProfile);
+      // Standby is a quality reservoir, not a count-fill request. The legacy
+      // discovery path has deliberately permissive below-floor rescue logic,
+      // but allowing that path here reintroduced 50–55 point candidates even
+      // when the standby floor was configured at 60. Keep the soft-rescue
+      // behavior for normal discovery while making standby fail closed.
+      if (/^(1|true|yes)$/i.test(String(options.standbyPool || ""))) {
+        updateDurationCandidateDiagnostic(candidate, {
+          candidateAccumulationAccepted: false,
+          candidateAccumulation: { status: "dropped", stage: "score-threshold", reason: belowMinimumReason },
+          droppedStage: "score-threshold",
+          droppedReason: belowMinimumReason
+        });
+        discarded.push(discardWithDiagnostics(candidate, belowMinimumReason, scoringOptions, scoringProfile, "score-threshold"));
+        return;
+      }
+      const hardDurationReason = durationConstraintReason(candidate.tidal || candidate, scoringOptions);
+      if (hardDurationReason) {
+        updateDurationCandidateDiagnostic(candidate, {
+          candidateAccumulationAccepted: false,
+          candidateAccumulation: { status: "dropped", stage: "duration-constraints", reason: hardDurationReason },
+          droppedStage: "duration-constraints",
+          droppedReason: hardDurationReason
+        });
+        discarded.push(discardWithDiagnostics(candidate, hardDurationReason, scoringOptions, scoringProfile, "duration-constraints"));
+        return;
+      }
+      const softRejectReason = belowMinimumSoftRejectReason(candidate, scoringProfile, scoringOptions);
       if (softRejectReason) {
         const rescueNote = belowMinimumRescueNote(
           candidate,
@@ -6415,8 +8847,13 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
           );
           if (overexposedBelowFloorRescue) {
             const overexposedReason = `Below-minimum repeat artist held back: ${artistDiversity.reasons.join("; ")}`;
-            if (context.tracked) recordQueryRejected(context.query, context.lane, overexposedReason);
-            discarded.push({ ...candidate, reason: overexposedReason });
+            updateDurationCandidateDiagnostic(candidate, {
+              candidateAccumulationAccepted: false,
+              candidateAccumulation: { status: "dropped", stage: "score-threshold", reason: overexposedReason },
+              droppedStage: "score-threshold",
+              droppedReason: overexposedReason
+            });
+            discarded.push(discardWithDiagnostics(candidate, overexposedReason, scoringOptions, scoringProfile, "score-threshold"));
             return;
           }
           minimumRescueCandidates.push({
@@ -6460,10 +8897,19 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
             ]))
           });
         }
-        if (context.tracked) recordQueryRejected(context.query, context.lane, softRejectReason);
-        discarded.push({ ...candidate, reason: softRejectReason });
+        updateDurationCandidateDiagnostic(candidate, {
+          candidateAccumulationAccepted: false,
+          candidateAccumulation: { status: "dropped", stage: "score-threshold", reason: softRejectReason },
+          droppedStage: "score-threshold",
+          droppedReason: softRejectReason
+        });
+        discarded.push(discardWithDiagnostics(candidate, softRejectReason, scoringOptions, scoringProfile, "score-threshold"));
         return;
       }
+      updateDurationCandidateDiagnostic(candidate, {
+        candidateAccumulationAccepted: false,
+        candidateAccumulation: { status: "held-for-score-fill", stage: "score-threshold", reason: belowMinimumReason }
+      });
       scoreFiltered.push({
         ...candidate,
         reason: belowMinimumReason
@@ -6478,8 +8924,23 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
         statusChecks: discoveryStatusFor(result, historyEntry, history?.isRecent?.(candidate), scrobbleHistory)
       };
       previousCandidates.push(previousCandidate);
-      if (context.tracked) recordQueryRejected(context.query, context.lane, "Previously suggested; held back for discovery variety.");
-      discarded.push({ ...result, reason: "Previously suggested; held back for discovery variety." });
+      discarded.push(discardWithDiagnostics(
+        previousCandidate,
+        "Previously suggested; held back for discovery variety.",
+        scoringOptions,
+        scoringProfile,
+        "novelty-policy"
+      ));
+      updateDurationCandidateDiagnostic(previousCandidate, {
+        candidateAccumulationAccepted: false,
+        candidateAccumulation: {
+          status: "held-back",
+          stage: "novelty-policy",
+          reason: "Previously suggested; held back initially for discovery novelty."
+        },
+        droppedStage: "novelty-policy",
+        droppedReason: "Previously suggested; held back initially for discovery novelty."
+      });
       return;
     }
 
@@ -6497,13 +8958,25 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
         ]))
       };
       artistNoveltyCandidates.push(noveltyCandidate);
-      if (context.tracked) recordQueryRejected(context.query, context.lane, artistNoveltyReason);
-      discarded.push({ ...noveltyCandidate, reason: artistNoveltyReason });
+      discarded.push(discardWithDiagnostics(noveltyCandidate, artistNoveltyReason, scoringOptions, scoringProfile, "artist-novelty-policy"));
+      updateDurationCandidateDiagnostic(noveltyCandidate, {
+        candidateAccumulationAccepted: false,
+        candidateAccumulation: { status: "held-back", stage: "artist-novelty-policy", reason: artistNoveltyReason },
+        droppedStage: "artist-novelty-policy",
+        droppedReason: artistNoveltyReason
+      });
       return;
     }
 
-    if (context.tracked) recordQueryAccepted(context.query, context.lane);
+    const accumulated = recordCandidateAccumulation(candidate, context, result);
+    if (accumulated && !historyEntry) candidateCollectionDiagnostics.freshAfterNoveltyCount += 1;
     byKey.set(key, candidate);
+    updateDurationCandidateDiagnostic(candidate, {
+      candidateAccumulationAccepted: true,
+      candidateAccumulation: { status: "accepted", stage: "candidate-accumulation", reason: "Entered selectable candidate pool." },
+      droppedStage: "",
+      droppedReason: ""
+    });
     if (typeof options.standbyOnCandidate === "function") options.standbyOnCandidate(candidate);
   }
 
@@ -6513,8 +8986,37 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     }).length;
   }
 
+  const adaptiveRecovery = {
+    enabled: !/^(0|false|no)$/i.test(String(options.adaptiveQueryRecovery ?? "true")),
+    triggered: false,
+    reason: "",
+    keptBefore: 0,
+    keptAfter: 0,
+    attempted: 0,
+    returned: 0,
+    accepted: 0,
+    errors: 0,
+    targetLanes: [],
+    laneShortfalls: [],
+    families: []
+  };
+  let relaxedYearOptions = null;
+  let modelCandidates = [];
+
+  if (Array.isArray(directCandidates)) {
+    for (const result of directCandidates) {
+      if (!result || typeof result !== "object") continue;
+      const query = cleanText(result.query || profile.targetGenres.join(" ") || "direct admission");
+      consider({
+        ...result,
+        query,
+        discoverySource: result.discoverySource || "direct admission harness",
+        discoveryLane: result.discoveryLane || "direct-admission"
+      }, options, profile, { query, lane: "direct-admission", trackYield: false });
+    }
+  } else {
   const modelCandidateLimit = strictRoonMode ? Math.max(40, requestedCount * 4) : Math.max(30, requestedCount * 3);
-  const modelCandidates = Array.isArray(options.llmCandidates) ? options.llmCandidates.slice(0, modelCandidateLimit) : [];
+  modelCandidates = Array.isArray(options.llmCandidates) ? options.llmCandidates.slice(0, modelCandidateLimit) : [];
   if (modelCandidates.length) {
     await mapWithConcurrency(modelCandidates, 2, async (candidate) => {
       if (byKey.size >= candidatePoolTarget) return;
@@ -6545,31 +9047,20 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       : (smallExactYearSearch ? Math.min(24, Math.max(14, requestedCount + 10)) : Math.min(26, Math.max(18, requestedCount + 12))))
     : (strictRoonMode ? Math.max(12, Math.min(24, requestedCount + 8)) : Math.max(10, Math.min(18, requestedCount + 6))));
   const artistSeeds = buildArtistSeeds(options, artistSeedLimit, tasteProfile, profile, history, freshArtistAvoidance);
-  const adaptiveRecovery = {
-    enabled: !/^(0|false|no)$/i.test(String(options.adaptiveQueryRecovery ?? "true")),
-    triggered: false,
-    reason: "",
-    keptBefore: 0,
-    keptAfter: 0,
-    attempted: 0,
-    returned: 0,
-    accepted: 0,
-    errors: 0,
-    targetLanes: [],
-    laneShortfalls: [],
-    families: []
-  };
   const hasGenreArtistAnchors = Boolean(profile.isGenreDiscoveryTarget && genreArtistAnchors(profile).length);
   const wantsDeepArtistCrawl = /\b(?:deep catalog|catalog crawl|discography|albums?|artist deep dive|accuracy|accurate|scrape)\b/i.test(`${options.request || ""} ${options.reference || ""}`);
-  const useAlbumExpansion = !options.autoBroaden && (isYearCatalogSearch
+  const standbyPool = /^(1|true|yes)$/i.test(String(options.standbyPool || ""));
+  const useAlbumExpansion = typeof tidal.getArtistAlbums === "function" && (!options.autoBroaden || standbyPool) && (isYearCatalogSearch
     ? Boolean(strictRoonMode || profile.seedArtists.length || profile.requestedArtists.length || profile.isProgressiveTarget || hasGenreArtistAnchors || wantsDeepArtistCrawl)
-    : (strictRoonMode || requestedCount <= 16 || wantsDeepArtistCrawl));
+    : (standbyPool && profile.tasteProfileLed || strictRoonMode || requestedCount <= 16 || wantsDeepArtistCrawl));
   const albumExpansionReserveMs = smallExactYearSearch && runtimeMs
     ? Math.max(8_000, Math.min(14_000, Math.floor(runtimeMs * 0.4)))
     : 2_500;
-
-  if (useAlbumExpansion) {
-    const artistExpansionLimit = isYearCatalogSearch
+  async function expandArtistCatalog() {
+    if (!useAlbumExpansion || reachedDiscoveryTarget()) return;
+    const artistExpansionLimit = deepCatalog.enabled
+      ? Math.min(3, Math.max(2, Math.ceil(requestedCount / 5)))
+      : isYearCatalogSearch
       ? (wideDiscoveryPool
         ? (strictRoonMode ? 44 : 30)
         : (strictRoonMode
@@ -6579,22 +9070,44 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
           : Math.min(20, Math.max(12, requestedCount + 6)))))
       : (wideDiscoveryPool
         ? (strictRoonMode ? 24 : 16)
-        : (strictRoonMode ? (requestedCount >= 20 ? 14 : 10) : (requestedCount >= 20 ? 8 : 6)));
-    const artistsToExpand = artistSeeds.slice(0, artistExpansionLimit);
+        : (standbyPool && profile.tasteProfileLed
+          ? Math.min(14, Math.max(10, Math.ceil(requestedCount / 3)))
+          : (strictRoonMode ? (requestedCount >= 20 ? 14 : 10) : (requestedCount >= 20 ? 8 : 6))));
+    const expansionExcludedArtistKeys = new Set(
+      (Array.isArray(options.discoveryExcludedExpansionArtists) ? options.discoveryExcludedExpansionArtists : [])
+        .map(artistIdentityKey)
+        .filter(Boolean)
+    );
+    const artistsToExpand = standbyPool && profile.tasteProfileLed
+      ? uniqueValues([
+        ...artistSeeds.slice(0, Math.max(4, Math.ceil(artistExpansionLimit * 0.5))),
+        ...branchArtistSeeds(options, profile, Math.max(8, artistExpansionLimit * 2)),
+        ...artistSeeds
+      ]).filter((artist) => !expansionExcludedArtistKeys.has(artistIdentityKey(artist))).slice(0, artistExpansionLimit)
+      : artistSeeds.filter((artist) => !expansionExcludedArtistKeys.has(artistIdentityKey(artist))).slice(0, artistExpansionLimit);
+    artistExpansionArtists.push(...artistsToExpand);
+    const deepExpansion = deepCatalog.enabled && selectableCandidateCount() < requestedCount;
     await mapWithConcurrency(artistsToExpand, isYearCatalogSearch ? (strictRoonMode ? 3 : 2) : 2, async (artist) => {
       if (!hasBudget(albumExpansionReserveMs)) {
         noteBudgetExhausted();
         return;
       }
-      if (byKey.size >= usefulCandidateTarget) return;
+      if (reachedDiscoveryTarget()) return;
       let albums = [];
       try {
         albums = await tidal.getArtistAlbums(artist, {
           limit: isYearCatalogSearch
             ? (strictRoonMode ? 10 : 12)
-            : (strictRoonMode ? (yearRange ? 12 : 6) : (yearRange ? 6 : 3))
+            : (strictRoonMode
+              ? (yearRange ? 12 : 6)
+              : (neutralStandbyCatalog ? 12 : (yearRange ? 6 : 3))),
+          rotateCatalog: standbyPool || deepExpansion,
+          pageCount: deepExpansion ? 2 : 1,
+          catalogAnchor: artist,
+          onPagination: catalogPageReporter(artist, "artist-expansion")
         });
       } catch (error) {
+        recordTidalError(artist, "artist-expansion", error, "getArtistAlbums");
         discarded.push({ query: artist, reason: error.message });
         return;
       }
@@ -6610,7 +9123,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
           noteBudgetExhausted();
           break;
         }
-        if (artistAccepted >= perArtistLimit || byKey.size >= usefulCandidateTarget) break;
+        if (artistAccepted >= perArtistLimit || reachedDiscoveryTarget()) break;
         if (yearRange && (!album.year || !yearFits(album.year, yearRange, album.releaseDate))) {
           discarded.push({
             query: `${artist} ${album.title}`,
@@ -6623,9 +9136,17 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
         let tracks = [];
         try {
           tracks = await tidal.getAlbumTracks(album, {
-            limit: isYearCatalogSearch ? (strictRoonMode ? 5 : (smallExactYearSearch ? 4 : 3)) : (strictRoonMode ? 7 : (yearRange ? 4 : 3))
+            fullPage: true,
+            limit: isYearCatalogSearch
+              ? (strictRoonMode ? 5 : (smallExactYearSearch ? 4 : 3))
+              : (strictRoonMode ? 7 : (neutralStandbyCatalog ? 5 : (yearRange ? 4 : 3))),
+            rotateCatalog: standbyPool || deepExpansion,
+            pageCount: deepExpansion ? 2 : 1,
+            catalogAnchor: album.id,
+            onPagination: catalogPageReporter(`${artist} ${album.title}`, "artist-expansion")
           });
         } catch (error) {
+          recordTidalError(`${artist} ${album.title}`, "artist-expansion", error, "getAlbumTracks");
           discarded.push({ query: `${artist} ${album.title}`, reason: error.message });
           continue;
         }
@@ -6637,41 +9158,98 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
             discoverySource: discoverySourceForArtist(artist, options, tasteProfile)
           }, options, profile, { query: `${artist} ${album.title}`, lane: "artist-expansion" });
           if (byKey.size > before) artistAccepted += 1;
-          if (artistAccepted >= perArtistLimit || byKey.size >= usefulCandidateTarget) break;
+          if (artistAccepted >= perArtistLimit || reachedDiscoveryTarget()) break;
         }
       }
     });
   }
 
+  // Neutral standby is a reservoir operation, so give the cheaper and more
+  // independent search lanes first chance to find fresh catalog. Deep album
+  // expansion is valuable, but when it runs first it can consume the entire
+  // refresh budget crawling the same few dominant taste artists and prevent
+  // label/related-artist search from running at all. Normal discovery keeps
+  // its established ordering; only the multi-facet standby reservoir defers
+  // the crawl until after the primary search lanes.
+  const deferStandbyAlbumExpansion = standbyPool && profile.tasteProfileLed;
+  const deferAlbumExpansion = deferStandbyAlbumExpansion || (
+    !isYearCatalogSearch && deepCatalog.enabled
+  );
+  if (useAlbumExpansion && !deferAlbumExpansion) await expandArtistCatalog();
+
   const searchQueryLimit = isYearCatalogSearch
     ? (wideDiscoveryPool
       ? (strictRoonMode ? 56 : 64)
       : (strictRoonMode ? 28 : (smallExactYearSearch ? 28 : Math.min(14, Math.max(8, requestedCount + 6)))))
-    : (wideDiscoveryPool ? Math.min(90, Math.max(48, requestedCount * 5)) : 0);
+    : (wideDiscoveryPool
+      ? Math.min(90, Math.max(48, requestedCount * 5))
+      : (neutralStandbyCatalog ? 30 : (deepCatalog.enabled ? Math.min(12, Math.max(10, requestedCount + 2)) : 0)));
   const searchQueries = isYearCatalogSearch
     ? queries.slice(0, searchQueryLimit)
-    : (wideDiscoveryPool ? queries.slice(0, searchQueryLimit) : queries);
+    : (wideDiscoveryPool || neutralStandbyCatalog ? queries.slice(0, searchQueryLimit) : queries);
   const coreLane = options.autoBroadenLane || "core";
-  const rankedSearchQueries = rankTrackedQueries(searchQueries, coreLane);
-  if (byKey.size < usefulCandidateTarget) await mapWithConcurrency(rankedSearchQueries, searchConcurrencyFor(coreLane), async (query) => {
+  const rankedSearchQueries = orderHardDurationQueries(
+    rankTrackedQueries(searchQueries, coreLane, "explicit/core genre search")
+  );
+  const initialCoreQueryLimit = Math.min(6, Math.max(
+    profile.isProgressiveTranceTarget ? 5 : 4,
+    Math.ceil(requestedCount * 0.4)
+  ));
+  const initialCoreQueries = deepCatalog.enabled
+    ? (profile.isProgressiveTranceTarget
+      ? (() => {
+        const exactRequestedGenre = normalize(profile.targetGenres?.[0] || "");
+        return uniqueValues([
+        ...rankedSearchQueries.filter((query) => queryGenerationInfo(query, profile, options).seedType === "artist").slice(0, 4),
+        ...rankedSearchQueries.filter((query) => normalize(query) === exactRequestedGenre).slice(0, 1),
+        ...rankedSearchQueries.filter((query) => queryGenerationInfo(query, profile, options).seedType === "artist").slice(4, 5),
+        ...rankedSearchQueries
+        ]).slice(0, initialCoreQueryLimit);
+      })()
+      : rankedSearchQueries.slice(0, initialCoreQueryLimit))
+    : rankedSearchQueries;
+  const initialCoreQueryKeys = new Set(initialCoreQueries.map(normalize));
+  const deferredCoreQueries = deepCatalog.enabled
+    ? rankedSearchQueries.filter(query => !initialCoreQueryKeys.has(normalize(query)))
+    : [];
+
+  async function runCoreSearchQueries(queriesToRun = [], { deferred = false } = {}) {
+    if (reachedDiscoveryTarget() || !queriesToRun.length) return;
+    await mapWithConcurrency(queriesToRun, searchConcurrencyFor(coreLane), async (query) => {
     const queryLane = omnivoreQueryKeys.has(normalize(query)) ? "omnivore" : coreLane;
-    if (!hasLaneBudget(queryLane)) {
+    const beforeAccepted = candidateCollectionDiagnostics.acceptedCount;
+    const beforeDuplicates = candidateCollectionDiagnostics.duplicateCount;
+    const queryHasBudget = deferred ? hasBudget(2_500) : hasLaneBudget(queryLane);
+    if (!queryHasBudget) {
+      recordSearchStop({ query, lane: queryLane, source: deferred ? "deferred taste/core search" : "explicit/core genre search", reason: "budget", attempted: false });
       return;
     }
-    if (byKey.size >= usefulCandidateTarget) return;
+    if (reachedDiscoveryTarget()) {
+      recordSearchStop({ query, lane: queryLane, source: "explicit/core genre search", reason: "target-satisfied", attempted: false });
+      return;
+    }
     let results = [];
+    const queryStartedAt = Date.now();
     try {
       results = await tidal.searchTracks(query, {
+        fullPage: true,
         standbyFresh: typeof options.standbyAcceptCandidate === "function",
-        limit: strictRoonMode ? (isYearCatalogSearch ? 16 : 16) : (isYearCatalogSearch ? (smallExactYearSearch ? 12 : 8) : 6),
+        rotateCatalog: standbyPool || deepCatalog.enabled,
+        catalogAnchor: query,
+        onPagination: catalogPageReporter(query, queryLane),
+        limit: neutralStandbyCatalog
+          ? 16
+          : (strictRoonMode ? (isYearCatalogSearch ? 16 : 16) : (isYearCatalogSearch ? (smallExactYearSearch ? 12 : 8) : 6)),
         detailLimit: yearRange?.dateSpecific
           ? (strictRoonMode ? 12 : 8)
             : (yearRange ? (isYearCatalogSearch ? (strictRoonMode ? 5 : (smallExactYearSearch ? 4 : 2)) : (strictRoonMode ? 5 : 3)) : (strictRoonMode ? 3 : 1))
       });
       recordQueryAttempt(query, queryLane, results.length);
     } catch (error) {
-      recordQueryError(query, queryLane);
+      recordQueryError(query, queryLane, error);
       discarded.push({ query, reason: error.message });
+      recordQueryExecution({ query, lane: queryLane, source: "explicit/core genre search", startedAt: queryStartedAt, error: true });
+      recordSearchStop({ query, lane: queryLane, source: "explicit/core genre search", reason: "error", attempted: true });
       return;
     }
 
@@ -6685,9 +9263,31 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
           ? "omnivore"
           : (options.autoBroadenLane === "adjacent" ? "adjacent" : (result.discoveryLane || options.autoBroadenLane || "core"))
       }, options, profile, { query, lane: queryLane, trackYield: true });
-      if (byKey.size >= usefulCandidateTarget) break;
+      if (reachedDiscoveryTarget()) break;
     }
-  });
+    const accepted = candidateCollectionDiagnostics.acceptedCount - beforeAccepted;
+    recordQueryExecution({ query, lane: queryLane, source: "explicit/core genre search", startedAt: queryStartedAt, returned: results.length, accepted });
+    notePromisingCatalogAnchor({ query, lane: queryLane, source: "explicit/core genre search", accepted });
+    const page = latestCatalogPageFor(query, queryLane);
+    recordSearchStop({
+      query,
+      lane: queryLane,
+      source: "explicit/core genre search",
+      reason: reachedDiscoveryTarget()
+        ? "target-satisfied"
+        : (paginationAvailableFor(page)
+          ? (accepted ? "underfilled-page-available" : "page-available")
+          : (results.length ? "catalog-page-exhausted" : "empty-results")),
+      returned: results.length,
+      accepted,
+      rejected: Math.max(0, results.length - accepted),
+      duplicates: candidateCollectionDiagnostics.duplicateCount - beforeDuplicates,
+      attempted: true
+    });
+    });
+  }
+
+  await runCoreSearchQueries(initialCoreQueries);
 
   const baseQuotaPlan = discoveryLaneQuotaPlan(requestedCount, profile);
   const branchQuotaTarget = Number(baseQuotaPlan.targets.branch || 0);
@@ -6698,26 +9298,57 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       ? (wideDiscoveryPool ? (strictRoonMode ? 56 : 48) : (strictRoonMode ? 28 : 22))
       : (wideDiscoveryPool ? 36 : 16));
   const needsBranchCandidate = () => branchQuotaTarget > 0 && candidateCountForQuotaBucket("branch") < branchQuotaTarget;
-  if (branchQueries.length && (needsBranchCandidate() || byKey.size < usefulCandidateTarget)) {
-    const rankedBranchQueries = rankTrackedQueries(branchQueries, "branch");
+  if (branchQueries.length && (needsBranchCandidate() || !reachedDiscoveryTarget())) {
+    const rankedBranchQueries = orderHardDurationQueries(
+      rankTrackedQueries(branchQueries, "branch", "artist/label branch search")
+    );
+    if (profile.isProgressiveTranceTarget) {
+      // The core lane owns direct artist priority. Reserve the branch lane's
+      // first opportunity for a trusted scene label so labels remain present
+      // without starving the direct-artist window.
+      const trustedLabelBranch = rankedBranchQueries.find((query) => queryStartsWithKnownLabel(query, profile));
+      // These artists were excluded from branch planning because the core
+      // reservoir owns them. Run their direct queries before spending the
+      // remaining budget on labels, genre-suffixed variants, or deeper pages
+      // of artists that already fill the per-artist quota.
+      const pendingSceneArtists = deferredCoreQueries.filter(query => matchingSceneArtist(query, profile));
+      rankedBranchQueries.splice(0, rankedBranchQueries.length, ...uniqueValues([
+        trustedLabelBranch, ...pendingSceneArtists, ...rankedBranchQueries
+      ].filter(Boolean)));
+    }
     await mapWithConcurrency(rankedBranchQueries, searchConcurrencyFor("branch"), async (query) => {
+      const beforeAccepted = candidateCollectionDiagnostics.acceptedCount;
+      const beforeDuplicates = candidateCollectionDiagnostics.duplicateCount;
       if (!hasLaneBudget("branch")) {
+        recordSearchStop({ query, lane: "branch", source: "artist/label branch search", reason: "budget", attempted: false });
         return;
       }
-      if (!needsBranchCandidate() && byKey.size >= usefulCandidateTarget) return;
+      if (!needsBranchCandidate() && reachedDiscoveryTarget()) {
+        recordSearchStop({ query, lane: "branch", source: "artist/label branch search", reason: "target-satisfied", attempted: false });
+        return;
+      }
       let results = [];
+      const queryStartedAt = Date.now();
       try {
         results = await tidal.searchTracks(query, {
-        standbyFresh: typeof options.standbyAcceptCandidate === "function",
-          limit: strictRoonMode ? (isYearCatalogSearch ? 14 : 12) : (isYearCatalogSearch ? (smallExactYearSearch ? 10 : 8) : 6),
+          fullPage: true,
+          standbyFresh: typeof options.standbyAcceptCandidate === "function",
+          rotateCatalog: standbyPool || deepCatalog.enabled,
+          catalogAnchor: query,
+          onPagination: catalogPageReporter(query, "branch"),
+          limit: neutralStandbyCatalog
+            ? 14
+            : (strictRoonMode ? (isYearCatalogSearch ? 14 : 12) : (isYearCatalogSearch ? (smallExactYearSearch ? 10 : 8) : 6)),
           detailLimit: yearRange?.dateSpecific
             ? (strictRoonMode ? 10 : 7)
             : (yearRange ? (isYearCatalogSearch ? (strictRoonMode ? 4 : (smallExactYearSearch ? 3 : 2)) : 3) : 2)
         });
         recordQueryAttempt(query, "branch", results.length);
       } catch (error) {
-        recordQueryError(query, "branch");
+        recordQueryError(query, "branch", error);
         discarded.push({ query, reason: error.message });
+        recordQueryExecution({ query, lane: "branch", source: "artist/label branch search", startedAt: queryStartedAt, error: true });
+        recordSearchStop({ query, lane: "branch", source: "artist/label branch search", reason: "error", attempted: true });
         return;
       }
 
@@ -6727,42 +9358,88 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
           discoverySource: "Branch source search",
           discoveryLane: "branch"
         }, options, profile, { query, lane: "branch", trackYield: true });
-        if (!needsBranchCandidate() && byKey.size >= usefulCandidateTarget) break;
+        if (!needsBranchCandidate() && reachedDiscoveryTarget()) break;
       }
+      const accepted = candidateCollectionDiagnostics.acceptedCount - beforeAccepted;
+      recordQueryExecution({ query, lane: "branch", source: "artist/label branch search", startedAt: queryStartedAt, returned: results.length, accepted });
+      notePromisingCatalogAnchor({ query, lane: "branch", source: "artist/label branch search", accepted });
+      recordSearchStop({
+        query,
+        lane: "branch",
+        source: "artist/label branch search",
+        reason: (!needsBranchCandidate() && reachedDiscoveryTarget())
+          ? "target-satisfied"
+          : (paginationAvailableFor(latestCatalogPageFor(query, "branch"))
+            ? (accepted ? "underfilled-page-available" : "page-available")
+            : (results.length ? "catalog-page-exhausted" : "empty-results")),
+        returned: results.length,
+        accepted,
+        rejected: Math.max(0, results.length - accepted),
+        duplicates: candidateCollectionDiagnostics.duplicateCount - beforeDuplicates,
+        attempted: true
+      });
     });
   }
 
+  // Give trusted scene/label branches their guaranteed first-page window
+  // before spending the remaining reserve on slower page-2 recovery.
+  await runDeepCatalogPagination();
+
+  // Only spend the remaining core budget after the deep page and trusted
+  // branch lanes have had their guaranteed opportunity. These are mostly
+  // taste-seeded or lower-confidence queries, so they are never allowed to
+  // starve the stronger sources above.
+  if (deferredCoreQueries.length && !reachedDiscoveryTarget()) {
+    const executedQueries = new Set(queryExecutionDiagnostics.map(item => normalize(item.query)));
+    await runCoreSearchQueries(deferredCoreQueries.filter(query => !executedQueries.has(normalize(query))), { deferred: true });
+  }
+
   const adjacentCandidateFloor = Math.min(
-    usefulCandidateTarget,
-    Math.max(requestedCount + (smallExactYearSearch ? 12 : 8), Math.ceil(usefulCandidateTarget * (smallExactYearSearch ? 0.7 : 0.55)))
+    discoveryFillTarget,
+    Math.max(requestedCount + (smallExactYearSearch ? 12 : 8), Math.ceil(discoveryFillTarget * (smallExactYearSearch ? 0.7 : 0.55)))
   );
-  if (profile.isGenreDiscoveryTarget && byKey.size < adjacentCandidateFloor) {
+  if (profile.isGenreDiscoveryTarget && !profile.isProgressivePlanningTarget && byKey.size < adjacentCandidateFloor) {
     const usedQueries = new Set([...searchQueries, ...branchQueries].map(normalize));
     const adjacentQueries = buildAdjacentSearchQueries(options, tasteProfile, profile, history, freshArtistAvoidance)
       .filter((query) => !usedQueries.has(normalize(query)))
       .slice(0, isYearCatalogSearch
         ? (wideDiscoveryPool ? (strictRoonMode ? 56 : 48) : (strictRoonMode ? 28 : 22))
         : (wideDiscoveryPool ? 36 : 16));
-    const rankedAdjacentQueries = rankTrackedQueries(adjacentQueries, "adjacent");
+    const rankedAdjacentQueries = rankTrackedQueries(adjacentQueries, "adjacent", "adjacent bass/genre lane search");
 
     await mapWithConcurrency(rankedAdjacentQueries, searchConcurrencyFor("adjacent"), async (query) => {
+      const beforeAccepted = candidateCollectionDiagnostics.acceptedCount;
+      const beforeDuplicates = candidateCollectionDiagnostics.duplicateCount;
       if (!hasLaneBudget("adjacent")) {
+        recordSearchStop({ query, lane: "adjacent", source: "adjacent bass/genre lane search", reason: "budget", attempted: false });
         return;
       }
-      if (byKey.size >= usefulCandidateTarget) return;
+      if (reachedDiscoveryTarget()) {
+        recordSearchStop({ query, lane: "adjacent", source: "adjacent bass/genre lane search", reason: "target-satisfied", attempted: false });
+        return;
+      }
       let results = [];
+      const queryStartedAt = Date.now();
       try {
         results = await tidal.searchTracks(query, {
-        standbyFresh: typeof options.standbyAcceptCandidate === "function",
-          limit: strictRoonMode ? (isYearCatalogSearch ? 16 : 14) : (isYearCatalogSearch ? (smallExactYearSearch ? 12 : 8) : 8),
+          fullPage: true,
+          standbyFresh: typeof options.standbyAcceptCandidate === "function",
+          rotateCatalog: standbyPool || deepCatalog.enabled,
+          catalogAnchor: query,
+          onPagination: catalogPageReporter(query, "adjacent"),
+          limit: neutralStandbyCatalog
+            ? 16
+            : (strictRoonMode ? (isYearCatalogSearch ? 16 : 14) : (isYearCatalogSearch ? (smallExactYearSearch ? 12 : 8) : 8)),
           detailLimit: yearRange?.dateSpecific
             ? (strictRoonMode ? 12 : 8)
             : (yearRange ? (isYearCatalogSearch ? (strictRoonMode ? 5 : (smallExactYearSearch ? 4 : 2)) : 3) : 2)
         });
         recordQueryAttempt(query, "adjacent", results.length);
       } catch (error) {
-        recordQueryError(query, "adjacent");
+        recordQueryError(query, "adjacent", error);
         discarded.push({ query, reason: error.message });
+        recordQueryExecution({ query, lane: "adjacent", source: "adjacent bass/genre lane search", startedAt: queryStartedAt, error: true });
+        recordSearchStop({ query, lane: "adjacent", source: "adjacent bass/genre lane search", reason: "error", attempted: true });
         return;
       }
 
@@ -6772,12 +9449,142 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
           discoverySource: "Adjacent lane search",
           discoveryLane: "adjacent"
         }, options, profile, { query, lane: "adjacent", trackYield: true });
-        if (byKey.size >= usefulCandidateTarget) break;
+        if (reachedDiscoveryTarget()) break;
       }
+      const accepted = candidateCollectionDiagnostics.acceptedCount - beforeAccepted;
+      recordQueryExecution({ query, lane: "adjacent", source: "adjacent bass/genre lane search", startedAt: queryStartedAt, returned: results.length, accepted });
+      notePromisingCatalogAnchor({ query, lane: "adjacent", source: "adjacent bass/genre lane search", accepted });
+      recordSearchStop({
+        query,
+        lane: "adjacent",
+        source: "adjacent bass/genre lane search",
+        reason: reachedDiscoveryTarget()
+          ? "target-satisfied"
+          : (paginationAvailableFor(latestCatalogPageFor(query, "adjacent"))
+            ? (accepted ? "underfilled-page-available" : "page-available")
+            : (results.length ? "catalog-page-exhausted" : "empty-results")),
+        returned: results.length,
+        accepted,
+        rejected: Math.max(0, results.length - accepted),
+        duplicates: candidateCollectionDiagnostics.duplicateCount - beforeDuplicates,
+        attempted: true
+      });
     });
   }
 
-  const relaxedYearOptions = byKey.size < requestedCount ? nearYearFallbackOptions(options, yearRange) : null;
+  async function runDeepCatalogPagination() {
+  if (deepCatalog.enabled && selectableCandidateCount() < requestedCount) {
+    const deepTarget = Math.min(
+      discoveryFillTarget,
+      Math.max(requestedCount + 4, requestedCount * 2)
+    );
+    const anchors = [...promisingCatalogAnchors.values()]
+      .sort((left, right) => (
+        Number(right.accepted || 0) - Number(left.accepted || 0) ||
+        Number(right.genreCompatibilityScore || 0) - Number(left.genreCompatibilityScore || 0) ||
+        left.query.localeCompare(right.query)
+      ))
+      .slice(0, Math.min(4, Math.max(3, requestedCount)));
+    deepCatalog.triggered = true;
+    deepCatalog.anchors = anchors.map(anchor => ({ ...anchor }));
+    if (!anchors.length) {
+      deepCatalog.triggerReason = "candidate pool under target, but no paginated source produced a current-run accepted candidate";
+      deepCatalog.stoppedReason = "no-promising-page-available";
+    } else {
+      deepCatalog.triggerReason = "candidate pool under target and a paginated source produced current-run accepted candidates";
+      for (const anchor of anchors) {
+        if (reachedDiscoveryTarget(deepTarget)) {
+          deepCatalog.stoppedReason = "target-satisfied";
+          break;
+        }
+        // Keep a real reserve for any remaining recovery work; deep pagination
+        // runs only after the core and trusted branch first-page windows have
+        // had their opportunity.
+        if (!hasBudget(8_000)) {
+          deepCatalog.stoppedReason = "budget";
+          noteBudgetExhausted();
+          break;
+        }
+
+        const beforeAccepted = candidateCollectionDiagnostics.acceptedCount;
+        const beforeDuplicates = candidateCollectionDiagnostics.duplicateCount;
+        let results = [];
+        const queryStartedAt = Date.now();
+        try {
+          results = await tidal.searchTracks(anchor.query, {
+            fullPage: true,
+            standbyFresh: typeof options.standbyAcceptCandidate === "function",
+            rotateCatalog: true,
+            pageCount: deepCatalog.pageCount,
+            catalogAnchor: anchor.query,
+            onPagination: catalogPageReporter(anchor.query, anchor.lane),
+            limit: strictRoonMode ? 12 : 8,
+            // The initial search pages already carry the fields needed for
+            // the hard-duration gate. Avoid serial detail lookups during the
+            // recovery pass; detailed enrichment remains available to the
+            // normal resolver paths.
+            detailLimit: strictRoonMode ? 2 : 0
+          });
+          recordQueryAttempt(anchor.query, anchor.lane, results.length);
+        } catch (error) {
+          recordQueryError(anchor.query, anchor.lane, error);
+          deepCatalog.stoppedReason = "error";
+          recordQueryExecution({ query: anchor.query, lane: anchor.lane, source: "deep catalog pagination", startedAt: queryStartedAt, error: true, deepPagination: true });
+          recordSearchStop({
+            query: anchor.query,
+            lane: anchor.lane,
+            source: "deep catalog pagination",
+            reason: "error",
+            attempted: true
+          });
+          continue;
+        }
+
+        for (const result of results) {
+          consider({
+            ...result,
+            discoverySource: "Deep catalog pagination",
+            discoveryLane: anchor.lane
+          }, options, profile, { query: anchor.query, lane: anchor.lane, trackYield: true });
+          if (reachedDiscoveryTarget(deepTarget)) break;
+        }
+
+        const accepted = candidateCollectionDiagnostics.acceptedCount - beforeAccepted;
+        const duplicates = candidateCollectionDiagnostics.duplicateCount - beforeDuplicates;
+        recordQueryExecution({ query: anchor.query, lane: anchor.lane, source: "deep catalog pagination", startedAt: queryStartedAt, returned: results.length, accepted, deepPagination: true });
+        deepCatalog.attempted += 1;
+        deepCatalog.returned += results.length;
+        deepCatalog.accepted += accepted;
+        deepCatalog.duplicateCount += duplicates;
+        const page = latestCatalogPageFor(anchor.query, anchor.lane);
+        recordSearchStop({
+          query: anchor.query,
+          lane: anchor.lane,
+          source: "deep catalog pagination",
+          reason: reachedDiscoveryTarget(deepTarget)
+            ? "target-satisfied"
+            : (paginationAvailableFor(page)
+              ? (accepted ? "underfilled-page-available" : "page-available")
+              : (results.length ? "catalog-exhausted" : "empty-results")),
+          returned: results.length,
+          accepted,
+          rejected: Math.max(0, results.length - accepted),
+          duplicates,
+          attempted: true
+        });
+      }
+      if (!deepCatalog.stoppedReason) deepCatalog.stoppedReason = "candidates-exhausted";
+    }
+  } else if (deepCatalog.enabled) {
+    deepCatalog.stoppedReason = "requested-count-already-met";
+  }
+  }
+
+  if (deferAlbumExpansion && selectableCandidateCount() < requestedCount && hasBudget(6_000)) {
+    await expandArtistCatalog();
+  }
+
+  relaxedYearOptions = selectableCandidateCount() < requestedCount ? nearYearFallbackOptions(options, yearRange) : null;
   if (relaxedYearOptions) {
     const relaxedProfile = buildDiscoveryProfile(relaxedYearOptions);
     const usedQueries = new Set(searchQueries.map(normalize));
@@ -6785,35 +9592,50 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     const relaxedQueries = buildSceneAnchorRecentQueries(relaxedYearOptions, tasteProfile, relaxedProfile, history, relaxedFreshArtistAvoidance)
       .filter((query) => !usedQueries.has(normalize(query)))
       .slice(0, strictRoonMode ? 72 : 56);
-    const rankedRelaxedQueries = rankTrackedQueries(relaxedQueries, "recent");
+    const rankedRelaxedQueries = rankTrackedQueries(relaxedQueries, "recent", "recent-year fallback search");
 
     await mapWithConcurrency(rankedRelaxedQueries, searchConcurrencyFor("recent"), async (query) => {
       if (!hasLaneBudget("recent")) {
         return;
       }
-      if (byKey.size >= usefulCandidateTarget) return;
+      if (reachedDiscoveryTarget()) return;
       let results = [];
+      const queryStartedAt = Date.now();
       try {
         results = await tidal.searchTracks(query, {
-        standbyFresh: typeof options.standbyAcceptCandidate === "function",
+          fullPage: true,
+          standbyFresh: typeof options.standbyAcceptCandidate === "function",
+          rotateCatalog: standbyPool || deepCatalog.enabled,
+          catalogAnchor: query,
+          onPagination: catalogPageReporter(query, "recent"),
           limit: strictRoonMode ? 14 : 10,
           detailLimit: strictRoonMode ? 5 : 4
         });
         recordQueryAttempt(query, "recent", results.length);
       } catch (error) {
-        recordQueryError(query, "recent");
+        recordQueryError(query, "recent", error);
         discarded.push({ query, reason: error.message });
+        recordQueryExecution({ query, lane: "recent", source: "recent-year fallback search", startedAt: queryStartedAt, error: true });
         return;
       }
 
+      const beforeAccepted = candidateCollectionDiagnostics.acceptedCount;
       for (const result of results) {
         consider({
           ...result,
           discoverySource: "Recent-year fallback search",
           discoveryLane: "recent"
         }, relaxedYearOptions, relaxedProfile, { query, lane: "recent", trackYield: true });
-        if (byKey.size >= usefulCandidateTarget) break;
+        if (reachedDiscoveryTarget()) break;
       }
+      recordQueryExecution({
+        query,
+        lane: "recent",
+        source: "recent-year fallback search",
+        startedAt: queryStartedAt,
+        returned: results.length,
+        accepted: candidateCollectionDiagnostics.acceptedCount - beforeAccepted
+      });
     });
   }
 
@@ -6852,10 +9674,10 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       adaptiveRecovery.laneShortfalls = recoveryDecision.laneShortfalls || [];
 
       for (const family of families) {
-        if (!remainingQueries || (!recoveringStarvedLanes && byKey.size >= usefulCandidateTarget) || !hasBudget(2_500)) break;
+        if (!remainingQueries || (!recoveringStarvedLanes && reachedDiscoveryTarget()) || !hasBudget(2_500)) break;
         if (recoveringStarvedLanes && !currentLaneShortfalls().some((item) => targetLaneSet.has(item.bucket))) break;
         const queryLane = cleanText(family.lane || "adaptive-recovery") || "adaptive-recovery";
-        const familyQueries = rankTrackedQueries(family.queries, queryLane).slice(0, remainingQueries);
+        const familyQueries = rankTrackedQueries(family.queries, queryLane, `adaptive recovery: ${family.label}`).slice(0, remainingQueries);
         if (!familyQueries.length) continue;
         const familyStats = {
           id: family.id,
@@ -6875,12 +9697,19 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
 
         await mapWithConcurrency(familyQueries, 2, async (query) => {
           if (!hasLaneBudget(queryLane)) return;
-          if (!recoveringStarvedLanes && byKey.size >= usefulCandidateTarget) return;
-          let results = [];
-          try {
+           if (!recoveringStarvedLanes && reachedDiscoveryTarget()) return;
+           let results = [];
+           const queryStartedAt = Date.now();
+           try {
             results = await tidal.searchTracks(query, {
-        standbyFresh: typeof options.standbyAcceptCandidate === "function",
-              limit: strictRoonMode ? (isYearCatalogSearch ? 14 : 12) : (isYearCatalogSearch ? 10 : 8),
+              fullPage: true,
+              standbyFresh: typeof options.standbyAcceptCandidate === "function",
+              rotateCatalog: standbyPool || deepCatalog.enabled,
+              catalogAnchor: query,
+              onPagination: catalogPageReporter(query, queryLane),
+              limit: neutralStandbyCatalog
+                ? 16
+                : (strictRoonMode ? (isYearCatalogSearch ? 14 : 12) : (isYearCatalogSearch ? 10 : 8)),
               detailLimit: yearRange?.dateSpecific
                 ? (strictRoonMode ? 9 : 7)
                 : (yearRange ? (strictRoonMode ? 4 : 3) : 2)
@@ -6890,14 +9719,15 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
             familyStats.returned += results.length;
             adaptiveRecovery.attempted += 1;
             adaptiveRecovery.returned += results.length;
-          } catch (error) {
-            recordQueryError(query, queryLane);
+           } catch (error) {
+             recordQueryError(query, queryLane, error);
             familyStats.attempted += 1;
             familyStats.errors += 1;
             adaptiveRecovery.attempted += 1;
-            adaptiveRecovery.errors += 1;
-            discarded.push({ query, reason: error.message });
-            return;
+             adaptiveRecovery.errors += 1;
+             discarded.push({ query, reason: error.message });
+             recordQueryExecution({ query, lane: queryLane, source: `adaptive recovery: ${family.label}`, startedAt: queryStartedAt, error: true });
+             return;
           }
 
           let acceptedForQuery = 0;
@@ -6919,18 +9749,20 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
               if (bucket === "seo") familyStats.seoRejects += 1;
               if (bucket === "genre") familyStats.genreRejects += 1;
             }
-            if (!recoveringStarvedLanes && byKey.size >= usefulCandidateTarget) break;
-          }
-          familyStats.rejected += Math.max(0, results.length - acceptedForQuery);
-        });
+            if (!recoveringStarvedLanes && reachedDiscoveryTarget()) break;
+           }
+           familyStats.rejected += Math.max(0, results.length - acceptedForQuery);
+           recordQueryExecution({ query, lane: queryLane, source: `adaptive recovery: ${family.label}`, startedAt: queryStartedAt, returned: results.length, accepted: acceptedForQuery });
+         });
       }
       adaptiveRecovery.keptAfter = byKey.size;
     }
   }
 
+  }
+
   const candidates = Array.from(byKey.values())
     .sort((left, right) => right.score - left.score || (right.durationMs || 0) - (left.durationMs || 0));
-  const quotaCalibration = typeof tasteProfile?.read === "function" ? tasteProfile.read().calibration : null;
   let laneSelection = selectDiscoveryLaneCandidates(candidates, requestedCount, options, profile, quotaCalibration);
   let tracks = laneSelection.tracks;
   let minimumRescueKept = 0;
@@ -6964,16 +9796,129 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     }
   }
 
+  // Novelty is a preference, not a hard availability gate. Once all fresh
+  // candidates have gone through lane selection, promote already-seen tracks
+  // that passed the same catalogue, identity, genre, duration, and rating
+  // checks. Explicit no-repeat requests and strict fresh-artist requests stay
+  // authoritative; the normal request path may use this only to backfill an
+  // otherwise empty or short pool.
+  let previousFallbackKept = 0;
+  const automaticPreviousFallbackAllowed = Boolean(
+    !allowPreviousSuggestions &&
+    !explicitlyForbidsPreviouslySuggested(options) &&
+    !requestRequiresFreshArtists(options) &&
+    previousCandidates.length
+  );
+  if (tracks.length < requestedCount && automaticPreviousFallbackAllowed) {
+    const selectedKeys = new Set(tracks.flatMap(candidateIdentityKeys));
+    const selectedArtistCounts = new Map();
+    const selectedAlbumCounts = new Map();
+    const selectedLabelCounts = new Map();
+    for (const track of tracks) {
+      for (const artistKey of artistKeysForCandidate(track)) {
+        selectedArtistCounts.set(artistKey, (selectedArtistCounts.get(artistKey) || 0) + 1);
+      }
+      const albumKey = normalize(track.album);
+      if (albumKey) selectedAlbumCounts.set(albumKey, (selectedAlbumCounts.get(albumKey) || 0) + 1);
+      const labelKey = labelDiversityKeyForCandidate(track, profile);
+      if (labelKey) selectedLabelCounts.set(labelKey, (selectedLabelCounts.get(labelKey) || 0) + 1);
+    }
+    const sortedPreviousCandidates = previousCandidates.slice().sort((left, right) => (
+      Number(right.score || 0) - Number(left.score || 0) ||
+      Number(right.durationMs || 0) - Number(left.durationMs || 0)
+    ));
+
+    function addPreviousCandidateFallback(candidate = {}, caps = {}) {
+      if (tracks.length >= requestedCount) return false;
+      const keys = candidateIdentityKeys(candidate);
+      if (!keys.length || keys.some((key) => selectedKeys.has(key))) return false;
+      const artistKeys = artistKeysForCandidate(candidate);
+      const albumKey = normalize(candidate.album);
+      const labelKey = labelDiversityKeyForCandidate(candidate, profile);
+      const artistCap = caps.artistCap ?? defaultPerRunArtistCap(options, profile, requestedCount);
+      const albumCap = caps.albumCap ?? 1;
+      const labelCap = caps.labelCap ?? defaultPerRunLabelCap(options, profile, requestedCount);
+      if (artistKeys.some((key) => (selectedArtistCounts.get(key) || 0) >= artistCap)) return false;
+      if (albumKey && (selectedAlbumCounts.get(albumKey) || 0) >= albumCap) return false;
+      if (labelKey && Number.isFinite(labelCap) && (selectedLabelCounts.get(labelKey) || 0) >= labelCap) return false;
+
+      const fallbackCandidate = {
+        ...candidate,
+        previousFallbackRelaxed: true,
+        reason: `${candidate.reason}; kept after fresh candidates were exhausted`,
+        statusChecks: Array.from(new Set([
+          ...(candidate.statusChecks || []),
+          "Previously suggested fallback after fresh pool undershoot"
+        ])),
+        why: [
+          ...(candidate.why || []),
+          "Backfilled from an otherwise valid previous suggestion because fresh candidates undershot."
+        ].slice(0, 8)
+      };
+      tracks.push(fallbackCandidate);
+      for (const key of keys) selectedKeys.add(key);
+      for (const artistKey of artistKeys) {
+        selectedArtistCounts.set(artistKey, (selectedArtistCounts.get(artistKey) || 0) + 1);
+      }
+      if (albumKey) selectedAlbumCounts.set(albumKey, (selectedAlbumCounts.get(albumKey) || 0) + 1);
+      if (labelKey) selectedLabelCounts.set(labelKey, (selectedLabelCounts.get(labelKey) || 0) + 1);
+      previousFallbackKept += 1;
+      recordCandidateAccumulation(candidate, { query: candidate.tidal?.query, lane: candidate.discoveryLane }, candidate.tidal);
+      updateDurationCandidateDiagnostic(candidate, {
+        candidateAccumulation: {
+          status: "selected-fallback",
+          stage: "novelty-fallback",
+          reason: "Promoted after fresh candidates undershot the requested count."
+        },
+        droppedStage: "",
+        droppedReason: ""
+      });
+      return true;
+    }
+
+    const fallbackStages = [
+      {
+        artistCap: defaultPerRunArtistCap(options, profile, requestedCount),
+        albumCap: 1,
+        labelCap: defaultPerRunLabelCap(options, profile, requestedCount)
+      },
+      {
+        artistCap: Math.max(2, Math.min(3, requestedCount)),
+        albumCap: 2,
+        labelCap: Math.max(2, Math.min(requestedCount, defaultPerRunLabelCap(options, profile, requestedCount)))
+      },
+      { artistCap: Number.MAX_SAFE_INTEGER, albumCap: Number.MAX_SAFE_INTEGER, labelCap: Number.MAX_SAFE_INTEGER }
+    ];
+    for (const caps of fallbackStages) {
+      for (const candidate of sortedPreviousCandidates) {
+        if (tracks.length >= requestedCount) break;
+        addPreviousCandidateFallback(candidate, caps);
+      }
+      if (tracks.length >= requestedCount) break;
+    }
+    laneSelection = {
+      ...laneSelection,
+      tracks,
+      quota: {
+        ...(laneSelection.quota || {}),
+        previousFallbackApplied: previousFallbackKept > 0,
+        previousFallbackAvailable: previousCandidates.length,
+        previousFallbackKept
+      }
+    };
+  }
+
   const fallbackAlternates = [];
   if (allowPreviousFallback && tracks.length < requestedCount && typeof history?.fallbackCandidates === "function") {
     const fallbackEntries = history.fallbackCandidates({ limit: Math.max(60, requestedCount * 4) });
-    const selectedKeys = new Set(tracks.flatMap(candidateIdentityKeys));
+    const fallbackCandidates = [];
+    const fallbackSeenKeys = new Set(tracks.flatMap(candidateIdentityKeys));
     const fallbackAlternateTarget = Math.max(15, requestedCount);
 
     for (const entry of fallbackEntries) {
-      if (tracks.length >= requestedCount && fallbackAlternates.length >= fallbackAlternateTarget) break;
+      if (fallbackCandidates.length >= Math.max(60, requestedCount * 4)) break;
       const entryKeys = candidateIdentityKeys(entry);
-      if (!entryKeys.length || entryKeys.some((key) => selectedKeys.has(key))) continue;
+      if (!entryKeys.length || entryKeys.some((key) => fallbackSeenKeys.has(key))) continue;
 
       try {
         const tidalId = tidalTrackIdFromUrl(entry.tidalUrl);
@@ -6984,9 +9929,11 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
 
         const reason = rejectReason(result, options, profile);
         if (reason) {
-          discarded.push({ ...result, reason });
+          discarded.push(discardWithDiagnostics(result, reason, options, profile));
           continue;
         }
+
+        const admissionDiagnostics = admissionDiagnosticsFor(result, options, profile);
 
         const scoreBreakdown = scoreBreakdownFor(result, options, tasteProfile, profile, scrobbleHistory);
         const candidate = {
@@ -7005,6 +9952,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
           scoreBreakdown,
           tidal: result,
           statusChecks: discoveryStatusFor(result, entry, true, scrobbleHistory),
+          admissionDiagnostics,
           verificationSource: "tidal"
         };
         candidate.feedback = typeof tasteProfile?.getFeedbackFor === "function" ? tasteProfile.getFeedbackFor(candidate) : "";
@@ -7015,9 +9963,14 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
           candidate.minimumScoreLabel = minScoreLabel;
           candidate.reason = `${candidate.reason}; below ${minScoreLabel} floor`;
           candidate.statusChecks = [...candidate.statusChecks, belowMinimumReason];
-          const softRejectReason = belowMinimumSoftRejectReason(candidate, profile);
+          const hardDurationReason = durationConstraintReason(candidate.tidal || candidate, options);
+          if (hardDurationReason) {
+            discarded.push(discardWithDiagnostics(candidate, hardDurationReason, options, profile, "duration-constraints"));
+            continue;
+          }
+          const softRejectReason = belowMinimumSoftRejectReason(candidate, profile, options);
           if (softRejectReason) {
-            discarded.push({ ...candidate, reason: softRejectReason });
+            discarded.push(discardWithDiagnostics(candidate, softRejectReason, options, profile, "score-threshold"));
             continue;
           }
           scoreFiltered.push({
@@ -7026,19 +9979,91 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
           });
         }
         const keys = candidateIdentityKeys(candidate);
-        if (keys.length && !keys.some((key) => selectedKeys.has(key))) {
-          for (const key of keys) selectedKeys.add(key);
-          if (tracks.length < requestedCount) tracks.push(candidate);
-          else fallbackAlternates.push(candidate);
+        if (keys.length && !keys.some((key) => fallbackSeenKeys.has(key))) {
+          for (const key of keys) fallbackSeenKeys.add(key);
+          fallbackCandidates.push(candidate);
         }
       } catch (error) {
         discarded.push({ artist: entry.artist, title: entry.title, reason: error.message });
       }
     }
+
+    const fallbackArtistCounts = new Map();
+    const fallbackAlbumCounts = new Map();
+    const fallbackLabelCounts = new Map();
+    for (const track of tracks) {
+      for (const artistKey of artistKeysForCandidate(track)) {
+        fallbackArtistCounts.set(artistKey, (fallbackArtistCounts.get(artistKey) || 0) + 1);
+      }
+      const albumKey = normalize(track.album);
+      if (albumKey) fallbackAlbumCounts.set(albumKey, (fallbackAlbumCounts.get(albumKey) || 0) + 1);
+      const labelKey = labelDiversityKeyForCandidate(track, profile);
+      if (labelKey) fallbackLabelCounts.set(labelKey, (fallbackLabelCounts.get(labelKey) || 0) + 1);
+    }
+
+    function addPreviousFallback(candidate = {}, caps = {}) {
+      if (tracks.length >= requestedCount) return false;
+      const artistCap = caps.artistCap ?? defaultPerRunArtistCap(options, profile, requestedCount);
+      const albumCap = caps.albumCap ?? 1;
+      const labelCap = caps.labelCap ?? defaultPerRunLabelCap(options, profile, requestedCount);
+      const artistKeys = artistKeysForCandidate(candidate);
+      const albumKey = normalize(candidate.album);
+      const labelKey = labelDiversityKeyForCandidate(candidate, profile);
+      if (artistKeys.some((key) => (fallbackArtistCounts.get(key) || 0) >= artistCap)) return false;
+      if (albumKey && (fallbackAlbumCounts.get(albumKey) || 0) >= albumCap) return false;
+      if (labelKey && Number.isFinite(labelCap) && (fallbackLabelCounts.get(labelKey) || 0) >= labelCap) return false;
+
+      tracks.push({
+        ...candidate,
+        previousFallbackRelaxed: true,
+        reason: `${candidate.reason}; selected after diverse candidates were exhausted`,
+        statusChecks: Array.from(new Set([...(candidate.statusChecks || []), "Previous fallback diversity policy applied"])),
+        why: [...(candidate.why || []), "Backfilled from history after current-catalogue candidates undershot."].slice(0, 8)
+      });
+      previousFallbackKept += 1;
+      recordCandidateAccumulation(candidate, { query: candidate.tidal?.query, lane: candidate.discoveryLane }, candidate.tidal);
+      if (candidate.tidal?.query) recordQueryAccepted(candidate.tidal.query, candidate.discoveryLane || "core");
+      for (const key of artistKeys) fallbackArtistCounts.set(key, (fallbackArtistCounts.get(key) || 0) + 1);
+      if (albumKey) fallbackAlbumCounts.set(albumKey, (fallbackAlbumCounts.get(albumKey) || 0) + 1);
+      if (labelKey) fallbackLabelCounts.set(labelKey, (fallbackLabelCounts.get(labelKey) || 0) + 1);
+      return true;
+    }
+
+    const sortedFallbackCandidates = fallbackCandidates.slice().sort((left, right) => (
+      Number(right.score || 0) - Number(left.score || 0) ||
+      Number(right.durationMs || 0) - Number(left.durationMs || 0)
+    ));
+    const fallbackStages = [
+      {
+        artistCap: defaultPerRunArtistCap(options, profile, requestedCount),
+        albumCap: 1,
+        labelCap: defaultPerRunLabelCap(options, profile, requestedCount)
+      },
+      {
+        artistCap: Math.max(2, Math.min(3, requestedCount)),
+        albumCap: 2,
+        labelCap: Math.max(2, Math.min(requestedCount, defaultPerRunLabelCap(options, profile, requestedCount)))
+      },
+      { artistCap: Number.MAX_SAFE_INTEGER, albumCap: Number.MAX_SAFE_INTEGER, labelCap: Number.MAX_SAFE_INTEGER }
+    ];
+    for (const stage of fallbackStages) {
+      for (const candidate of sortedFallbackCandidates) {
+        if (tracks.length >= requestedCount) break;
+        addPreviousFallback(candidate, stage);
+      }
+      if (tracks.length >= requestedCount) break;
+    }
+    for (const candidate of sortedFallbackCandidates) {
+      if (fallbackAlternates.length >= fallbackAlternateTarget) break;
+      if (!candidateIdentityKeys(candidate).some((key) => tracks.flatMap(candidateIdentityKeys).includes(key))) {
+        fallbackAlternates.push(candidate);
+      }
+    }
   }
 
   let belowMinimumCountFillKept = 0;
-  const allowCountFillFallback = requestedCount >= 8 && profile.scoringMode !== "pure";
+  const allowCountFillFallback = requestedCount >= 8 && profile.scoringMode !== "pure" &&
+    !/^(1|true|yes)$/i.test(String(options.standbyPool || ""));
   if (allowCountFillFallback && tracks.length < requestedCount && (scoreFiltered.length || countFillCandidates.length)) {
     const selectedKeysForCountFill = new Set(tracks.flatMap(candidateIdentityKeys));
     const selectedArtistCounts = new Map();
@@ -7221,6 +10246,36 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
   const remainingArtistNoveltyCandidates = artistNoveltyCandidates
     .filter((candidate) => !candidateIdentityKeys(candidate).some((key) => selectedKeys.has(key)));
   const finalDiscarded = discarded.filter((candidate) => !candidateIdentityKeys(candidate).some((key) => selectedKeys.has(key)));
+  const alternateKeys = new Set(alternates.flatMap(candidateIdentityKeys));
+  for (const diagnostic of candidateCollectionDiagnostics.durationCandidates) {
+    if (selectedKeys.has(diagnostic.key)) {
+      diagnostic.candidateAccumulation = {
+        status: "selected",
+        stage: diagnostic.candidateAccumulation?.stage === "novelty-fallback"
+          ? "novelty-fallback"
+          : "final-selection",
+        reason: diagnostic.candidateAccumulation?.reason || "Selected for the requested result pool."
+      };
+      diagnostic.droppedStage = "";
+      diagnostic.droppedReason = "";
+    } else if (alternateKeys.has(diagnostic.key)) {
+      diagnostic.candidateAccumulation = {
+        status: "alternate",
+        stage: "final-selection",
+        reason: "Retained as an alternate after final selection."
+      };
+      diagnostic.droppedStage = "";
+      diagnostic.droppedReason = "";
+    } else if (["pending", "held-for-score-fill", "accepted"].includes(diagnostic.candidateAccumulation?.status)) {
+      diagnostic.candidateAccumulation = {
+        status: "dropped",
+        stage: "final-selection",
+        reason: "Valid candidate was not selected after lane, score, and diversity selection."
+      };
+      diagnostic.droppedStage = "final-selection";
+      diagnostic.droppedReason = "Valid candidate was not selected after lane, score, and diversity selection.";
+    }
+  }
   const tracksWithEvidence = tracks.map((candidate) => withDiscoveryEvidenceLedger(candidate, {
     options,
     profile,
@@ -7251,6 +10306,7 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     countFillCandidates,
     belowMinimumCountFillKept,
     previousCandidates,
+    previousFallbackKept,
     artistNoveltyCandidates: remainingArtistNoveltyCandidates,
     artistNoveltyFallbackKept,
     requestedCount,
@@ -7260,7 +10316,13 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
     budgetExhausted,
     laneSelection,
     queryYield,
-    queryRecovery: adaptiveRecovery
+    queryRecovery: adaptiveRecovery,
+    querySelectionDiagnostics,
+    catalogPaginationDiagnostics,
+    candidateCollectionDiagnostics,
+    searchStopDiagnostics,
+    queryExecutionDiagnostics,
+    deepCatalog
   });
 
   return {
@@ -7291,10 +10353,21 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       belowMinimumCountFillAvailable: countFillCandidates.length,
       belowMinimumCountFillKept,
       strategy: "tidal-catalog-first",
+      plannerRoute: profile.isProgressiveTranceTarget
+        ? "specialized-progressive-trance"
+        : (profile.isProgressiveTarget ? "specialized-progressive" : "generic-genre"),
+      admissionGates: {
+        catalogueQuality: "hard",
+        identityCorrectness: "hard",
+        genreLaneCompatibility: "hard",
+        vibeMoodCompatibility: "soft-ranking-only",
+        durationConstraints: hardDurationConstraintFor(options) ? "hard-explicit-minimum" : "hard-when-explicit"
+      },
       novelty: !allowPreviousSuggestions,
       previouslySuggestedAllowed: allowPreviousSuggestions,
       previousDiscoveryFallback: allowPreviousFallback,
       previouslySuggestedHeldBack: previousCandidates.length,
+      previousFallbackKept,
       artistNoveltyHeldBack: remainingArtistNoveltyCandidates.length,
       artistNoveltyFallbackKept,
       nearYearFallback: Boolean(relaxedYearOptions),
@@ -7308,6 +10381,10 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       adjacentLaneTerms: adjacentLaneTerms(profile, options).slice(0, 12),
       profile: {
         targetGenres: profile.targetGenres,
+        isProgressiveTranceTarget: Boolean(profile.isProgressiveTranceTarget),
+        isProgressiveTarget: Boolean(profile.isProgressiveTarget),
+        isProgressivePlanningTarget: Boolean(profile.isProgressivePlanningTarget),
+        isGenreDiscoveryTarget: Boolean(profile.isGenreDiscoveryTarget),
         vibeTerms: profile.vibeTerms,
         seedArtists: profile.seedArtists.slice(0, 12),
         requestedArtists: profile.requestedArtists.slice(0, 12),
@@ -7319,6 +10396,14 @@ async function discoverTracks({ tidal, options = {}, history, tasteProfile = nul
       taste: typeof tasteProfile?.summary === "function" ? tasteProfile.summary() : null,
       lastfm: scrobbleVerificationSummary(scrobbleHistory),
       queryYield,
+      querySelectionDiagnostics: querySelectionDiagnostics.slice(0, 160),
+      catalogPagination: catalogPaginationDiagnostics.slice(0, 160),
+      searchStops: searchStopDiagnostics.slice(0, 240),
+      queryExecution: queryExecutionDiagnostics.slice(0, 160),
+      first10ExecutedQueries: queryExecutionDiagnostics.slice(0, 10),
+      deepCatalog,
+      tidalErrors: tidalErrors.slice(0, 24),
+      artistExpansionArtists: uniqueValues(artistExpansionArtists).slice(0, 48),
       queryRecovery: adaptiveRecovery,
       poolDiagnostics
     }
@@ -7332,17 +10417,27 @@ module.exports = {
   scrobbleStatusFor,
   minimumScoreFor,
   minimumScoreLabel,
+  hardDurationConstraintFor,
+  durationConstraintReason,
   effectiveDiscoveryCount,
   nearYearFallbackOptions,
   parseRequestedCount,
   parseYearRange,
   reasonFor,
   rejectReason,
+  admissionDiagnosticsFor,
+  genreValuesMatchTarget,
+  requestedLabelMatch,
   scoreBreakdownFor,
   whyBulletsFor,
   buildDiscoveryEvidenceLedger,
   buildDiscoveryProfile,
+  buildSearchQueries,
   buildOmnivoreDiscoveryQueries,
+  isBroadElectronicDiscovery,
+  semanticOnlyQueryFor,
+  queryGenerationInfo,
+  electronicDomainDriftReason,
   belowMinimumSoftRejectReason,
   releaseFilterRequiresVerification,
   autoBroadenSearchPasses,

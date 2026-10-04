@@ -143,12 +143,29 @@ function standbyFreshSourcePasses(baseOptions = {}, state = {}) {
   const baseMood = cleanText(baseOptions.mood);
   const yearlessBaseMood = withoutExplicitYearTerms(baseMood);
   const baseGenres = cleanText(baseOptions.genres);
-  const stockInstruction = "Avoid exact track repeats and obvious artist floods. Prefer a short clean pool over padding with weak catalogue, wellness, library, audiobook, or SEO matches.";
+  const tasteArtists = Array.isArray(baseOptions.learnedTasteArtists)
+    ? baseOptions.learnedTasteArtists.map(cleanText).filter(Boolean).slice(0, 18)
+    : [];
+  const tasteLabels = Array.isArray(baseOptions.learnedTasteLabels)
+    ? baseOptions.learnedTasteLabels.map(cleanText).filter(Boolean).slice(0, 18)
+    : [];
+  const tasteReservoir = !baseGenres && Boolean(tasteArtists.length || tasteLabels.length);
+  const tasteAnchorQueries = [...tasteArtists, ...tasteLabels].filter(Boolean);
+  const refillGenres = tasteReservoir
+    ? ""
+    : "progressive house, melodic house, organic house, melodic techno, progressive breaks, breakbeat, progressive trance, downtempo, leftfield electronic, indie dance, nu disco";
+  const stockInstruction = "Avoid exact track repeats and obvious artist floods. Prefer a short clean pool over padding with weak catalogue matches.";
+  // A taste-profile refresh is intentionally genre/mood-neutral. Keep these
+  // words out of the parsed request so they cannot become hidden positive
+  // query terms; explicit user genres and moods still flow through normally.
+  const discoveryMood = (value) => tasteReservoir ? undefined : value;
   const common = {
     count,
     effectiveCount: Number(count),
-    scoringMode: "explore",
-    minScore: "",
+    scoringMode: cleanText(baseOptions.scoringMode) || "explore",
+    // Standby should return a smaller pool rather than padding with weak
+    // catalog matches when the current taste reservoir is sparse.
+    minScore: cleanText(baseOptions.minScore) || "50",
     standbyPool: "true",
     requireRoonQueueable: "",
     allowPreviousSuggestions: "",
@@ -167,8 +184,8 @@ function standbyFreshSourcePasses(baseOptions = {}, state = {}) {
       source: "Standby adjacent broadening",
       options: {
         ...common,
-        request: withStandbyInstruction(yearlessBaseRequest, `Standby fresh broadening pass: prioritize adjacent artists, remixers, Last.fm-similar style branches, and radio-like sources. Exclude previously suggested tracks and avoid top-artist repeats. ${stockInstruction}`),
-        mood: withStandbyInstruction(yearlessBaseMood, "fresh adjacent, underground, non-obvious, low-exposure")
+        request: tasteReservoir ? "" : withStandbyInstruction(yearlessBaseRequest, `Standby fresh broadening pass: prioritize adjacent artists, remixers, and external relationship branches. Exclude previously suggested tracks and avoid top-artist repeats. ${stockInstruction}`),
+        mood: discoveryMood(withStandbyInstruction(yearlessBaseMood, "fresh adjacent, low-exposure"))
       }
     },
     {
@@ -178,8 +195,8 @@ function standbyFreshSourcePasses(baseOptions = {}, state = {}) {
       source: "Standby label broadening",
       options: {
         ...common,
-        request: withStandbyInstruction(yearlessBaseRequest, `Standby fresh broadening pass: search trusted and low-exposure label branches rather than familiar artists. Exclude previously suggested tracks. ${stockInstruction}`),
-        mood: withStandbyInstruction(yearlessBaseMood, "label discovery, deep cuts, catalogue-adjacent"),
+        request: tasteReservoir ? "" : withStandbyInstruction(yearlessBaseRequest, `Standby fresh broadening pass: search trusted and low-exposure label branches rather than familiar artists. Exclude previously suggested tracks. ${stockInstruction}`),
+        mood: discoveryMood(withStandbyInstruction(yearlessBaseMood, "label discovery, deep cuts, catalogue-adjacent")),
         genres: baseGenres
       }
     },
@@ -190,8 +207,8 @@ function standbyFreshSourcePasses(baseOptions = {}, state = {}) {
       source: "Standby radio broadening",
       options: {
         ...common,
-        request: withStandbyInstruction(yearlessBaseRequest, `Standby fresh broadening pass: use TIDAL artist-radio style discovery, related-artist chains, and playlist-context branches. Exclude previously suggested tracks. ${stockInstruction}`),
-        mood: withStandbyInstruction(yearlessBaseMood, "radio discovery, adjacent, surprising, playable")
+        request: tasteReservoir ? "" : withStandbyInstruction(yearlessBaseRequest, `Standby fresh broadening pass: use catalog artist relationships and playlist-context branches. Exclude previously suggested tracks. ${stockInstruction}`),
+        mood: discoveryMood(withStandbyInstruction(yearlessBaseMood, "adjacent, surprising, playable"))
       }
     },
     {
@@ -204,8 +221,14 @@ function standbyFreshSourcePasses(baseOptions = {}, state = {}) {
         ...common,
         count: refillCount,
         effectiveCount: Number(refillCount),
-        request: `Clean standby refill pass: widen beyond the current recent-year lane into durable label, artist-radio, and deep-cut sources. Prefer real artist-title releases with normal titles and real release metadata. Reject SEO playlist, catalogue, background, study, sleep, yoga, wellness, meditation, hypnosis, sound-library, audiobook/chapter, karaoke, and genre-keyword filler. Exclude previously suggested tracks. ${stockInstruction}`,
-        genres: "progressive house, melodic house, organic house, melodic techno, progressive breaks, breakbeat, progressive trance, downtempo, leftfield electronic, indie dance, nu disco",
+        // The plan-only taste refill already carries its anchors in the
+        // structured llmSearchPlan below. Keep prose out of the request so a
+        // parser cannot turn words like "adjacent" or "deep" into catalog
+        // queries if a plan is unavailable or partially malformed.
+        request: tasteReservoir
+          ? ""
+          : `Clean standby refill pass: widen beyond the current recent-year lane into durable label, artist-radio, and deep-cut sources. Prefer real artist-title releases with normal titles and real release metadata. Apply the standard catalogue-quality policy and exclude previously suggested tracks. ${stockInstruction}`,
+        genres: refillGenres,
         years: "",
         releasePreset: "",
         releaseExactDate: "",
@@ -213,9 +236,9 @@ function standbyFreshSourcePasses(baseOptions = {}, state = {}) {
         releaseEndDate: "",
         skipSimilarArtistExpansion: "true",
         planOnlySearch: "true",
-        planQueryLimit: "18",
+        planQueryLimit: tasteReservoir ? String(Math.min(24, Math.max(18, tasteAnchorQueries.length))) : "18",
         requirePlanQueryAnchor: "true",
-        mood: withStandbyInstruction(yearlessBaseMood, "durable, deep, hypnotic, melodic, atmospheric, groove-led, non-obvious"),
+        mood: discoveryMood(withStandbyInstruction(yearlessBaseMood, "durable, deep, hypnotic, melodic, atmospheric, groove-led, non-obvious")),
         llmSearchPlan: {
           searchQueries: [
             "Bedrock Records progressive house",
@@ -272,6 +295,18 @@ function standbyFreshSourcePasses(baseOptions = {}, state = {}) {
       }
     }
   ];
+  if (tasteReservoir) {
+    const refill = passes.find((pass) => pass.id === "clean-refill-wide-sources");
+    if (refill) {
+      refill.options.llmSearchPlan = {
+        searchQueries: tasteAnchorQueries,
+        candidateArtists: tasteArtists,
+        candidateLabels: tasteLabels,
+        targetGenres: [],
+        vibeTerms: []
+      };
+    }
+  }
   return [
     ...passes.filter((pass) => pass.id === "clean-refill-wide-sources"),
     ...passes.filter((pass) => pass.id !== "clean-refill-wide-sources")

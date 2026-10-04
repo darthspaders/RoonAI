@@ -49,6 +49,14 @@ test("local MusicBrainz index imports release tracks and searches by artist/titl
   assert.equal(rows[0].id, "recording-1");
   assert.equal(rows[0].releases[0].title, "Night Versions");
   assert.equal(rows[0].releases[0].genres[0].name, "progressive house");
+  assert.deepEqual(await index.searchRecordingsAsync({ artist: "Avoure", title: "U" }), rows);
+  const batch = index.searchRecordingsBatch([
+    { artist: "Avoure", title: "U" },
+    { artist: "Unknown", title: "U" }
+  ]);
+  assert.equal(batch.length, 2);
+  assert.equal(batch[0][0].id, "recording-1");
+  assert.equal(batch[1][0].id, "recording-1");
 });
 
 test("local MusicBrainz index can search by ISRC outside title bucket", async (t) => {
@@ -68,6 +76,35 @@ test("local MusicBrainz index can search by ISRC outside title bucket", async (t
   const rows = index.searchRecordings({ artist: "Nopi", title: "Different Title", isrc: "NL-XYZ-26-00007" });
   assert.equal(rows.length, 1);
   assert.equal(rows[0].title, "Tree");
+  assert.deepEqual(await index.searchRecordingsAsync({ artist: "Nopi", title: "Different Title", isrc: "NL-XYZ-26-00007" }), rows);
+});
+
+test("live MusicBrainz scans yield within a large bucket and keep malformed/Unicode/final-row handling", async (t) => {
+  const indexDir = tempDir(t);
+  fs.mkdirSync(path.join(indexDir, "buckets"));
+  fs.writeFileSync(path.join(indexDir, "manifest.json"), JSON.stringify({ version: 1, entryCount: 1501 }));
+  const records = Array.from({ length: 1500 }, (_, i) => ({
+    id: `recording-${i}`, title: `Star ${i}`, "artist-credit": [{ artist: { name: "Björk" } }], note: "é".repeat(800)
+  }));
+  const last = { id: "last", title: "Strobe", "artist-credit": [{ artist: { name: "deadmau5" } }] };
+  fs.writeFileSync(path.join(indexDir, "buckets", "st.jsonl"), [...records.map(row => JSON.stringify(row)), "{malformed", JSON.stringify(last)].join("\r\n"));
+  const index = new MusicBrainzLocalIndex({ enabled: true, indexDir, logger: null });
+  const track = { artist: "deadmau5", title: "Strobe" };
+  const expected = index.searchRecordings(track);
+  let scanned = 0, scannedWhenIoRan = null;
+  const original = index.bucketRecordSteps;
+  index.bucketRecordSteps = function* (bucket, visitor) {
+    return yield* original.call(this, bucket, row => {
+      scanned++;
+      if (scanned === 1) setImmediate(() => { scannedWhenIoRan = scanned; });
+      return visitor(row);
+    });
+  };
+  assert.deepEqual(await index.searchRecordingsAsync(track), expected);
+  assert.equal(expected[0].id, "last");
+  assert.equal(scanned, 1501);
+  assert.ok(scannedWhenIoRan > 0 && scannedWhenIoRan < 1501, `I/O only ran after ${scannedWhenIoRan} records`);
+  assert.deepEqual(await index.searchRecordingsAsync({ title: "Missing bucket" }), []);
 });
 
 test("local MusicBrainz importer skips malformed dump rows", async (t) => {

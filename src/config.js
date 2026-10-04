@@ -129,7 +129,15 @@ module.exports = {
     accessToken: process.env.TIDAL_ACCESS_TOKEN || "",
     timeoutMs: Number(process.env.TIDAL_FETCH_TIMEOUT_MS || 12000),
     failureThreshold: Number(process.env.TIDAL_CIRCUIT_FAILURES || 3),
-    circuitCooldownMs: Number(process.env.TIDAL_CIRCUIT_COOLDOWN_MS || 45000)
+    circuitCooldownMs: Number(process.env.TIDAL_CIRCUIT_COOLDOWN_MS || 45000),
+    catalogPaginationFile: process.env.TIDAL_CATALOG_PAGINATION_FILE || path.join(__dirname, "..", "data", "tidal-catalog-pagination.json"),
+    artistAliasFile: process.env.TIDAL_ARTIST_ALIAS_FILE || path.join(__dirname, "..", "data", "tidal-artist-aliases.json"),
+    identityHighConfidenceThreshold: Number(process.env.TIDAL_IDENTITY_HIGH_CONFIDENCE || 0.84),
+    identityConfidenceMargin: Number(process.env.TIDAL_IDENTITY_CONFIDENCE_MARGIN || 0.08),
+    identityAlternateVersionThreshold: Number(process.env.TIDAL_IDENTITY_ALTERNATE_VERSION_THRESHOLD || 0.84),
+    identityLegacyEraGapYears: Number(process.env.TIDAL_IDENTITY_LEGACY_ERA_GAP_YEARS || 8),
+    identityLegacyOriginalYearCutoff: Number(process.env.TIDAL_IDENTITY_LEGACY_ORIGINAL_YEAR_CUTOFF || 2012),
+    identityLegacyPreferenceMargin: Number(process.env.TIDAL_IDENTITY_LEGACY_PREFERENCE_MARGIN || 0.05)
   },
   tidalProfileMixes: {
     enabled: !/^(0|false|no)$/i.test(process.env.TIDAL_PROFILE_MIXES || "true"),
@@ -161,6 +169,12 @@ module.exports = {
   exactRoonBridge: {
     syncDelaysMs: envNumberList("EXACT_ROON_BRIDGE_SYNC_DELAYS_MS", [0, 3000, 7000]),
     playlistLookupTimeoutMs: envNumber("EXACT_ROON_BRIDGE_LOOKUP_TIMEOUT_MS", 15000)
+  },
+  roon: {
+    connectionDiagnosticsEnabled: envFlag("ROON_CONNECTION_DIAGNOSTICS", true),
+    queueSubscriptionsEnabled: envFlag("ROON_QUEUE_SUBSCRIPTIONS_ENABLED", true),
+    apiLogLevel: process.env.ROON_API_LOG_LEVEL || "none",
+    backgroundWorkGraceMs: Math.max(60_000, envNumber("ROON_BACKGROUND_WORK_GRACE_MS", 120_000))
   },
   roonInternal: {
     enabled: envFlag("ROON_INTERNAL_API_ENABLED", false),
@@ -208,6 +222,105 @@ module.exports = {
     enabled: envFlag("RABBIT_HOLE_MUSIC_MEMORY", true),
     dbFile: process.env.RABBIT_HOLE_MUSIC_MEMORY_DB || path.join(__dirname, "..", "data", "rabbit-hole-memory.sqlite")
   },
+  localLibrary: {
+    root: process.env.LOCAL_LIBRARY_ROOT || "",
+    ffprobePath: process.env.LOCAL_LIBRARY_FFPROBE_PATH || "ffprobe",
+    reportFile: process.env.LOCAL_LIBRARY_REPORT_FILE || path.join(__dirname, "..", "data", "local-library-metadata-report.json"),
+    minConfidence: Number(process.env.LOCAL_LIBRARY_MIN_CONFIDENCE || 85),
+    writeback: envFlag("LOCAL_METADATA_WRITEBACK", false)
+  },
+  discogs: {
+    enabled: envFlag("DISCOGS_LOOKUP", true),
+    token: process.env.DISCOGS_TOKEN || "",
+    consumerKey: process.env.DISCOGS_CONSUMER_KEY || "",
+    consumerSecret: process.env.DISCOGS_CONSUMER_SECRET || "",
+    redirectUri: process.env.DISCOGS_REDIRECT_URI || `http://127.0.0.1:${Number(process.env.PORT || 3777)}/api/discogs/oauth/callback`,
+    authorizeUrl: process.env.DISCOGS_OAUTH_AUTHORIZE_URL || "https://www.discogs.com/oauth/authorize",
+    requestTokenUrl: process.env.DISCOGS_OAUTH_REQUEST_TOKEN_URL || "https://api.discogs.com/oauth/request_token",
+    accessTokenUrl: process.env.DISCOGS_OAUTH_ACCESS_TOKEN_URL || "https://api.discogs.com/oauth/access_token",
+    oauthTokenFile: process.env.DISCOGS_OAUTH_TOKEN_FILE || path.join(__dirname, "..", "data", "discogs-oauth-token.json"),
+    baseUrl: process.env.DISCOGS_BASE_URL || "https://api.discogs.com",
+    timeoutMs: envNumber("DISCOGS_TIMEOUT_MS", 8000),
+    maxResults: envNumber("DISCOGS_MAX_RESULTS", 5),
+    maxReleaseLookups: envNumber("DISCOGS_MAX_RELEASE_LOOKUPS", 5),
+    minIntervalMs: envNumber("DISCOGS_MIN_INTERVAL_MS", 1000),
+    cacheTtlMs: envNumber("DISCOGS_CACHE_TTL_MS", 30 * 24 * 60 * 60 * 1000),
+    cacheFile: process.env.DISCOGS_CACHE_FILE || path.join(__dirname, "..", "data", "discogs-metadata-cache.json"),
+    userAgent: process.env.DISCOGS_USER_AGENT || "RabbitHole/0.1.0 (local metadata enrichment)"
+  },
+  recommendationV2: {
+    // v2 is opt-in. The live server keeps Sonic production influence in its
+    // separate, runtime-switchable lane below; this mode remains for isolated
+    // v2 callers and compatibility tests.
+    enabled: envFlag("RABBIT_HOLE_RECOMMENDATION_V2_ENABLED", false),
+    discoveryMode: (process.env.RABBIT_HOLE_RECOMMENDATION_V2_DISCOVERY_MODE || "shadow").toLowerCase(),
+    discoveryModel: process.env.RABBIT_HOLE_RECOMMENDATION_V2_DISCOVERY_MODEL || "discogs-effnet",
+    discoveryModelVersion: process.env.RABBIT_HOLE_RECOMMENDATION_V2_DISCOVERY_MODEL_VERSION || "1",
+    discoveryRerankWeight: envNumber("RABBIT_HOLE_RECOMMENDATION_V2_DISCOVERY_RERANK_WEIGHT", 0.18),
+    discoveryMinCoverage: envNumber("RABBIT_HOLE_RECOMMENDATION_V2_DISCOVERY_MIN_COVERAGE", 0.1),
+    discoveryMinScored: envNumber("RABBIT_HOLE_RECOMMENDATION_V2_DISCOVERY_MIN_SCORED", 5),
+    // Sonic Review production influence is a separate, runtime-switchable
+    // lane. The safe default computes nothing that can affect ordering.
+    sonicProductionMode: (process.env.SONIC_PRODUCTION_MODE || "off").toLowerCase(),
+    sonicMaxAdjustment: envNumber("SONIC_MAX_ADJUSTMENT", 0.08),
+    coverage: {
+      lazyEnabled: envFlag("RABBIT_HOLE_SONIC_LAZY_FILL_ENABLED", true),
+      concurrency: envNumber("RABBIT_HOLE_SONIC_COVERAGE_CONCURRENCY", 1),
+      batchSize: envNumber("RABBIT_HOLE_SONIC_COVERAGE_BATCH_SIZE", 5),
+      minIntervalMs: envNumber("RABBIT_HOLE_SONIC_COVERAGE_INTERVAL_MS", 2000),
+      batchPauseMs: envNumber("RABBIT_HOLE_SONIC_COVERAGE_BATCH_PAUSE_MS", 5000)
+    },
+    sonicNeighborSecondStageConfig: {
+      genreAdjustments: {
+        exact: envNumber("RABBIT_HOLE_SONIC_GENRE_ADJUSTMENT_EXACT", 0.05),
+        compatible: envNumber("RABBIT_HOLE_SONIC_GENRE_ADJUSTMENT_COMPATIBLE", 0.06),
+        adjacent: envNumber("RABBIT_HOLE_SONIC_GENRE_ADJUSTMENT_ADJACENT", 0.01),
+        uncertain: envNumber("RABBIT_HOLE_SONIC_GENRE_ADJUSTMENT_UNCERTAIN", -0.08),
+        "weak-conflict": envNumber("RABBIT_HOLE_SONIC_GENRE_ADJUSTMENT_WEAK_CONFLICT", -0.10),
+        conflicting: envNumber("RABBIT_HOLE_SONIC_GENRE_ADJUSTMENT_CONFLICTING", -0.18),
+        incompatible: envNumber("RABBIT_HOLE_SONIC_GENRE_ADJUSTMENT_INCOMPATIBLE", -0.24)
+      },
+      genreEvidenceBonusScale: {
+        strong: envNumber("RABBIT_HOLE_SONIC_GENRE_BONUS_SCALE_STRONG", 1),
+        medium: envNumber("RABBIT_HOLE_SONIC_GENRE_BONUS_SCALE_MEDIUM", 0.6),
+        weak: envNumber("RABBIT_HOLE_SONIC_GENRE_BONUS_SCALE_WEAK", 0.25),
+        scene: envNumber("RABBIT_HOLE_SONIC_GENRE_BONUS_SCENE_WEIGHT", 0.15)
+      },
+      maxArrangementBonusWhenGenreRisk: envNumber("RABBIT_HOLE_SONIC_MAX_ARRANGEMENT_BONUS_GENRE_RISK", 0)
+    },
+    dbFile: process.env.RABBIT_HOLE_RECOMMENDATION_V2_DB || process.env.RABBIT_HOLE_MUSIC_MEMORY_DB || path.join(__dirname, "..", "data", "rabbit-hole-memory.sqlite"),
+    embeddingProvider: (process.env.RABBIT_HOLE_SONIC_EMBEDDING_PROVIDER || "spectral-baseline").toLowerCase(),
+    ffmpegPath: process.env.FFMPEG_PATH || "",
+    embeddingCommand: process.env.RABBIT_HOLE_SONIC_EMBEDDING_COMMAND || "",
+    embeddingArgs: process.env.RABBIT_HOLE_SONIC_EMBEDDING_ARGS
+      ? process.env.RABBIT_HOLE_SONIC_EMBEDDING_ARGS.split("||").filter(Boolean)
+      : [],
+    embeddingModel: process.env.RABBIT_HOLE_SONIC_EMBEDDING_MODEL || "",
+    embeddingModelVersion: process.env.RABBIT_HOLE_SONIC_EMBEDDING_MODEL_VERSION || "1",
+    embeddingTimeoutMs: envNumber("RABBIT_HOLE_SONIC_EMBEDDING_TIMEOUT_MS", 900000),
+    liveSonicAnalysisEnabled: envFlag("RABBIT_HOLE_LIVE_SONIC_ANALYSIS_ENABLED", false),
+    liveSonicAnalysisAutoAnalyze: envFlag("RABBIT_HOLE_LIVE_SONIC_ANALYSIS_AUTO_ANALYZE", false),
+    liveSonicAnalysisMaxConcurrent: envNumber("RABBIT_HOLE_LIVE_SONIC_ANALYSIS_MAX_CONCURRENT", 1),
+    liveSonicAnalysisFailureRetryMs: envNumber("RABBIT_HOLE_LIVE_SONIC_ANALYSIS_FAILURE_RETRY_MS", 15 * 60 * 1000),
+    essentia: {
+      command: process.env.RABBIT_HOLE_SONIC_ESSENTIA_COMMAND || "wsl.exe",
+      args: process.env.RABBIT_HOLE_SONIC_ESSENTIA_ARGS
+        ? process.env.RABBIT_HOLE_SONIC_ESSENTIA_ARGS.split("||").filter(Boolean)
+        : [],
+      workerPath: process.env.RABBIT_HOLE_SONIC_ESSENTIA_WORKER || path.join(__dirname, "..", "scripts", "sonic-essentia-embed.py"),
+      wslWrapperPath: process.env.RABBIT_HOLE_SONIC_ESSENTIA_WSL_WRAPPER || path.join(__dirname, "..", "scripts", "sonic-essentia-wsl.sh"),
+      batchWrapperPath: process.env.RABBIT_HOLE_SONIC_ESSENTIA_BATCH_WSL_WRAPPER || path.join(__dirname, "..", "scripts", "sonic-essentia-batch-wsl.sh"),
+      modelPath: process.env.RABBIT_HOLE_SONIC_ESSENTIA_MODEL_PATH || "",
+      modelName: process.env.RABBIT_HOLE_SONIC_ESSENTIA_MODEL_NAME || "discogs_track_embeddings-effnet-bs64-1",
+      modelVersion: process.env.RABBIT_HOLE_SONIC_ESSENTIA_MODEL_VERSION || "1",
+      output: process.env.RABBIT_HOLE_SONIC_ESSENTIA_OUTPUT || "PartitionedCall:1",
+      expectedDimensions: envNumber("RABBIT_HOLE_SONIC_ESSENTIA_DIMENSIONS", 1280),
+      sampleRate: envNumber("RABBIT_HOLE_SONIC_ESSENTIA_SAMPLE_RATE", 16000),
+      device: process.env.RABBIT_HOLE_SONIC_ESSENTIA_DEVICE || "cpu",
+      venv: process.env.RABBIT_HOLE_SONIC_ESSENTIA_VENV || "",
+      timeoutMs: envNumber("RABBIT_HOLE_SONIC_ESSENTIA_TIMEOUT_MS", 900000)
+    }
+  },
   musicBrainzLocal: {
     enabled: envFlag("MUSICBRAINZ_LOCAL_INDEX", false),
     indexDir: process.env.MUSICBRAINZ_INDEX_DIR || path.join(__dirname, "..", "data", "musicbrainz-index"),
@@ -224,6 +337,7 @@ module.exports = {
     baseUrl: process.env.BEATPORT_BASE_URL || "https://api.beatport.com/v4",
     timeoutMs: envNumber("BEATPORT_TIMEOUT_MS", 8000),
     maxResults: envNumber("BEATPORT_MAX_RESULTS", 8),
+    maxPreviewBytes: envNumber("BEATPORT_MAX_PREVIEW_BYTES", 33554432),
     requestsPerSecond: envNumber("BEATPORT_REQUESTS_PER_SECOND", 2),
     cacheTtlMs: envNumber("BEATPORT_CACHE_TTL_MS", 43200000),
     maxCacheEntries: envNumber("BEATPORT_MAX_CACHE_ENTRIES", 2000),
@@ -233,10 +347,13 @@ module.exports = {
     chartRefreshStartDelayMs: envNumber("BEATPORT_CHART_REFRESH_START_DELAY_MS", 60000)
   },
   beatportMemoryBackfill: {
-    enabled: envFlag("BEATPORT_MEMORY_BACKFILL", true),
-    batchSize: envNumber("BEATPORT_MEMORY_BACKFILL_BATCH_SIZE", 25),
-    intervalMs: envNumber("BEATPORT_MEMORY_BACKFILL_INTERVAL_MS", 300000),
-    delayMs: envNumber("BEATPORT_MEMORY_BACKFILL_DELAY_MS", 2000),
+    // Keep the long-running enrichment worker opt-in. It shares the Node
+    // process with the Roon websocket, so a bulk pass can starve the API
+    // connection even though each network request is asynchronous.
+    enabled: envFlag("BEATPORT_MEMORY_BACKFILL", false),
+    batchSize: envNumber("BEATPORT_MEMORY_BACKFILL_BATCH_SIZE", 1),
+    intervalMs: envNumber("BEATPORT_MEMORY_BACKFILL_INTERVAL_MS", 900000),
+    delayMs: envNumber("BEATPORT_MEMORY_BACKFILL_DELAY_MS", 5000),
     jitter: envNumber("BEATPORT_MEMORY_BACKFILL_JITTER", 0.2),
     startDelayMs: envNumber("BEATPORT_MEMORY_BACKFILL_START_DELAY_MS", 30000)
   },

@@ -1,0 +1,188 @@
+/* Database-only rules: keep all player and navigation geometry untouched. */
+.databaseView, .databaseDialog {
+  --db-space-1: 4px;
+  --db-space-2: 8px;
+  --db-space-3: 12px;
+  --db-space-4: 16px;
+  --db-space-6: 24px;
+  --db-space-8: 32px;
+  --db-control: 44px;
+  --db-thumbnail: 48px;
+  --db-filter-width: 224px;
+  --db-cover-min: 144px;
+  --db-surface: var(--theater-panel-strong, var(--panel-3));
+  --db-border: var(--line);
+  color: var(--text);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+.databaseView *, .databaseDialog * { box-sizing: border-box; }
+.databaseView .dbVisuallyHidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.databaseView [hidden], .databaseDialog [hidden] { display: none !important; }
+.databaseView button, .databaseView input, .databaseView select,
+.databaseDialog button, .databaseDialog input {
+  min-height: var(--db-control);
+  max-width: 100%;
+  font: inherit;
+}
+.databaseView button, .databaseDialog button { cursor: pointer; }
+.databaseView input, .databaseView select, .databaseDialog input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--db-border);
+  border-radius: 8px;
+  background: var(--db-surface);
+  color: var(--text);
+  padding: var(--db-space-2) var(--db-space-3);
+}
+.databaseView :is(button, input, select, summary, a, .dbTableRegion):focus-visible,
+.databaseDialog :is(button, input, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.databaseView button:disabled { opacity: .4; cursor: default; }
+.databaseDialog summary { min-height: var(--db-control); padding-block: var(--db-space-3); cursor: pointer; overflow-wrap: anywhere; }
+.databaseDialog summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.databaseView #dbAlbumSources summary { min-height: var(--db-control); padding-block: var(--db-space-3); cursor: pointer; }
+.databaseView #dbAlbumSources button { width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; padding: var(--db-space-3); color: var(--text); background: var(--db-surface); border: 1px solid var(--db-border); border-radius: 8px; }
+.databaseView h2, .databaseView h3, .databaseDialog h3 { margin: 0; color: var(--text); }
+.databaseView h2 { font-size: 28px; line-height: 1.2; letter-spacing: -.025em; }
+.databaseView h3, .databaseDialog h3 { font-size: 18px; line-height: 1.3; }
+.databaseView p, .databaseDialog p { margin: var(--db-space-2) 0 0; }
+.databaseView .dbMuted, .databaseDialog .dbMuted { color: var(--muted); }
+.dbHeader { display: flex; gap: var(--db-space-6); align-items: center; justify-content: space-between; padding: var(--db-space-4) 0 var(--db-space-6); }
+.dbHeader .eyebrow { margin: 0 0 var(--db-space-2); color: var(--accent); }
+.dbHeader > button { flex: 0 0 auto; }
+.dbToolbar { display: flex; align-items: flex-end; flex-wrap: wrap; gap: var(--db-space-4); padding-bottom: var(--db-space-6); border-bottom: 1px solid var(--db-border); }
+.dbViewSwitch { display: flex; flex-wrap: wrap; border: 1px solid var(--db-border); border-radius: 10px; padding: var(--db-space-1); background: var(--db-surface); }
+.dbViewSwitch button { border: 0; background: transparent; box-shadow: none; padding: var(--db-space-2) var(--db-space-4); border-radius: 7px; }
+.dbViewSwitch button[aria-pressed="true"] { color: var(--accent); background: var(--panel-2); box-shadow: var(--inner-light); }
+.dbSearch { flex: 1 1 260px; }
+.dbToolbar label, .dbFilters label, .dbResultControls label, .dbSaveDialog label { display: flex; flex-direction: column; gap: var(--db-space-1); color: var(--muted); font-size: 12px; }
+.dbSaved { flex: 0 1 310px; }
+.dbSaved > div { display: flex; gap: var(--db-space-2); }
+.dbSaved button { flex-shrink: 0; }
+.dbLayout { display: grid; grid-template-columns: var(--db-filter-width) minmax(0, 1fr); gap: var(--db-space-8); padding-top: var(--db-space-6); }
+.dbMain { min-width: 0; }
+.dbFilterPanel { background: var(--db-surface); border: 1px solid var(--db-border); border-radius: 12px; overflow: hidden; }
+.dbFilterPanel > summary { cursor: pointer; padding: var(--db-space-3) var(--db-space-4); min-height: var(--db-control); font-weight: 600; color: var(--accent); }
+.dbFilters { display: flex; flex-direction: column; gap: var(--db-space-4); padding: var(--db-space-2) var(--db-space-4) var(--db-space-4); }
+.dbQuickFilters { display: grid; gap: var(--db-space-2); }
+.dbQuickFilters button { text-align: left; font-size: 13px; font-weight: 400; }
+.dbQuickFilters button[aria-pressed="true"] { border-color: var(--accent); background: var(--panel-2); }
+.dbMoreFilters { border-top: 1px solid var(--db-border); padding-top: var(--db-space-2); }
+.dbMoreFilters summary { min-height: var(--db-control); align-content: center; cursor: pointer; }
+.dbMoreFilters > div { display: flex; flex-direction: column; gap: var(--db-space-4); padding-top: var(--db-space-2); }
+.dbFilters fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.dbFilters legend { padding: 0; font-size: 12px; color: var(--muted); margin-bottom: var(--db-space-1); }
+.dbRange { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: var(--db-space-1); align-items: center; }
+.dbRange input { padding-inline: var(--db-space-2); }
+.dbRange span { font-size: 12px; color: var(--muted); }
+.dbScopeNote { font-size: 12px; padding: var(--db-space-2) var(--db-space-1); color: var(--muted); }
+.dbActiveFilters { display: flex; flex-wrap: wrap; gap: var(--db-space-2); }
+.dbActiveFilters:not(:empty) { margin-bottom: var(--db-space-4); }
+.dbActiveFilters button { display: flex; align-items: center; gap: var(--db-space-2); max-width: 100%; text-align: left; padding: var(--db-space-2) var(--db-space-3); font-size: 12px; background: var(--panel-2); border-color: var(--db-border); border-radius: 8px; }
+.dbActiveFilters button span { overflow-wrap: anywhere; }
+.dbActiveFilters svg { flex: 0 0 12px; }
+.dbResultsToolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--db-space-4); flex-wrap: wrap; }
+.dbResultsToolbar > div:first-child { flex: 1 1 170px; }
+#dbResultStatus { color: var(--muted); font-size: 13px; }
+.dbResultControls { display: flex; align-items: flex-end; gap: var(--db-space-2); flex-wrap: wrap; }
+.dbResultControls select { width: auto; max-width: 168px; font-size: 13px; }
+.dbResultControls button { font-size: 12px; padding-inline: var(--db-space-3); }
+.dbViewNote { font-size: 12px; padding-bottom: var(--db-space-4); }
+.dbResults { min-height: 220px; }
+.dbGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--db-cover-min), 1fr)); gap: var(--db-space-6); list-style: none; margin: 0; padding: 0; }
+.databaseView .dbCollection { display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 6px; background: transparent; box-shadow: none; color: var(--text); text-align: left; font-weight: 400; }
+.dbCollection .dbCollectionName { display: block; margin-top: var(--db-space-3); font-size: 15px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.dbCollection .dbCollectionMeta { display: block; margin-top: var(--db-space-1); color: var(--muted); font-size: 12px; }
+.dbMosaic { display: grid; grid-template-columns: 1fr 1fr; aspect-ratio: 1; gap: 2px; overflow: hidden; border: 1px solid var(--db-border); border-radius: 6px; box-shadow: var(--inner-light); background: var(--panel-3); }
+.dbMosaic.dbAlbumCover { display: block; }
+.dbArtwork { position: relative; display: block; min-width: 0; aspect-ratio: 1; overflow: hidden; background: var(--panel-2); }
+.dbArtwork img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.dbArtwork svg { position: absolute; width: 48%; height: 48%; left: 26%; top: 26%; color: var(--accent); opacity: .28; }
+.dbArtwork .dbMissingArt { position: absolute; bottom: var(--db-space-2); left: var(--db-space-2); right: var(--db-space-2); font-size: 10px; text-align: center; color: var(--muted); }
+.dbMosaic:not(.dbAlbumCover) .dbMissingArt, .dbThumbnail .dbMissingArt { display: none; }
+.dbTableRegion { overflow-x: auto; border: 1px solid var(--db-border); border-radius: 10px; background: var(--db-surface); }
+.dbTable { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+.dbTable th { color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; padding: var(--db-space-2) var(--db-space-3); border-bottom: 1px solid var(--db-border); }
+.dbTable th button { padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; color: inherit; text-align: left; font-size: inherit; font-weight: 600; }
+.dbTable td { padding: var(--db-space-3); vertical-align: middle; border-bottom: 1px solid var(--theater-line, var(--line)); }
+.dbTable tr:last-child td { border-bottom: 0; }
+.dbTable td:first-child { min-width: 230px; }
+.dbTrackCell { display: flex; gap: var(--db-space-3); align-items: center; }
+.dbThumbnail { width: var(--db-thumbnail); flex: 0 0 var(--db-thumbnail); border-radius: 4px; }
+.dbTrackCell > div { min-width: 0; }
+.dbTable .dbTrackTitle { display: block; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; color: var(--text); text-align: left; min-height: 44px; font-weight: 600; line-height: 1.4; }
+.dbTrackArtist, .dbSecondary { display: block; font-size: 12px; color: var(--muted); }
+.dbTable .dbAlbumCell { min-width: 140px; max-width: 220px; }
+.dbTable .dbGenreCell { min-width: 125px; max-width: 190px; }
+.dbTable .dbNumber { white-space: nowrap; }
+.dbBadge { display: inline-block; padding: var(--db-space-1) var(--db-space-2); font-size: 11px; border: 1px solid var(--db-border); border-radius: 5px; color: var(--accent); white-space: nowrap; }
+.dbBadge.dbSubtle { color: var(--muted); border-color: var(--theater-line, var(--line)); }
+.dbPagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--db-space-4); padding-block: var(--db-space-6); }
+.dbPagination span { color: var(--muted); font-size: 13px; }
+.dbEmpty { padding: var(--db-space-8); border: 1px dashed var(--db-border); border-radius: 10px; text-align: center; background: var(--db-surface); }
+.dbEmpty p { max-width: 54ch; margin: var(--db-space-2) auto var(--db-space-6); color: var(--muted); }
+.dbSkeleton { aspect-ratio: 1; background: var(--panel-2); border: 1px solid var(--db-border); border-radius: 6px; }
+.dbLoadingText { color: var(--muted); margin-bottom: var(--db-space-4); }
+.databaseDialog { width: min(680px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: var(--db-space-6); border: 1px solid var(--line); border-radius: 14px; background: var(--bg); box-shadow: var(--shadow); overflow-y: auto; }
+.databaseDialog::backdrop { background: rgba(3, 1, 7, .8); backdrop-filter: blur(6px); }
+.databaseDialog .dbDialogClose { display: block; margin-left: auto; margin-bottom: var(--db-space-4); }
+.databaseDialog summary { min-height: var(--db-control); align-content: center; cursor: pointer; }
+.dbDetailHero { display: flex; align-items: flex-start; gap: var(--db-space-6); padding-bottom: var(--db-space-6); border-bottom: 1px solid var(--line); }
+.dbDetailHero .dbArtwork { flex: 0 0 144px; border-radius: 6px; }
+.dbDetailHero h3 { font-size: 24px; overflow-wrap: anywhere; }
+.dbDetailSection { padding-top: var(--db-space-6); }
+.dbDetailSection h4 { font-size: 14px; margin: 0 0 var(--db-space-3); color: var(--accent); }
+.dbDetailGrid { display: grid; grid-template-columns: 136px minmax(0, 1fr); gap: var(--db-space-2) var(--db-space-4); margin: 0; font-size: 13px; }
+.dbDetailGrid dt { color: var(--muted); }
+.dbDetailGrid dd { margin: 0; overflow-wrap: anywhere; }
+.dbDetailTags { display: flex; flex-wrap: wrap; gap: var(--db-space-2); }
+.dbDetailLinks { display: flex; flex-wrap: wrap; gap: var(--db-space-4); margin-top: var(--db-space-6); }
+.dbDetailLinks a { color: var(--accent); min-height: 44px; display: inline-flex; align-items: center; text-decoration: underline; text-underline-offset: 3px; }
+.dbSaveDialog { max-width: 440px; }
+.dbSaveDialog label { margin-top: var(--db-space-6); }
+.dbDialogActions { display: flex; justify-content: flex-end; gap: var(--db-space-2); margin-top: var(--db-space-6); }
+@media (hover: hover) and (pointer: fine) {
+  .databaseView .dbCollection:hover .dbMosaic { border-color: var(--accent); }
+  .databaseView .dbCollection:hover .dbCollectionName, .dbTable .dbTrackTitle:hover { color: var(--accent); }
+  .dbTable tbody tr:hover { background: var(--panel-2); }
+}
+@media (max-width: 1100px) {
+  .databaseView { --db-filter-width: 200px; --db-cover-min: 140px; }
+  .dbLayout { gap: var(--db-space-6); }
+  .dbSaved { flex: 1 1 260px; }
+  .dbTable .dbAlbumCell, .dbTable .dbGenreCell { display: none; }
+}
+@media (max-width: 720px) {
+  .dbHeader { align-items: flex-start; gap: var(--db-space-3); }
+  .dbHeader > button { font-size: 12px; padding-inline: var(--db-space-3); }
+  .dbToolbar { gap: var(--db-space-3); }
+  .dbViewSwitch { flex: 1 1 100%; }
+  .dbViewSwitch button { flex: 1; }
+  .dbSearch, .dbSaved { flex-basis: 100%; }
+  .dbLayout { display: block; }
+  .dbSidebar { margin-bottom: var(--db-space-6); }
+  .dbFilters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .dbQuickFilters, .dbMoreFilters, #dbClearFilters { grid-column: 1 / -1; }
+  .dbQuickFilters { grid-template-columns: 1fr 1fr; }
+  .dbScopeNote { display: none; }
+  .dbGrid { gap: var(--db-space-4); grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dbResultControls { width: 100%; }
+  .dbResultControls label { flex: 1; min-width: 105px; }
+  .dbResultControls select { width: 100%; max-width: none; }
+  .dbResultControls button { flex: 0 1 auto; }
+  .dbTable .dbBpmCell, .dbTable .dbDurationCell { display: none; }
+  .dbTable th, .dbTable td { padding-inline: var(--db-space-2); }
+  .dbTable td:first-child { min-width: 175px; }
+  .dbTable { font-size: 12px; }
+  .dbTrackCell { gap: var(--db-space-2); }
+  .dbThumbnail { --db-thumbnail: 40px; }
+  .dbDetailHero { gap: var(--db-space-4); }
+  .dbDetailHero .dbArtwork { flex-basis: 96px; }
+  .dbDetailHero h3 { font-size: 20px; }
+  .dbDetailGrid { grid-template-columns: 104px minmax(0, 1fr); }
+  .databaseDialog { padding: var(--db-space-4); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .databaseView *, .databaseDialog * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}

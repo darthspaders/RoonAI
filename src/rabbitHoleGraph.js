@@ -142,8 +142,9 @@ function catalogMatchConfirmsSeed(seed = {}, candidate = {}) {
 function feedbackWeight(feedback, weights = {}) {
   const rating = cleanText(feedback).toLowerCase();
   if (rating === "love") return weights.love || 0;
-  if (rating === "good" || rating === "up") return weights.good || 0;
+  if (rating === "like" || rating === "good" || rating === "up") return weights.like || weights.good || 0;
   if (rating === "ok" || rating === "okay") return weights.ok || 0;
+  if (["dislike", "skip", "down", "never", "never_again"].includes(rating)) return 0;
   return weights.default || 0;
 }
 
@@ -262,8 +263,49 @@ async function lastFmSimilarArtists(artistName, apiKey, limit = 12) {
   url.searchParams.set("limit", String(Math.max(1, Math.min(50, Number(limit || 12)))));
   const json = await fetchJson(url.toString());
   return (json?.similarartists?.artist || [])
-    .map((artist) => entity("artist", artist.name, { source: "Last.fm similar", weight: Math.round(Number(artist.match || 0) * 10) || 4 }))
+    .map((artist) => ({
+      ...entity("artist", artist.name, {
+        source: "Last.fm similar",
+        weight: Math.round(Number(artist.match || 0) * 10) || 4
+      }),
+      // Keep the provider confidence separate from graph weight. The
+      // similar-artist expansion uses this normalized value to reject weak
+      // or ambiguous external branches before they consume catalog budget.
+      matchScore: Number(artist.match || 0)
+    }))
     .filter((item) => item.name);
+}
+
+async function lastFmArtistTags(artistName, apiKey) {
+  if (!apiKey || !artistName) return [];
+  const url = new URL("https://ws.audioscrobbler.com/2.0/");
+  url.searchParams.set("method", "artist.getinfo");
+  url.searchParams.set("artist", artistName);
+  url.searchParams.set("api_key", apiKey);
+  url.searchParams.set("format", "json");
+  const json = await fetchJson(url.toString());
+  return (json?.artist?.tags?.tag || [])
+    .map((tag) => cleanText(tag?.name || tag))
+    .filter(Boolean);
+}
+
+function lastFmContextLooksElectronic(context = "") {
+  return /\b(?:house|techno|trance|dubstep|bass|drum\s+and\s+bass|dnb|breaks?|electronica|electro|edm|dance|future\s+bass|indie\s+dance)\b/i.test(cleanText(context));
+}
+
+function lastFmContextMismatch(tags = [], context = "") {
+  if (!lastFmContextLooksElectronic(context) || !tags.length) return false;
+  const text = normalize(tags.join(" "));
+  const nonElectronicMatches = text.match(/\b(?:classical|baroque|renaissance|medieval|early music|chamber music|opera|orchestral|folk|country|blues|jazz|metal|hip hop|rap|spoken word|audiobook)\b/g) || [];
+  const electronicMatches = text.match(/\b(?:electronic|edm|dance|house|techno|trance|dubstep|bass|drum and bass|dnb|breakbeat|breaks|electronica|electro|future bass|indie dance)\b/g) || [];
+  // Last.fm has ambiguous artist pages (for example, several unrelated
+  // artists can share a common name). A single generic tag such as "trance"
+  // must not override several explicit classical/early-music tags. Reject
+  // those mixed identities before they can seed a catalog branch.
+  return nonElectronicMatches.length > 0 && (
+    electronicMatches.length === 0 ||
+    (nonElectronicMatches.length >= 2 && electronicMatches.length <= 1)
+  );
 }
 
 async function discogsArtistLabels(artistName, token) {
@@ -414,16 +456,45 @@ class RabbitHoleGraph {
     const seedLimit = Math.max(1, Math.min(12, Number(options.seedLimit || 4)));
     const perSeed = Math.max(1, Math.min(20, Number(options.perSeed || 6)));
     const totalLimit = Math.max(1, Math.min(40, Number(options.limit || 12)));
-    const seedArtists = uniqueBy((Array.isArray(artists) ? artists : [])
+    const requestedSeedArtists = uniqueBy((Array.isArray(artists) ? artists : [])
       .map(cleanText)
       .filter((artist) => artist && !isGenericArtistName(artist)), normalize)
       .slice(0, seedLimit);
+    const seedContexts = options.seedContexts && typeof options.seedContexts === "object"
+      ? options.seedContexts
+      : {};
+    const seedValidation = [];
+    const validatedSeeds = await Promise.all(requestedSeedArtists.map(async (artist) => {
+      const context = cleanText(seedContexts[normalize(artist)] || seedContexts[artist]);
+      if (!options.validateSeedContext || !context) return { artist, context, tags: [], accepted: true };
+      let tags = [];
+      try {
+        tags = await lastFmArtistTags(artist, config.rabbitHole?.lastfmApiKey);
+      } catch {
+        tags = [];
+      }
+      const accepted = !lastFmContextMismatch(tags, context);
+      return {
+        artist,
+        context,
+        tags,
+        accepted,
+        ...(accepted ? {} : { reason: "Last.fm artist tags conflict with the learned facet; skipped external branch expansion." })
+      };
+    }));
+    for (const validation of validatedSeeds) {
+      if (options.validateSeedContext && validation.context) seedValidation.push(validation);
+    }
+    const seedArtists = validatedSeeds.filter((item) => item.accepted).map((item) => item.artist);
     const seedKeys = new Set(seedArtists.map(normalize));
     const signals = [];
 
-    for (const artist of seedArtists) {
-      const lastFmSignals = await lastFmSimilarArtists(artist, config.rabbitHole?.lastfmApiKey, perSeed);
-      for (const item of lastFmSignals) {
+    const signalBatches = await Promise.all(seedArtists.map((artist) =>
+      lastFmSimilarArtists(artist, config.rabbitHole?.lastfmApiKey, perSeed)
+    ));
+    for (let index = 0; index < seedArtists.length; index += 1) {
+      const artist = seedArtists[index];
+      for (const item of signalBatches[index] || []) {
         if (isGenericArtistName(item.name) || seedKeys.has(normalize(item.name))) continue;
         signals.push({
           ...item,
@@ -434,8 +505,13 @@ class RabbitHoleGraph {
       }
     }
 
-    return topWeighted(signals, { limit: totalLimit })
+    const result = topWeighted(signals, { limit: totalLimit })
+      .filter((item) => Number(item.matchScore || 0) >= Number(options.minMatchScore || 0))
       .filter((item) => !seedKeys.has(normalize(item.name)));
+    // Keep the public return shape as an array while exposing validation
+    // details to the caller's diagnostics.
+    result.seedValidation = seedValidation;
+    return result;
   }
 
   async createGraph(track = {}, deps = {}) {
@@ -466,11 +542,11 @@ class RabbitHoleGraph {
       const artists = splitArtists(item.artist);
       for (const artist of artists) {
         if (!primaryArtists.map(normalize).includes(normalize(artist))) {
-          collaboratorNames.push(entity("artist", artist, { source: "collaboration", weight: feedbackWeight(item.feedback, { love: 8, good: 6, ok: 4, default: 3 }) }));
+          collaboratorNames.push(entity("artist", artist, { source: "collaboration", weight: feedbackWeight(item.feedback, { love: 8, like: 4, good: 4, ok: 1, default: 2 }) }));
         }
       }
       const label = labelFor(item);
-      if (label) labelSignals.push(entity("label", label, { source: item.source || "catalogue label", weight: feedbackWeight(item.feedback, { love: 8, good: 6, ok: 4, default: 3 }) }));
+      if (label) labelSignals.push(entity("label", label, { source: item.source || "catalogue label", weight: feedbackWeight(item.feedback, { love: 8, like: 4, good: 4, ok: 1, default: 2 }) }));
     }
 
     const profile = tasteProfile?.read?.() || {};
@@ -497,7 +573,7 @@ class RabbitHoleGraph {
       .filter((item) => trackKey(item) !== trackKey(seed))
       .map((item) => ({
         ...item,
-        weight: Number(item.score || 0) + (durationMinutes(item) >= 7 ? 12 : 0) + feedbackWeight(item.feedback, { love: 18, good: 10, ok: 5 })
+        weight: Number(item.score || 0) + (durationMinutes(item) >= 7 ? 12 : 0) + feedbackWeight(item.feedback, { love: 18, like: 8, good: 8, ok: 2 })
       }))
       .sort((left, right) => Number(right.weight || 0) - Number(left.weight || 0))
       .slice(0, 12);

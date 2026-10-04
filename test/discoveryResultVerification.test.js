@@ -44,7 +44,7 @@ test("roonVerificationTimeoutFallback keeps requested tracks and exposes honest 
   assert.equal(result.alternates.length, 1);
 });
 
-test("tidalPlaylistBridgeResult flattens tracks and alternates into bridge-ready output", () => {
+test("tidalPlaylistBridgeResult preserves selected tracks and alternates in bridge-ready output", () => {
   const result = verification.tidalPlaylistBridgeResult({
     tracks: [{ title: "One", tidal: { id: "1" } }],
     alternates: [{ title: "Two" }],
@@ -54,9 +54,9 @@ test("tidalPlaylistBridgeResult flattens tracks and alternates into bridge-ready
 
   assert.equal(result.verification.strategy, "tidal-catalog-playlist-bridge");
   assert.equal(result.verification.queueBridgeReady, true);
-  assert.equal(result.tracks.length, 2);
-  assert.deepEqual(result.alternates, []);
-  assert.equal(result.verification.kept, 2);
+  assert.equal(result.tracks.length, 1);
+  assert.deepEqual(result.alternates, [{ title: "Two" }]);
+  assert.equal(result.verification.kept, 1);
   assert.equal(result.verification.generated, 7);
 });
 
@@ -96,4 +96,16 @@ test("shouldRunRoonFirstRescue preserves empty-result trigger rules", () => {
   assert.equal(verification.shouldRunRoonFirstRescue({ tracks: [], verification: { roonFirstRescue: { attempted: true }, roonRejected: 1 } }), false);
   assert.equal(verification.shouldRunRoonFirstRescue({ tracks: [], verification: { roonRejected: 1 } }), true);
   assert.equal(verification.shouldRunRoonFirstRescue({ tracks: [], discarded: [{}], verification: {} }), true);
+});
+
+test("the playlist bridge does not promote diversity-held alternates or exceed the requested count", () => {
+  const selected = Array.from({ length: 10 }, (_, i) => ({ title: `Selected ${i}`, tidal: { id: String(i + 1) } }));
+  const alternates = Array.from({ length: 10 }, (_, i) => ({ title: `Held ${i}`, tidal: { id: String(i + 11) } }));
+  const result = verification.tidalPlaylistBridgeResult({ tracks: selected, alternates, requestedCount: 10 }, 10);
+  assert.deepEqual(result.tracks, selected);
+  assert.deepEqual(result.alternates, alternates);
+  assert.equal(result.verification.kept, 10);
+  const short = verification.tidalPlaylistBridgeResult({ tracks: selected.slice(0, 2), alternates, requestedCount: 10 }, 10);
+  assert.equal(short.tracks.length, 2);
+  assert.deepEqual(short.alternates, alternates);
 });

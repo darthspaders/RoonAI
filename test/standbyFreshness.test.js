@@ -8,6 +8,7 @@ const { FreshPool, FreshnessEvents, identityKeys, settings, searchFreshPool } = 
 const { StandbyCandidateStore } = require("../src/standbyCandidateStore");
 const { recordRefresh } = require("../src/standbyNovelty");
 const config = settings({});
+const DAY = 86400000;
 const track = (id, artist = `Artist ${id}`, title = `Track ${id}`) => ({ tidal: {id:String(id)}, artist, title, score:85, album:`Release ${id}` });
 const offenders = [
   track(1,"Hobin Rude","My Golden Cage (Kasper Koman 6AM Reprise)"),
@@ -61,6 +62,14 @@ test("ten-refresh cutoff does not expire by age; suggestion and activity windows
     assert.equal(new FreshPool({events:[{...event,at:now-31*86400000}],config,now}).eligible(t),true);
   }
 });
+test("ordinary discovery suggestions use the shorter standby cooldown",()=>{
+  const now=Date.now();
+  const config=settings({STANDBY_DISCOVERY_COOLDOWN_DAYS:"7",STANDBY_SUGGESTED_COOLDOWN_DAYS:"30"});
+  const track=({tidal:{id:"discovery-1"},artist:"Discovery Artist",title:"Discovery Track",score:85});
+  assert.equal(new FreshPool({events:[{...track,kind:"discovery",at:now-6*DAY}],config,now}).eligible(track),false);
+  assert.equal(new FreshPool({events:[{...track,kind:"discovery",at:now-8*DAY}],config,now}).eligible(track),true);
+  assert.equal(new FreshPool({events:[{...track,kind:"suggested",at:now-8*DAY}],config,now}).eligible(track),false);
+});
 test("identity bridges missing IDs and separately supplied versions without merging distinct remixes",()=>{
   const t=track(10,"Sealine & Stereo Underground","Flashes (D-Nox & Beckers Remix)");
   const same={artist:"Stereo Underground, Sealine",title:"Flashes",version:"D-Nox & Beckers Remix"};
@@ -82,6 +91,48 @@ test("inventory exhaustion returns a short pool; preferred one and hard two trac
   const artists=new FreshPool({target:4,config});
   artists.add([track(1,"A"),track(2,"A"),track(3,"A"),track(4,"B")]);
   assert.equal(artists.select().length,2);assert.equal(artists.select(true).length,3);
+  assert.equal(artists.select(true, true).length,4);
+});
+test("short fresh standby pools can use a second reviewed track from an album", () => {
+  const pool = new FreshPool({ target: 4, config });
+  pool.add([
+    track(1, "A", "One"),
+    track(2, "B", "Two"),
+    track(3, "C", "Three"),
+    track(4, "D", "Four")
+  ]);
+  // The default test tracks use unique albums, so this verifies the selector
+  // remains compatible with the strict path while the store-specific policy
+  // is covered below.
+  assert.equal(pool.select(true, true).length, 4);
+});
+test("search fresh pool reviews a high-confidence prior suggestion only as a final fallback", async () => {
+  const now = Date.now();
+  const prior = { key: "prior-1", artist: "Trusted Artist", title: "Strong Track", score: 82 };
+  const pool = new FreshPool({
+    target: 2,
+    events: [{ ...prior, kind: "suggested", at: now }],
+    now,
+    config: settings({ STANDBY_RAW_POOL_MULTIPLIER: "2.4" })
+  });
+  let reviewed = [];
+  const result = await searchFreshPool({
+    pool,
+    passes: [{ id: "only-pass" }],
+    search: async () => ({ tracks: [prior] }),
+    review: async (tracks) => {
+      reviewed = tracks;
+      return { tracks, review: {} };
+    },
+    budgetMs: 1000
+  });
+
+  assert.equal(reviewed.length, 1);
+  assert.equal(reviewed[0].standbyFallbackReason, "Previously surfaced, but not recently played, queued, or rated.");
+  assert.equal(result.tracks.length, 1);
+  assert.equal(result.novelty.historyFallbackConsidered, 1);
+  assert.equal(result.novelty.historyFallbackReviewed, 1);
+  assert.equal(result.novelty.historyFallbackKept, 1);
 });
 test("time budget prevents more searches and never refills from rejected tracks",async()=>{
   let now=0,calls=0;
@@ -112,7 +163,7 @@ test("actual discovery engine rejects recent identities before selecting its res
   assert.ok(result.tracks.every(t=>Number(t.tidal.id)>=910));
 });
 
-test("observed Roon queue additions emit identities once, including existing queue on connection",()=>{
+test("observed Roon queue additions ignore the initial snapshot and emit identities once after connection",()=>{
   const {RoonClient}=require("../src/roonClient");
   const events=[];let callback;
   const fake={transport:{subscribe_queue:(zone,limit,cb)=>{callback=cb;}},queueSubscriptions:new Set(),queues:new Map(),queueSignatures:new Map(),scheduleZonesEmit:()=>{},emit:(event,track)=>events.push(track)};
@@ -121,7 +172,7 @@ test("observed Roon queue additions emit identities once, including existing que
   callback("Subscribed",{items:[item]});
   callback("Changed",{items:[item]});
   callback("Changed",{items:[item,{queue_item_id:2,title:"New Track",artist:"New Artist"}]});
-  assert.deepEqual(events,[{artist:"Avoure",title:"Voile"},{artist:"New Artist",title:"New Track"}]);
+  assert.deepEqual(events,[{artist:"New Artist",title:"New Track"}]);
 });
 
 test("version-aware fallback identity survives pool persistence without TIDAL IDs",()=>{

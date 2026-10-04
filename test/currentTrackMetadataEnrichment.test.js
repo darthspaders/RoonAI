@@ -17,7 +17,8 @@ function createService(overrides = {}) {
       minConfidence: 0.6
     },
     scheduleBroadcast: overrides.scheduleBroadcast || (() => {}),
-    summarizeZoneTrack: overrides.summarizeZoneTrack || ((zone = {}) => zone.summaryTrack || null)
+    summarizeZoneTrack: overrides.summarizeZoneTrack || ((zone = {}) => zone.summaryTrack || null),
+    onLiveTrackObserved: overrides.onLiveTrackObserved || null
   });
 }
 
@@ -47,6 +48,55 @@ test("metadataLookupTrackFromZone preserves existing Roon metadata evidence", ()
     releaseDate: "2024-04-05",
     label: "Anjunadeep",
     genre: "Progressive House",
+    isRadio: false
+  });
+});
+
+test("metadataLookupTrackFromZone supplements sparse Roon metadata from the matched current-track identity", () => {
+  const service = createService({
+    summarizeZoneTrack: () => ({
+      artist: "Eleonora / Morttagua / Ubbah",
+      title: "Blue Enigma",
+      durationMs: 515000
+    })
+  });
+
+  const lookup = service.metadataLookupTrackFromZone({
+    now_playing: {
+      length: 515,
+      two_line: {
+        line1: "Blue Enigma",
+        line2: "Eleonora / Morttagua / Ubbah"
+      },
+      three_line: { line3: "Blue Enigma" }
+    },
+    memoryTrack: {
+      artist: "Eleonora, Morttagua",
+      title: "Blue Enigma",
+      album: "Timeless Ibiza 2026",
+      label: "Timeless Moment",
+      year: 2020,
+      durationMs: 515000,
+      tidal: {
+        id: "525269956",
+        isrc: "US83Z2006403",
+        year: 2020,
+        label: "Timeless Moment"
+      }
+    }
+  });
+
+  assert.deepEqual(lookup, {
+    artist: "Eleonora / Morttagua / Ubbah",
+    title: "Blue Enigma",
+    album: "Blue Enigma",
+    tidalId: "525269956",
+    isrc: "US83Z2006403",
+    durationMs: 515000,
+    releaseYear: 2020,
+    releaseDate: "",
+    label: "Timeless Moment",
+    genre: "",
     isRadio: false
   });
 });
@@ -196,4 +246,21 @@ test("metadata enrichment disabled leaves state unchanged and skips scheduling",
   service.scheduleMetadataEnrichment(original);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(lookups, 0);
+});
+
+test("live-track observation still runs when display metadata enrichment is disabled", async () => {
+  let observed = null;
+  const service = createService({
+    config: { metadataEnrichment: { enabled: false } },
+    summarizeZoneTrack: () => ({ artist: "Artist", title: "Track" }),
+    onLiveTrackObserved: (track) => {
+      observed = track;
+    }
+  });
+
+  service.scheduleMetadataEnrichment({ zones: [{ now_playing: {} }] });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(observed.artist, "Artist");
+  assert.equal(observed.title, "Track");
 });

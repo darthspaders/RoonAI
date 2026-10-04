@@ -1,0 +1,51 @@
+/* The shared SoundSpectrum controls occupy the existing Roon artwork lane. */
+#playerView .soundSpectrumStage .lyrionCenterViews {display:flex;flex-wrap:wrap;gap:8px;margin-right:auto;}
+#playerView .soundSpectrumStage .playerViewControls {flex-wrap:wrap;}
+#roonVisualPanel {display:none;width:100%;min-width:0;text-align:left;}
+#playerView .soundSpectrumStage[data-center-view="visualizer"] #roonVisualPanel {display:block;}
+#roonVisualPanel[hidden] {display:none;}
+#playerView .soundSpectrumStage[data-center-view="visualizer"] #cover {display:none;}
+#playerView .soundSpectrumStage[data-center-view="visualizer"] > .artStack {align-self:start;min-width:0;overflow:visible;}
+#playerView .soundSpectrumStage .lyrionVisualSurface {position:relative;width:100%;height:clamp(160px,28dvh,300px);min-height:160px;background:transparent;overflow:hidden;}
+#playerView .soundSpectrumStage.player--maximized .lyrionVisualSurface {height:min(40dvh,calc(100dvh - 442px));}
+#playerView .soundSpectrumStage.player--fullscreen .lyrionVisualSurface {height:min(40dvh,calc(100dvh - 442px));}
+#playerView .soundSpectrumStage .lyrionVisualBackdrop {z-index:0;}
+#playerView .soundSpectrumStage[data-visual-active="true"] {--now-artwork-backdrop:none!important;}
+#playerView .soundSpectrumStage[data-visual-active="true"]::before {z-index:1;background:linear-gradient(90deg,rgba(3,1,8,.78),rgba(8,3,16,.2) 30% 70%,rgba(3,1,8,.82));filter:none;opacity:1;}
+#playerView .soundSpectrumStage[data-visual-active="true"] > :not(.lyrionVisualBackdrop) {z-index:2;}
+@media(min-width:701px){
+  #playerView .soundSpectrumStage:is(.player--maximized,.player--fullscreen) > .playerViewControls {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%;max-width:100%;gap:4px;}
+  #playerView .soundSpectrumStage:is(.player--maximized,.player--fullscreen) .playerViewControls .lyrionCenterViews {display:contents;}
+  #playerView .soundSpectrumStage:is(.player--maximized,.player--fullscreen) .playerViewControls button {min-width:0;min-height:44px;padding:4px;font-size:11px;line-height:1.2;white-space:normal;}
+}
+@media(min-width:701px) and (max-width:1099px),
+  (min-width:1100px) and (pointer:coarse) and (hover:none){
+  #playerView .soundSpectrumStage.player--regular:not(.roonVisualFullscreen) > .playerViewControls {position:relative;inset:auto;grid-column:3;grid-row:1;align-self:center;justify-self:end;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%;max-width:100%;gap:4px;}
+  #playerView .soundSpectrumStage.player--regular .playerViewControls .lyrionCenterViews {display:contents;}
+  #playerView .soundSpectrumStage.player--regular .playerViewControls button {min-width:0;min-height:44px;padding:4px;font-size:11px;line-height:1.2;white-space:normal;}
+}
+
+/* Pure visuals retain this viewer's single stream and blur behind the surface. */
+#playerView .soundSpectrumStage.roonVisualFullscreen[data-center-view="visualizer"] {position:fixed;inset:0;width:100%;height:100dvh;max-width:none;max-height:none;min-height:0;margin:0;padding:0;gap:0;border:0;border-radius:0;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);grid-template-areas:none;overflow:hidden;z-index:100;}
+#playerView .soundSpectrumStage.roonVisualFullscreen > :not(.artStack):not(.lyrionVisualBackdrop) {display:none;}
+#playerView .soundSpectrumStage.roonVisualFullscreen > .artStack {display:block;grid-area:1/1/2/2;width:100%;height:100%;min-height:0;margin:0;overflow:hidden;transform:none;}
+#playerView .soundSpectrumStage.roonVisualFullscreen .artStack > :not(#roonVisualPanel),
+#playerView .soundSpectrumStage.roonVisualFullscreen #roonVisualPanel > :not(.lyrionVisualSurface) {display:none;}
+#playerView .soundSpectrumStage.roonVisualFullscreen #roonVisualPanel {width:100%;height:100%;}
+#playerView .soundSpectrumStage.roonVisualFullscreen .lyrionVisualSurface {position:fixed;inset:0;width:100%;height:100dvh;min-height:0;overflow:hidden;}
+@media(max-width:700px){
+  #playerView .soundSpectrumStage .lyrionCenterViews {flex-basis:100%;order:3;margin-right:0;}
+  #playerView .soundSpectrumStage .lyrionCenterViews button {flex:1;}
+  #playerView .soundSpectrumStage .lyrionVisualFields {grid-template-columns:1fr;}
+  #playerView .soundSpectrumStage .lyrionVisualFields select {font-size:16px;}
+  #playerView .soundSpectrumStage:not(.roonVisualFullscreen) .lyrionVisualSurface {height:32dvh;}
+}
+/* The phone artwork row is sized for a square cover. Visuals include their
+   stacked input controls, so this row must instead grow with the panel. */
+@media(max-width:699px){
+  #playerView .soundSpectrumStage:not(.roonVisualFullscreen)[data-center-view="visualizer"] {grid-template-rows:repeat(7,max-content);}
+  #playerView .soundSpectrumStage:not(.roonVisualFullscreen)[data-center-view="visualizer"] > .artStack {display:block;container-type:normal;width:100%;max-width:100%;height:auto;min-height:0;max-height:none;align-self:start;margin:0;transform:none;}
+  #playerView .soundSpectrumStage:not(.roonVisualFullscreen)[data-center-view="visualizer"] > .artStack::before,
+  #playerView .soundSpectrumStage:not(.roonVisualFullscreen)[data-center-view="visualizer"] > .artStack::after {display:none;}
+  #playerView .soundSpectrumStage:not(.roonVisualFullscreen)[data-center-view="visualizer"] #roonVisualPanel {height:auto;max-width:100%;}
+}

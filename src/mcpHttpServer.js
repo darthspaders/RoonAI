@@ -1,5 +1,6 @@
 "use strict";
 const voiceExecution = require("./voiceExecution");
+const { compactDiscoveryVerification, compactSonicTrack, compactSonicRun } = require("./discoveryDiagnostics");
 const { exactIntent, parseTrackList } = require("./exactTrackVerification");
 const {
   policySchema: directRoonPolicySchema,
@@ -46,6 +47,7 @@ function compactTrack(track = {}) {
     discoverySource: shortText(track.discoverySource, 80),
     discoveryLane: shortText(track.discoveryLane, 60),
     feedback: cleanText(track.feedback),
+    sonic: track.sonic || compactSonicTrack(track),
     tidalUrl: cleanText(track.tidalUrl || track.tidal?.url || track.tidal?.shareUrl),
     reason: shortText(track.reason || track.why, 220)
   };
@@ -254,6 +256,197 @@ function createRabbitHoleMcpTools(options = {}) {
     };
   }
 
+  async function findSonicNeighbors(input = {}) {
+    const reference = input.track || input.trackId || input.reference || input.filePath || input.path || input.file;
+    if (!reference) throw new Error("find_sonic_neighbors requires a stored track identity or local audio file path.");
+    const body = {
+      track: reference,
+      count: clampNumber(input.count, 1, 500, 20),
+      analyzeIfMissing: input.analyzeIfMissing !== false,
+      minSimilarity: input.minSimilarity
+    };
+    const provider = cleanText(input.provider);
+    if (provider) body.model = provider;
+    for (const field of ["model", "modelVersion"]) {
+      const value = cleanText(input[field]);
+      if (value) body[field] = value;
+    }
+    if (Array.isArray(input.excludeIdentityKeys)) body.excludeIdentityKeys = input.excludeIdentityKeys.slice(0, 500).map(cleanText).filter(Boolean);
+    const result = await requestJson("/api/recommendation-v2/sonic-neighbors", {
+      body,
+      timeoutMs: Math.max(timeoutMs, 900_000)
+    });
+    return {
+      ok: result.ok !== false,
+      model: cleanText(result.model),
+      modelVersion: cleanText(result.modelVersion),
+      query: result.query || null,
+      neighbors: Array.isArray(result.neighbors) ? result.neighbors.slice(0, 500).map((neighbor) => ({
+        ...neighbor,
+        similarity: Number(neighbor.similarity),
+        track: compactTrack(neighbor.track || {})
+      })) : [],
+      diagnostics: result.diagnostics || null
+    };
+  }
+
+  async function generateSonicNeighborCandidates(input = {}) {
+    const anchors = Array.isArray(input.anchors) ? input.anchors.filter(Boolean).slice(0, 8) : [];
+    const reference = input.anchor || input.track || input.reference || input.trackId;
+    if (!anchors.length && !reference) throw new Error("generate_sonic_neighbor_candidates requires at least one stored anchor.");
+    const body = {
+      ...(anchors.length ? { anchors } : { anchor: reference }),
+      count: clampNumber(input.count, 1, 500, 20),
+      perAnchorCount: clampNumber(input.perAnchorCount, 1, 500, clampNumber(input.count, 1, 500, 20)),
+      minSimilarity: input.minSimilarity
+    };
+    for (const field of [
+      "provider", "model", "modelVersion", "genre", "genres", "targetGenres", "genreTerms",
+      "discoveryIntent", "intent", "purpose", "noveltyPolicy", "crossGenreAllowed"
+    ]) {
+      if (input[field] !== undefined) body[field] = input[field];
+    }
+    if (Array.isArray(input.excludeIdentityKeys)) body.excludeIdentityKeys = input.excludeIdentityKeys.slice(0, 500).map(cleanText).filter(Boolean);
+    const result = await requestJson("/api/recommendation-v2/sonic-neighbor-candidates", {
+      body,
+      timeoutMs: Math.max(timeoutMs, 900_000)
+    });
+    return {
+      ok: result.ok !== false,
+      candidates: Array.isArray(result.candidates) ? result.candidates.slice(0, 500).map((candidate) => ({
+        ...compactTrack(candidate),
+        identityKey: cleanText(candidate.identityKey),
+        tidalId: cleanText(candidate.tidalId),
+        shadowOnly: candidate.shadowOnly !== false,
+        queueable: candidate.queueable === true,
+        sonicNeighbor: candidate.sonicNeighbor || null
+      })) : [],
+      diagnostics: result.diagnostics || null
+    };
+  }
+
+  function sonicReviewQuery(pathname, params = {}) {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined || value === null || value === "") continue;
+      query.set(key, String(value));
+    }
+    const suffix = query.toString();
+    return suffix ? `${pathname}?${suffix}` : pathname;
+  }
+
+  async function startSonicReviewSession(input = {}) {
+    const result = await requestJson("/api/recommendation-v2/sonic-review/sessions", {
+      body: input,
+      timeoutMs: Math.max(timeoutMs, 900_000)
+    });
+    return result;
+  }
+
+  async function getSonicReviewSession(input = {}) {
+    if (!cleanText(input.sessionId)) throw new Error("sonic_get_review_session requires sessionId.");
+    return requestJson(sonicReviewQuery("/api/recommendation-v2/sonic-review/session", {
+      sessionId: input.sessionId,
+      includeDiagnostics: input.includeDiagnostics === true ? "true" : "",
+      includeAnchorContext: input.includeAnchorContext === true ? "true" : ""
+    }));
+  }
+
+  async function getNextSonicReviewItem(input = {}) {
+    if (!cleanText(input.sessionId)) throw new Error("sonic_get_next_review_item requires sessionId.");
+    return requestJson(sonicReviewQuery("/api/recommendation-v2/sonic-review/next", { sessionId: input.sessionId }));
+  }
+
+  async function getSonicAssistantReviewContext(input = {}) {
+    if (!cleanText(input.sessionId)) throw new Error("sonic_get_assistant_review_context requires sessionId.");
+    return requestJson(sonicReviewQuery("/api/recommendation-v2/sonic-review/context", {
+      sessionId: input.sessionId,
+      candidateIdentity: input.candidateIdentity
+    }));
+  }
+
+  async function getSonicReviewSchema() {
+    return requestJson("/api/recommendation-v2/sonic-review/schema");
+  }
+
+  async function getSonicReviewContextSummary(input = {}) {
+    if (!cleanText(input.sessionId)) throw new Error("sonic_generate_review_context_summary requires sessionId.");
+    return requestJson(sonicReviewQuery("/api/recommendation-v2/sonic-review/summary", {
+      sessionId: input.sessionId,
+      candidateIdentity: input.candidateIdentity
+    }));
+  }
+
+  async function listSonicReviewSessions(input = {}) {
+    return requestJson(sonicReviewQuery("/api/recommendation-v2/sonic-review/sessions", {
+      status: input.status,
+      limit: input.limit
+    }));
+  }
+
+  async function pauseSonicReviewSession(input = {}) {
+    if (!cleanText(input.sessionId)) throw new Error("sonic_pause_review_session requires sessionId.");
+    return requestJson("/api/recommendation-v2/sonic-review/pause", { body: { sessionId: input.sessionId } });
+  }
+
+  async function resumeSonicReviewSession(input = {}) {
+    if (!cleanText(input.sessionId)) throw new Error("sonic_resume_review_session requires sessionId.");
+    return requestJson("/api/recommendation-v2/sonic-review/resume", { body: { sessionId: input.sessionId } });
+  }
+
+  async function saveSonicReviewItem(input = {}) {
+    if (!cleanText(input.sessionId)) throw new Error("sonic_save_review_item requires sessionId.");
+    return requestJson("/api/recommendation-v2/sonic-review/save", { body: input, timeoutMs: Math.max(timeoutMs, 120_000) });
+  }
+
+  async function advanceSonicReviewSession(input = {}) {
+    if (!cleanText(input.sessionId)) throw new Error("sonic_advance_review_session requires sessionId.");
+    return requestJson("/api/recommendation-v2/sonic-review/advance", { body: input, timeoutMs: Math.max(timeoutMs, 120_000) });
+  }
+
+  async function queueSonicReviewItem(input = {}) {
+    if (!cleanText(input.sessionId)) throw new Error("sonic_queue_review_item requires sessionId.");
+    return requestJson("/api/recommendation-v2/sonic-review/queue", { body: input, timeoutMs: Math.max(timeoutMs, 1_800_000) });
+  }
+
+  async function rateSonicReviewItem(input = {}) {
+    if (!cleanText(input.sessionId)) throw new Error("sonic_rate_review_item requires sessionId.");
+    return requestJson("/api/recommendation-v2/sonic-review/rate", { body: input, timeoutMs: Math.max(timeoutMs, 120_000) });
+  }
+
+  async function cancelSonicReviewSession(input = {}) {
+    if (!cleanText(input.sessionId)) throw new Error("sonic_cancel_review_session requires sessionId.");
+    return requestJson("/api/recommendation-v2/sonic-review/cancel", { body: { sessionId: input.sessionId } });
+  }
+
+  async function analyzeBeatportPreviewForTidalTrack(input = {}) {
+    const reference = input.track || input.tidalUrl || input.tidalId || input.trackId;
+    if (!reference) throw new Error("analyze_beatport_preview requires a TIDAL track URL, id, or normalized track.");
+    const result = await requestJson("/api/recommendation-v2/beatport/analyze-tidal", {
+      body: {
+        track: input.track,
+        tidalUrl: input.tidalUrl,
+        tidalId: input.tidalId,
+        trackId: input.trackId,
+        allowVersionProxy: input.allowVersionProxy !== false
+      },
+      timeoutMs: Math.max(timeoutMs, 900_000)
+    });
+    return {
+      ok: result.ok !== false,
+      relation: cleanText(result.relation),
+      identityKey: cleanText(result.identityKey),
+      model: cleanText(result.model),
+      modelVersion: cleanText(result.modelVersion),
+      dimensions: Number(result.dimensions || 0) || null,
+      audioDurationMs: Number(result.audioDurationMs || 0) || null,
+      match: result.match || null,
+      tidal: compactTrack(result.tidal || {}),
+      beatport: compactTrack(result.beatport || {}),
+      sourceType: cleanText(result.sourceType)
+    };
+  }
+
   async function latestSessionResult() {
     if (lastSearchResult) return lastSearchResult;
     const status = lastStatus || await requestJson("/api/status", { timeoutMs: 10_000 });
@@ -305,10 +498,13 @@ function createRabbitHoleMcpTools(options = {}) {
     });
     return {
       requestedCount: lastSearchResult.requestedCount || body.count,
+      runId: lastSearchResult.discoveryRunId || "",
+      completedAt: lastSearchResult.discoveryCompletedAt || "",
+      sonic: lastSearchResult.sonicDiagnostics || compactSonicRun(lastSearchResult),
       tracks: tracksFromResult(lastSearchResult, 40),
       alternates: alternatesFromResult(lastSearchResult, 20),
       discardedCount: Array.isArray(lastSearchResult.discarded) ? lastSearchResult.discarded.length : 0,
-      verification: lastSearchResult.verification || null
+      verification: lastSearchResult.mcpVerification || compactDiscoveryVerification(lastSearchResult.verification)
     };
   }
 
@@ -424,9 +620,9 @@ function createRabbitHoleMcpTools(options = {}) {
     };
   }
 
-  async function standbyTracks(count) {
+  async function standbyTracks(count, { fullPool = false } = {}) {
     const payload = await requestJson("/api/standby", { timeoutMs: 15_000 });
-    const tracks = Array.isArray(payload.tracks) ? payload.tracks.slice(0, count) : [];
+    const tracks = Array.isArray(payload.tracks) ? payload.tracks.slice(0, fullPool ? 25 : count) : [];
     if (!tracks.length) throw new Error("There are no standby tracks available.");
     return tracks;
   }
@@ -434,7 +630,7 @@ function createRabbitHoleMcpTools(options = {}) {
   async function queueStandbyTracks(input = {}) {
     await getStatus();
     const count = clampNumber(input.count, 1, 25, 12);
-    const tracks = await standbyTracks(count);
+    const tracks = await standbyTracks(25, { fullPool: true });
     const zone = activeZone(lastStatus);
     const zoneId = cleanText(input.zoneId) || cleanText(zone?.zone_id || zone?.id);
     if (!zoneId) throw new Error("No active Roon zone is available.");
@@ -443,6 +639,7 @@ function createRabbitHoleMcpTools(options = {}) {
         zoneId,
         tracks,
         targetCount: count,
+        source: "standby",
         mode: input.mode === "next" ? "next" : "append",
         preferExtendedMixes: Boolean(input.preferExtendedMixes),
         matchPolicy: input.matchPolicy || "strict",
@@ -576,7 +773,7 @@ function createRabbitHoleMcpTools(options = {}) {
     const limit = clampNumber(input.limit, 1, 50, 20);
     return {
       discardedCount: discarded.length,
-      poolDiagnostics: result.verification?.poolDiagnostics || null,
+      poolDiagnostics: compactDiscoveryVerification(result.verification).poolDiagnostics || null,
       queryYield: result.verification?.queryYield || null,
       examples: discarded.slice(0, limit).map((track) => ({
         artist: cleanText(track.artist),
@@ -691,6 +888,48 @@ function createRabbitHoleMcpTools(options = {}) {
       annotations: writeAction,
       handler: async (input={}) => { await getStatus(); const zone=activeZone(lastStatus); return requestJson("/api/tracks/supplied/queue", {body:{...input,zoneId:input.zoneId||zone?.zone_id||zone?.id},timeoutMs:Math.max(timeoutMs,3600000)}); }
     },
+    get_sonic_coverage_status: {
+      title: "Read Sonic Embedding Coverage",
+      description: "Read bulk backfill progress, lazy queue depth, paused state and recent preparation failures. Embedding coverage only; no Sonic Review judgments or rating changes.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      annotations: readOnly,
+      handler: () => requestJson("/api/recommendation-v2/coverage", { timeoutMs: 10000 })
+    },
+    control_sonic_coverage: {
+      title: "Control Sonic Embedding Coverage",
+      description: "Start, pause, resume, cancel or configure fingerprint preparation. Defaults: pause all coverage; cancel bulk only. Active work finishes safely. Completed embeddings are kept. Does not review music, rate tracks, alter Blend policy or queue playback.",
+      inputSchema: { type: "object", properties: {
+        action: { type: "string", enum: ["start", "pause", "resume", "cancel", "configure"] },
+        scope: { type: "string", enum: ["all", "bulk"] },
+        concurrency: { type: "integer", minimum: 1, maximum: 3 }, batchSize: { type: "integer", minimum: 1, maximum: 50 },
+        minIntervalMs: { type: "integer", minimum: 250, maximum: 60000 }, batchPauseMs: { type: "integer", minimum: 1000, maximum: 300000 },
+        lazyEnabled: { type: "boolean" }, retryFailed: { type: "boolean" }
+      }, required: ["action"], additionalProperties: false },
+      annotations: writeAction,
+      handler: ({ action, ...input }) => {
+        if (!["start", "pause", "resume", "cancel", "configure"].includes(action)) throw new Error("Unsupported coverage action.");
+        return requestJson(`/api/recommendation-v2/coverage/${action}`, { body: input, timeoutMs: 10000 });
+      }
+    },
+    get_discovery_diagnostics: {
+      title: "Read Completed Discovery Diagnostics",
+      description: "Read a saved normal discovery run without rerunning it. Omit runId for latest; use recentRuns for older IDs. Reports Sonic invocation, Blend application, coverage, actual score deltas and pool ranks before diversity/playback checks. The adjustment cap is not a guaranteed bonus.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          runId: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 40, default: 10 },
+          includeAlternates: { type: "boolean", default: false }
+        },
+        additionalProperties: false
+      },
+      annotations: readOnly,
+      handler: input => {
+        const query = new URLSearchParams({ limit: String(clampNumber(input.limit, 1, 40, 10)), includeAlternates: String(input.includeAlternates === true) });
+        if (input.runId) query.set("runId", input.runId);
+        return requestJson(`/api/discovery/diagnostics?${query}`, { timeoutMs: 10000 });
+      }
+    },
     get_rabbit_hole_status: {
       title: "Get Rabbit Hole Status",
       description: "Return compact Rabbit Hole status, selected/active Roon zone, now playing track, current result summary, standby status, TIDAL state, and LLM state.",
@@ -701,6 +940,312 @@ function createRabbitHoleMcpTools(options = {}) {
       },
       annotations: readOnly,
       handler: getStatus
+    },
+    find_sonic_neighbors: {
+      title: "Find Sonic Neighbors",
+      description: "Read-only Recommendation Engine v2 proof of concept. Return locally analyzed tracks nearest to a reference track by cosine similarity. This does not run production discovery, query TIDAL, or queue anything in Roon.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          track: { oneOf: [
+            { type: "string", description: "Stored identity key such as tidal:123 or text:artist|title, or a local audio file path." },
+            { type: "object", description: "Track identity with artist/title and optional tidalId, isrc, identityKey, or filePath." }
+          ] },
+          trackId: { type: "string", description: "Alias for a stored identity key such as beatport:123 or tidal:123." },
+          reference: { type: "string", description: "Alias for track." },
+          filePath: { type: "string", description: "Local audio path. It is analyzed on demand when no stored embedding exists." },
+          count: { type: "integer", minimum: 1, maximum: 500, default: 20 },
+          provider: { type: "string", description: "Embedding provider, such as discogs-effnet or spectral-baseline. Alias for model." },
+          model: { type: "string" },
+          modelVersion: { type: "string" },
+          analyzeIfMissing: { type: "boolean", default: true },
+          minSimilarity: { type: "number", minimum: -1, maximum: 1 },
+          excludeIdentityKeys: { type: "array", items: { type: "string" }, maxItems: 500 }
+        },
+        additionalProperties: false
+      },
+      annotations: readOnly,
+      handler: findSonicNeighbors
+    },
+    generate_sonic_neighbor_candidates: {
+      title: "Generate Sonic Neighbor Candidates",
+      description: "Read-only Recommendation Engine v2 shadow source. Generate a bounded, duplicate-suppressed candidate set from stored versioned sonic neighbors across one or more anchors. Candidates are review-only, never added to production discovery, queried on TIDAL, verified in Roon, or queued.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          anchor: { type: "string", description: "One stored identity key such as tidal:123, beatport:123, or text:artist|title." },
+          track: { type: "object", description: "One stored track identity with artist/title and optional identityKey or provider id." },
+          anchors: { type: "array", minItems: 1, maxItems: 8, items: { oneOf: [
+            { type: "string" },
+            { type: "object" }
+          ] } },
+          count: { type: "integer", minimum: 1, maximum: 500, default: 20 },
+          perAnchorCount: { type: "integer", minimum: 1, maximum: 500 },
+          provider: { type: "string", description: "Embedding provider/model, such as discogs-effnet." },
+          model: { type: "string" },
+          modelVersion: { type: "string" },
+          minSimilarity: { type: "number", minimum: -1, maximum: 1 },
+          genre: { type: "string" },
+          genres: { type: "array", items: { type: "string" } },
+          targetGenres: { type: "array", items: { type: "string" } },
+          discoveryIntent: { type: "string", description: "Shadow scoring intent, normally discovery or sonic-review." },
+          intent: { type: "string" },
+          purpose: { type: "string" },
+          noveltyPolicy: { type: "string", enum: ["FRESH_ONLY", "PREFER_FRESH", "ALLOW_KNOWN", "REDISCOVERY_OK"] },
+          crossGenreAllowed: { type: "boolean", default: true },
+          excludeIdentityKeys: { type: "array", items: { type: "string" }, maxItems: 500 }
+        },
+        additionalProperties: false
+      },
+      annotations: readOnly,
+      handler: generateSonicNeighborCandidates
+    },
+    sonic_start_review_session: {
+      title: "Start Sonic Review Session",
+      description: "Create a persisted, resumable Sonic Review batch from the current Roon track or an explicit stored identity. This retrieves shadow-only sonic candidates and returns the first compact review item; it does not save profiles, change global ratings, rerank production, or queue tracks.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          anchor: { oneOf: [
+            { type: "string", description: "current, a TIDAL URL/id, or a stored identity such as tidal:123." },
+            { type: "object", description: "Normalized track identity with artist/title and optional tidalId, isrc, or identityKey." }
+          ], default: "current" },
+          count: { type: "integer", minimum: 1, maximum: 500, default: 20 },
+          neighborCount: { type: "integer", minimum: 1, maximum: 500, description: "Bounded retrieval pool before session filters." },
+          minimumSimilarity: { type: "number", minimum: -1, maximum: 1 },
+          excludeKnown: { type: "boolean", default: false },
+          excludeRated: { type: "boolean", default: false },
+          excludePreviouslyReviewed: { type: "boolean", default: true },
+          excludeSameArtist: { type: "boolean", default: false },
+          crossGenreAllowed: { type: "boolean", default: true },
+          queuePolicy: { type: "string", enum: ["NEVER", "ASK", "STRONG_ONLY", "KEEP_AND_STRONG", "ALL_VALID"], default: "ASK" },
+          reviewPolicy: { type: "string", enum: ["ASSISTANT_AUTO", "ASSISTANT_DRAFT", "HUMAN_CONFIRM_EACH"], default: "ASSISTANT_DRAFT" },
+          profilePolicy: { type: "string", default: "SHADOW_ONLY" },
+          noveltyPolicy: { type: "string", enum: ["FRESH_ONLY", "PREFER_FRESH", "ALLOW_KNOWN", "REDISCOVERY_OK"], default: "PREFER_FRESH" },
+          model: { type: "string" },
+          modelVersion: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      annotations: writeAction,
+      handler: startSonicReviewSession
+    },
+    sonic_get_review_session: {
+      title: "Get Sonic Review Session",
+      description: "Return a compact persisted Sonic Review session summary, current pointer, counts, status, and errors. Diagnostics and anchor context are opt-in.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sessionId: { type: "string" },
+          includeDiagnostics: { type: "boolean", default: false },
+          includeAnchorContext: { type: "boolean", default: false }
+        },
+        required: ["sessionId"],
+        additionalProperties: false
+      },
+      annotations: readOnly,
+      handler: getSonicReviewSession
+    },
+    sonic_get_next_review_item: {
+      title: "Get Next Sonic Review Item",
+      description: "Return the current pending candidate in a persisted Sonic Review session. Reading this does not advance or mutate the session.",
+      inputSchema: {
+        type: "object",
+        properties: { sessionId: { type: "string" } },
+        required: ["sessionId"],
+        additionalProperties: false
+      },
+      annotations: readOnly,
+      handler: getNextSonicReviewItem
+    },
+    sonic_get_assistant_review_context: {
+      title: "Get Sonic Assistant Review Context",
+      description: "Return the compact evidence packet for one Sonic Review candidate: anchor and candidate facts, sonic relationship, novelty/exposure state, stored profile metadata, neighborhood evidence, and conservative schema hints. Raw embeddings are never returned.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sessionId: { type: "string" },
+          candidateIdentity: { type: "string", description: "Optional candidate identity; defaults to the current pending item." }
+        },
+        required: ["sessionId"],
+        additionalProperties: false
+      },
+      annotations: readOnly,
+      handler: getSonicAssistantReviewContext
+    },
+    sonic_get_review_schema: {
+      title: "Get Sonic Review Schema",
+      description: "Return canonical Sonic Review IDs and labels for genres, styles, moods, tags, preserve/avoid traits, similarity emphasis, decisions, policies, and evidence rules.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      annotations: readOnly,
+      handler: getSonicReviewSchema
+    },
+    sonic_generate_review_context_summary: {
+      title: "Summarize Sonic Review Evidence",
+      description: "Generate a deterministic, non-LLM summary of the available anchor/candidate metadata and sonic evidence for one review item.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sessionId: { type: "string" },
+          candidateIdentity: { type: "string" }
+        },
+        required: ["sessionId"],
+        additionalProperties: false
+      },
+      annotations: readOnly,
+      handler: getSonicReviewContextSummary
+    },
+    sonic_list_review_sessions: {
+      title: "List Sonic Review Sessions",
+      description: "List recent persisted Sonic Review sessions so Synapse can resume an active batch without scraping the webpage.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          status: { type: "string", enum: ["READY", "RUNNING", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"] },
+          limit: { type: "integer", minimum: 1, maximum: 100, default: 20 }
+        },
+        additionalProperties: false
+      },
+      annotations: readOnly,
+      handler: listSonicReviewSessions
+    },
+    sonic_pause_review_session: {
+      title: "Pause Sonic Review Session",
+      description: "Safely pause a persisted Sonic Review batch without deleting completed work.",
+      inputSchema: {
+        type: "object",
+        properties: { sessionId: { type: "string" } },
+        required: ["sessionId"],
+        additionalProperties: false
+      },
+      annotations: writeAction,
+      handler: pauseSonicReviewSession
+    },
+    sonic_resume_review_session: {
+      title: "Resume Sonic Review Session",
+      description: "Resume a paused or ready Sonic Review batch from its persisted pointer and candidate list.",
+      inputSchema: {
+        type: "object",
+        properties: { sessionId: { type: "string" } },
+        required: ["sessionId"],
+        additionalProperties: false
+      },
+      annotations: writeAction,
+      handler: resumeSonicReviewSession
+    },
+    sonic_save_review_item: {
+      title: "Save Sonic Review Item",
+      description: "Persist one structured assistant Sonic Review profile for the current or named candidate. The profile remains shadow-only and does not overwrite global LOVE/LIKE/OKAY/DISLIKE/NEVER_AGAIN ratings.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sessionId: { type: "string" },
+          candidateIdentity: { type: "string" },
+          decision: { type: "string", enum: ["KEEP", "STRONG_KEEP", "SKIP", "REVIEW_MANUALLY", "REJECT", "DUPLICATE", "AMBIGUOUS"] },
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+          note: { type: "string" },
+          evidenceSummary: { type: "object" },
+          profile: {
+            type: "object",
+            properties: {
+              genreLane: { type: "string" },
+              subgenres: { type: "array", items: { type: "string" }, maxItems: 24 },
+              energy: { type: "integer", minimum: 1, maximum: 10 },
+              moods: { type: "array", items: { type: "string" }, maxItems: 24 },
+              tags: { type: "array", items: { type: "string" }, maxItems: 24 },
+              preserveTraits: { type: "array", items: { type: "string" }, maxItems: 24 },
+              avoidTraits: { type: "array", items: { type: "string" }, maxItems: 24 },
+              similarityEmphasis: { type: "array", items: { type: "string" }, maxItems: 24 },
+              note: { type: "string" }
+            },
+            additionalProperties: false
+          }
+        },
+        required: ["sessionId", "decision", "profile"],
+        additionalProperties: false
+      },
+      annotations: writeAction,
+      handler: saveSonicReviewItem
+    },
+    sonic_advance_review_session: {
+      title: "Advance Sonic Review Session",
+      description: "Persist progress and move a Sonic Review session to its next candidate. If no review is supplied, the current pending item is recorded as skipped so batches cannot silently lose their position.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sessionId: { type: "string" },
+          skipCurrent: { type: "boolean", default: true },
+          reason: { type: "string" },
+          review: { type: "object", description: "Optional structured review passed directly to the save step." }
+        },
+        required: ["sessionId"],
+        additionalProperties: false
+      },
+      annotations: writeAction,
+      handler: advanceSonicReviewSession
+    },
+    sonic_queue_review_item: {
+      title: "Queue Sonic Review Item",
+      description: "Queue a reviewed Sonic candidate through the existing strict Roon/TIDAL resolver and bridge fallback. Session queue policy is enforced; no alternate resolver is created.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sessionId: { type: "string" },
+          candidateIdentity: { type: "string" },
+          mode: { type: "string", enum: ["append", "next"], default: "append" },
+          zoneId: { type: "string" },
+          preferExtendedMixes: { type: "boolean", default: true }
+        },
+        required: ["sessionId"],
+        additionalProperties: false
+      },
+      annotations: writeAction,
+      handler: queueSonicReviewItem
+    },
+    sonic_rate_review_item: {
+      title: "Rate Sonic Review Item",
+      description: "Write an explicit global rating for a Sonic Review candidate using the existing Rabbit Hole feedback path. Ratings remain separate from the shadow Sonic Review profile.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sessionId: { type: "string" },
+          candidateIdentity: { type: "string" },
+          rating: { type: "string", enum: ["LOVE", "LIKE", "OKAY", "DISLIKE", "NEVER_AGAIN"] }
+        },
+        required: ["sessionId", "rating"],
+        additionalProperties: false
+      },
+      annotations: writeAction,
+      handler: rateSonicReviewItem
+    },
+    sonic_cancel_review_session: {
+      title: "Cancel Sonic Review Session",
+      description: "Cancel future work in a Sonic Review batch without deleting saved profiles, ratings, queue actions, or audit history.",
+      inputSchema: {
+        type: "object",
+        properties: { sessionId: { type: "string" } },
+        required: ["sessionId"],
+        additionalProperties: false
+      },
+      annotations: writeAction,
+      handler: cancelSonicReviewSession
+    },
+    analyze_beatport_preview: {
+      title: "Analyze Beatport Version Proxy",
+      description: "Read-only Recommendation Engine v2 test path. Resolve a canonical TIDAL track, use a strictly matched Beatport preview such as an Extended Mix as a transient sonic version proxy, and store only the embedding/provenance. Never queues or treats the versions as the same recording.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          track: { type: "object", description: "Normalized TIDAL track with artist/title and optional tidalId or tidalUrl." },
+          tidalUrl: { type: "string", description: "TIDAL track URL." },
+          tidalId: { type: "string", description: "Numeric TIDAL track id." },
+          trackId: { type: "string", description: "Alias for tidalId." },
+          allowVersionProxy: { type: "boolean", default: true }
+        },
+        additionalProperties: false
+      },
+      annotations: readOnly,
+      handler: analyzeBeatportPreviewForTidalTrack
     },
     search_rabbit_hole: {
       title: "Search Rabbit Hole",
@@ -925,7 +1470,7 @@ function createRabbitHoleMcpTools(options = {}) {
         properties: {
           rating: {
             type: "string",
-            enum: ["love", "good", "ok", "wrong_genre", "skip", "never", "reject_similar"]
+            enum: ["love", "like", "ok", "dislike", "never"]
           },
           reason: { type: "string" }
         },
@@ -996,6 +1541,7 @@ function createRabbitHoleMcpTools(options = {}) {
       return requestJson("/api/tracks/verified/resolve-roon", { body: { ...input, zoneId: input.zoneId || zone?.zone_id || zone?.id }, timeoutMs: Math.max(timeoutMs, (input.trackIds?.length || 40) * (input.roonTimeoutMs || 12000) * (1 + (input.retries ?? 2)) + 10000) });
     }
   };
+  Object.assign(registry,require("./parallelMusicTools").createParallelMusicTools(requestJson));
   for (const [name, tool] of Object.entries(registry)) {
     const handler = tool.handler;
     tool.handler = async (...args) => {

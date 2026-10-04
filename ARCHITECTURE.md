@@ -1,10 +1,24 @@
 # The Rabbit Hole - Architecture
 
-Repo directory:
+## Independent Lyrion path
 
-```text
-C:\Users\spade\Documents\Codex\2026-06-07\the-rabbit-hole
-```
+The existing Roon path below remains independent. Lyrion uses `lyrionApi` /
+`lyrionClient` for exact source search, players, queue and transport. Source
+payloads, playable URLs and durable reference IDs are preserved; catalogue
+enrichment does not establish a different playback identity.
+
+For native SiriusXM, audio remains Lyrion → HQPlayer. `siriusxmMetadata`,
+`siriusxmLiveMetadata` and `siriusxmPlaybackClock` combine official channel/
+schedule data with buffered playback timing in a separate display view model.
+Raw Lyrion now-playing/queue data is retained. Channel/show/track art remain
+distinct; exact channel logos are display fallbacks, never new track identities.
+
+`siriusxmOnDemand` and `siriusxmArtistStations` provide authenticated show,
+artist and Xtra discovery/playback. Artist/Xtra tracks use completed validated
+files in `siriusxmTrackAudio`; long episodes retain a streaming decoder.
+`soundcloudClient` / `soundcloudApi` provide separate OAuth playlist management.
+Both MCP servers read synchronized `parallelMusicTools.json` manifests (35 tools).
+Optional SoundSpectrum integration launches an installed Windows renderer and captures only its window. The optional Lyrion feed copies an already-consumed HQPlayerBridge stream; the optional Roon feed derives visualization PCM from receive-only HQPlayer analysis. Both start explicitly and stay independent from the playback path. See [SoundSpectrum integration](integrations/soundspectrum/README.md).
 
 ## High-Level Flow
 
@@ -156,6 +170,25 @@ Roon matching is not just "is this in TIDAL". The app needs a Roon Browse API it
 - TIDAL verification status
 - Per-request timeout and circuit-breaker behavior through `src/tidalRequestGuard.js`
 
+Shared legacy identity support is split across:
+
+- `src/catalogIdentityNormalization.js` — provider-independent base-title,
+  version, featured-credit, album-family, and exact artist-credit-set parsing
+- `src/exactTrackVerification.js` — TIDAL identity scoring, canonical groups,
+  original-era/compilation/reissue tie-breaking, and strict ambiguity/version
+  outcomes
+- `src/tidalVerifier.js` — artist-first legacy search plans, trusted aliases,
+  era-aware pre-filtering, and bounded `legacySearchDiagnostics`
+- `src/legacyArtistAliases.js` — small curated provider aliases; this is not a
+  fuzzy artist-matching database
+- `src/beatportVersionMatch.js` and `src/beatportClient.js` — shared Beatport
+  candidate ranking, explicit-ID verification, preview lookup, and strict
+  rejection of unsafe version substitutions
+
+TIDAL/Roon remain identity and queue authority. Beatport is enrichment and an
+optional sonic-preview source only. Sonic Review and Recommendation Engine v2
+remain `SHADOW_ONLY`; the resolver changes do not participate in sonic scoring.
+
 TIDAL catalogue metadata is usually better than Roon search for candidate discovery, but Roon remains the playback layer unless the user uses the TIDAL playlist bridge.
 
 ## Metadata Enrichment
@@ -250,6 +283,14 @@ Pool Diagnostics should help answer:
 
 ## Scoring
 
+Recommendation Engine v2 Sonic Review is described in the
+[recommendation guide](docs/recommendation-engine-v2.md) and
+[review rubric](docs/sonic-evaluation/review-rubric.md). The process uses a
+stored versioned sonic profile as an anchor, cosine retrieval as the first
+stage, and a shadow-only usefulness reranker as the second stage. It shares the
+existing TIDAL identity, Roon queue, and Beatport enrichment boundaries rather
+than introducing a second queue or identity authority.
+
 Discovery score is based on prompt fit plus supporting evidence:
 
 - Freshness
@@ -319,7 +360,7 @@ The graph should generate actionable prompts and branch-out seeds, not placehold
 
 ## HQPlayer
 
-`src/hqplayerStatus.js` reads HQPlayer filter/rate, caches it, and avoids frequent polling during playback. Keep this conservative because the user reported audio pops.
+`src/hqplayerStatus.js` reads HQPlayer filter/rate, caches it, and avoids frequent polling during playback. Polling is bounded and cached to avoid unnecessary playback-time work.
 
 Rules to preserve:
 

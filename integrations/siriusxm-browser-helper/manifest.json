@@ -1,0 +1,8 @@
+{
+ "manifest_version":3,"name":"Rabbit Hole SiriusXM metadata","version":"1.0.0",
+ "description":"Send visible On Now text to Rabbit Hole on this computer. No audio or account credentials are read.",
+ "host_permissions":["http://127.0.0.1:3777/*"],
+ "background":{"service_worker":"background.js"},
+ "content_scripts":[{"matches":["https://www.siriusxm.com/player/*"],"js":["reader.js","content.js"],"run_at":"document_idle"}],
+ "action":{"default_title":"Rabbit Hole metadata: waiting for a SiriusXM channel"}
+}

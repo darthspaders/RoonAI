@@ -93,7 +93,50 @@ function createSimilarArtistExpansion({
     return result;
   }
 
+  function facetSeedArtists(options = {}, limit = 12) {
+    const facets = Array.isArray(options.tasteFacets) ? options.tasteFacets : [];
+    const candidates = [];
+    // Take one anchor from each facet before taking second anchors. This keeps
+    // Last.fm from seeing only the dominant global cluster when the library
+    // contains genuinely different musical regions.
+    for (let index = 0; index < 3; index += 1) {
+      for (const facet of facets) {
+        const evidence = Array.isArray(facet?.artistEvidence) ? facet.artistEvidence : [];
+        const artists = evidence.length
+          ? evidence.filter((item) => item?.similaritySafe !== false).map((item) => item?.name).filter(Boolean)
+          : (Array.isArray(facet?.artists) ? facet.artists : []);
+        if (artists[index]) candidates.push(artists[index]);
+      }
+    }
+    return uniqueSeedArtists(candidates, limit);
+  }
+
+  function facetSeedContexts(options = {}) {
+    const contexts = {};
+    for (const facet of Array.isArray(options.tasteFacets) ? options.tasteFacets : []) {
+      const context = cleanSeedText(facet?.name);
+      if (!context) continue;
+      const evidence = Array.isArray(facet?.artistEvidence) && facet.artistEvidence.length
+        ? facet.artistEvidence.map((item) => item?.name)
+        : (Array.isArray(facet?.artists) ? facet.artists : []);
+      for (const artist of evidence) {
+        const key = normalizeSeedText(artist);
+        if (key && !contexts[key]) contexts[key] = context;
+      }
+    }
+    return contexts;
+  }
+
   async function withSimilarArtistSeeds(options = {}, requestedCount = 8) {
+    if (/^(1|true|yes)$/i.test(String(options.skipSimilarArtistExpansion || ""))) {
+      return {
+        ...options,
+        similarArtistExpansion: {
+          enabled: false,
+          reason: "Similar-artist expansion disabled for this independent search pass."
+        }
+      };
+    }
     if (normalizeScoringMode(options) === "pure") {
       return {
         ...options,
@@ -105,16 +148,43 @@ function createSimilarArtistExpansion({
     }
     const status = lastfm.status();
     const profile = buildDiscoveryProfile(options);
-    const tasteAnchorLimit = profile.scoringMode === "taste-guided" && profile.hasExplicitDiscoveryIntent && !(profile.requestedArtists || []).length
-      ? 6
-      : (profile.scoringMode === "explore" ? 4 : 0);
+    const tasteProfileMode = Boolean(
+      profile.tasteProfileLed ||
+      profile.promptIntent?.outsideTasteMode === "taste-profile"
+    );
+    const hardGenreRequest = Boolean(
+      profile.targetGenres?.length &&
+      profile.promptIntent?.genreConstraint === "hard" &&
+      !profile.isOmnivoreDiscovery
+    );
+    const requestedArtists = profile.requestedArtists || [];
+    if (hardGenreRequest && !requestedArtists.length) {
+      return {
+        ...options,
+        similarArtistExpansion: {
+          enabled: false,
+          reason: "Hard genre requests keep learned taste as a soft ranking signal, but do not spend query budget on unverified learned/similar-artist seeds unless an artist was explicitly requested."
+        }
+      };
+    }
+    const tasteAnchorLimit = !hardGenreRequest && tasteProfileMode
+      ? 8
+      : !hardGenreRequest && profile.scoringMode === "taste-guided" && profile.hasExplicitDiscoveryIntent && !requestedArtists.length
+        ? 6
+      : (!hardGenreRequest && profile.scoringMode === "explore" ? 4 : 0);
     const tasteAnchors = tasteAnchorLimit && typeof tasteProfile.getTopArtists === "function"
       ? tasteProfile.getTopArtists(tasteAnchorLimit)
       : [];
     const baseArtists = uniqueSeedArtists([
+      ...(tasteProfileMode ? facetSeedArtists(options, 12) : []),
+      ...(tasteProfileMode && Array.isArray(options.learnedTasteArtists) ? options.learnedTasteArtists : []),
       ...baseArtistsForSimilarExpansion(options, 8),
       ...tasteAnchors
-    ], 8);
+    ], 8).filter((artist) => !hardGenreRequest || requestedArtists.some((requested) => {
+      const artistKey = normalizeSeedText(artist);
+      const requestedKey = normalizeSeedText(requested);
+      return artistKey === requestedKey || artistKey.includes(requestedKey) || requestedKey.includes(artistKey);
+    }));
     if (!baseArtists.length) {
       return {
         ...options,
@@ -139,15 +209,22 @@ function createSimilarArtistExpansion({
     const timeoutMs = Math.max(1200, Math.min(4500, Number(config.lastfm.timeoutMs || 3500)));
     try {
       const related = await withTimeout(
-        rabbitHoleGraph.similarArtistsForSeeds(baseArtists, { config }, {
+        rabbitHoleGraph.similarArtistsForSeeds(baseArtists.slice(0, 4), { config }, {
           seedLimit: 4,
           perSeed: 6,
-          limit
+          limit,
+          // Last.fm can resolve common artist names to a different musical
+          // identity. In taste-profile mode, validate a seed against the
+          // facet it came from before expanding its external neighborhood.
+          validateSeedContext: tasteProfileMode,
+          seedContexts: facetSeedContexts(options),
+          minMatchScore: tasteProfileMode ? 0.25 : 0
         }),
         timeoutMs,
         "Similar artist expansion timed out."
       );
       const similarArtistSeeds = [];
+      const similarArtistEvidence = [];
       const seen = new Set((options.similarArtistSeeds || []).map(normalizeSeedText));
       for (const item of related || []) {
         const name = cleanSeedText(item.name);
@@ -155,6 +232,12 @@ function createSimilarArtistExpansion({
         if (!key || seen.has(key) || genericSeedArtist(name)) continue;
         seen.add(key);
         similarArtistSeeds.push(name);
+        similarArtistEvidence.push({
+          name,
+          matchScore: Number(item.matchScore || 0),
+          seedArtist: cleanSeedText(item.seedArtist),
+          source: cleanSeedText(item.source || "Last.fm similar")
+        });
       }
       return {
         ...options,
@@ -162,12 +245,28 @@ function createSimilarArtistExpansion({
           ...(Array.isArray(options.similarArtistSeeds) ? options.similarArtistSeeds : []),
           ...similarArtistSeeds
         ],
+        // Carry identity-validation failures into the direct catalog lane as
+        // well. Rejecting an ambiguous Last.fm branch is not enough if the
+        // same ambiguous artist is still queried directly by TIDAL.
+        tasteSeedExclusions: [
+          ...(Array.isArray(options.tasteSeedExclusions) ? options.tasteSeedExclusions : []),
+          ...(Array.isArray(related?.seedValidation)
+            ? related.seedValidation.filter((item) => item && item.accepted === false).map((item) => item.artist)
+            : [])
+        ].filter(Boolean),
+        similarArtistEvidence: [
+          ...(Array.isArray(options.similarArtistEvidence) ? options.similarArtistEvidence : []),
+          ...similarArtistEvidence
+        ],
         similarArtistExpansion: {
           enabled: true,
           source: "Last.fm artist.getsimilar",
           seeds: baseArtists.slice(0, 4),
           returned: similarArtistSeeds.length,
-          artists: similarArtistSeeds
+          artists: similarArtistSeeds,
+          skippedSeeds: Array.isArray(related?.seedValidation)
+            ? related.seedValidation.filter((item) => item && item.accepted === false)
+            : []
         }
       };
     } catch (error) {

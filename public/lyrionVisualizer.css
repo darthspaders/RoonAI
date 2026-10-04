@@ -1,0 +1,62 @@
+/* SoundSpectrum shares Lyrion's artwork transparency and decorative backdrop. */
+#lyrionView .lyrionCenterViews {display:none;}
+#lyrionView .lyrionNow--fullscreen .lyrionCenterViews {display:flex;flex-wrap:wrap;gap:8px;margin-left:auto;}
+:is(#lyrionView,#playerView) .lyrionCenterViews button[aria-pressed="true"],:is(#lyrionView,#playerView) .lyrionVisualToolbar button[aria-pressed="true"] {border-color:var(--accent);background:rgba(217,179,255,.09);}
+#lyrionVisualPanel {display:none;width:100%;min-width:0;text-align:left;}
+#lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] #lyrionVisualPanel {display:block;}
+#lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionCover,#lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionArtEmpty {display:none;}
+#lyrionView .lyrionNow[data-center-view="visualizer"][data-visual-active="true"] .lyrionBackdrop {opacity:0;}
+#lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionArtworkLane {max-height:100%;overflow:auto;}
+#lyrionView .lyrionVisualSurface {position:relative;width:100%;height:min(48dvh,calc(100dvh - 400px));min-height:160px;background:transparent;overflow:hidden;}
+:is(#lyrionVisualVideo,#roonVisualVideo),:is(#lyrionVisualCanvas,#roonVisualCanvas) {display:block;width:100%;height:100%;object-fit:contain;opacity:.8;}
+:is(#lyrionVisualVideo,#roonVisualVideo)[hidden],:is(#lyrionVisualCanvas,#roonVisualCanvas)[hidden] {display:none;}
+:is(#lyrionView,#playerView) .lyrionVisualBackdrop {position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;opacity:.26;filter:blur(12px);z-index:-2;pointer-events:none;}
+:is(#lyrionView,#playerView) .lyrionVisualBackdrop[hidden] {display:none;}
+:is(#lyrionVisualEmpty,#roonVisualEmpty) {position:absolute;inset:0;display:grid;justify-items:center;align-content:center;padding:24px;box-sizing:border-box;background:var(--lyrion-surface,var(--panel-2));text-align:center;}
+:is(#lyrionVisualEmpty,#roonVisualEmpty)[hidden] {display:none;}
+:is(#lyrionVisualReason,#roonVisualReason) {max-width:40ch;font-size:14px;line-height:1.6;color:var(--muted);margin:0;}
+:is(#lyrionView,#playerView) .lyrionVisualFields {display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px;}
+:is(#lyrionView,#playerView) .lyrionVisualFields label {display:grid;gap:8px;min-width:0;font-size:12px;color:var(--muted);}
+:is(#lyrionView,#playerView) .lyrionVisualFields select {width:100%;min-width:0;min-height:44px;font-size:13px;}
+:is(#lyrionVisualHint,#roonVisualHint) {font-size:12px;line-height:1.5;margin:12px 0;}
+:is(#lyrionView,#playerView) .lyrionVisualToolbar {display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;}
+:is(#lyrionView,#playerView) .lyrionVisualToolbar button,:is(#lyrionView,#playerView) .lyrionCenterViews button {min-height:44px;padding:8px 16px;font-size:13px;}
+:is(#lyrionView,#playerView) .lyrionVisualToolbar button:focus-visible,:is(#lyrionView,#playerView) .lyrionCenterViews button:focus-visible,:is(#lyrionView,#playerView) .lyrionVisualFields select:focus-visible {outline:2px solid var(--accent);outline-offset:2px;}
+:is(#lyrionVisualStatus,#roonVisualStatus) {min-height:20px;font-size:12px;line-height:1.5;margin:8px 0 0;}
+:is(#lyrionView,#playerView) .lyrionVisualOverlay {position:absolute;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));z-index:2;display:flex;align-items:center;gap:8px;opacity:0;pointer-events:none;transition:opacity var(--motion-fast,120ms) linear;}
+:is(#lyrionView,#playerView) .lyrionVisualOverlay[hidden] {display:none;}
+:is(#lyrionView,#playerView) .lyrionVisualSurface[data-controls-visible="true"] .lyrionVisualOverlay {opacity:1;pointer-events:auto;}
+:is(#lyrionView,#playerView) .lyrionVisualOverlay:has(:focus-visible) {opacity:1;pointer-events:auto;}
+:is(#lyrionView,#playerView) :is(#lyrionVisualExpand,#roonVisualExpand) {display:flex;align-items:center;justify-content:center;gap:8px;flex:0 0 auto;width:auto;min-width:44px;height:44px;min-height:44px;padding:8px 12px;border:1px solid rgba(217,179,255,.22);border-radius:999px;background:rgba(5,3,9,.72);color:var(--text);box-shadow:0 4px 18px rgba(0,0,0,.28);cursor:pointer;}
+:is(#lyrionView,#playerView) :is(#lyrionVisualExpand,#roonVisualExpand) svg {display:block;width:24px;height:24px;pointer-events:none;}
+:is(#lyrionView,#playerView) .lyrionVisualExpandLabel {font-size:12px;font-weight:400;line-height:1.2;white-space:nowrap;}
+:is(#lyrionView,#playerView) :is(#lyrionVisualExpand,#roonVisualExpand):focus-visible {outline:2px solid var(--accent);outline-offset:3px;}
+:is(#lyrionView,#playerView) .lyrionVisualSurface:focus-visible {outline:2px solid var(--accent);outline-offset:-2px;}
+@media(hover:hover) and (pointer:fine){
+  :is(#lyrionView,#playerView) :is(#lyrionVisualExpand,#roonVisualExpand):hover:not(:disabled) {background:rgba(5,3,9,.9);border-color:var(--accent);}
+}
+@media(prefers-reduced-motion:reduce){
+  :is(#lyrionView,#playerView) .lyrionVisualOverlay {transition:none;}
+}
+@media(max-width:700px){
+  #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] {display:flex;flex-direction:column;}
+  #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] > :not(.lyrionBackdrop):not(.lyrionVisualBackdrop) {flex-shrink:0;}
+  #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionArtworkLane {order:1;width:100%;max-height:none;overflow:visible;}
+  #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionStageFooter {order:2;}
+  #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionNowDetails {order:3;}
+  #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] #lyrionDiscoveryRail {order:4;}
+  #lyrionView .lyrionNow--fullscreen .lyrionStageBar {flex-wrap:wrap;}
+  #lyrionView .lyrionNow--fullscreen .lyrionCenterViews {order:3;flex-basis:100%;margin-left:0;}
+  :is(#lyrionView,#playerView) .lyrionCenterViews button {flex:1;}
+  :is(#lyrionView,#playerView) .lyrionVisualFields {grid-template-columns:1fr;}
+  :is(#lyrionView,#playerView) .lyrionVisualFields select {font-size:16px;}
+  #lyrionView .lyrionVisualSurface {height:32dvh;}
+}
+/* Visualizer-only focus keeps the current stream and backdrop inside its player. */
+#lyrionView .lyrionNow--fullscreen.lyrionNow--visualFullscreen[data-center-view="visualizer"] {padding:0;gap:0;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);overflow:hidden;}
+#lyrionView .lyrionNow--visualFullscreen[data-center-view="visualizer"] > :not(.lyrionArtworkLane):not(.lyrionBackdrop):not(.lyrionVisualBackdrop) {display:none;}
+#lyrionView .lyrionNow--visualFullscreen[data-center-view="visualizer"] #lyrionDiscoveryRail {display:none;}
+#lyrionView .lyrionNow--fullscreen.lyrionNow--visualFullscreen[data-center-view="visualizer"] .lyrionArtworkLane {display:block;align-self:stretch;width:100%;height:100%;min-height:0;max-height:none;overflow:hidden;}
+#lyrionView .lyrionNow--visualFullscreen[data-center-view="visualizer"] .lyrionArtworkLane > :not(#lyrionVisualPanel),#lyrionView .lyrionNow--visualFullscreen[data-center-view="visualizer"] #lyrionVisualPanel > :not(.lyrionVisualSurface) {display:none;}
+#lyrionView .lyrionNow--visualFullscreen[data-center-view="visualizer"] #lyrionVisualPanel {width:100%;height:100%;}
+#lyrionView .lyrionNow--fullscreen.lyrionNow--visualFullscreen[data-center-view="visualizer"] .lyrionVisualSurface {position:fixed;inset:0;z-index:1;width:100%;height:100dvh;min-height:0;overflow:hidden;}

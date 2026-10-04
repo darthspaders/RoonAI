@@ -31,13 +31,6 @@ function uniqueValues(values, limit = 50) {
   return result;
 }
 
-function normalizedContains(text, term) {
-  const source = ` ${normalize(text)} `;
-  const needle = normalize(term);
-  if (!needle) return false;
-  return source.includes(` ${needle} `);
-}
-
 function entry(name, family, aliases = []) {
   const canonical = titleToKey(name);
   const familyKey = titleToKey(family || name);
@@ -49,6 +42,9 @@ function entry(name, family, aliases = []) {
 }
 
 const GENRE_ENTRIES = [
+  ...[
+    "EDM"
+  ].map((name) => entry(name, "EDM", ["electronic dance music", "electronic dance"])),
   ...[
     "House",
     "Acid House",
@@ -88,6 +84,14 @@ const GENRE_ENTRIES = [
     "Jackin House": ["jacking house"],
     "Organic Progressive House": ["organic progressive"]
   }[name] || [])),
+  // Beatport/TIDAL commonly expose this as one canonical lane even when
+  // downstream metadata splits it into separate House and Techno tags.
+  ...[
+    "Melodic House & Techno"
+  ].map((name) => entry(name, "Melodic House & Techno", [
+    "melodic house and techno",
+    "melodic house techno"
+  ])),
   ...[
     "Trance",
     "Progressive Trance",
@@ -216,6 +220,21 @@ const GENRE_ENTRIES = [
     "Experimental Bass",
     "UK Bass"
   ].map((name) => entry(name, name === "Trap" ? "Trap" : "Dubstep")),
+  ...[
+    "Rock",
+    "Progressive Rock",
+    "Psychedelic Rock",
+    "Art Rock",
+    "Space Rock",
+    "Alternative Rock",
+    "Indie Rock",
+    "Classic Rock",
+    "Hard Rock",
+    "Soft Rock",
+    "Folk Rock",
+    "Pop Rock",
+    "Post Rock"
+  ].map((name) => entry(name, "Rock")),
   ...[
     "Electro",
     "Electroclash",
@@ -348,6 +367,7 @@ const CHILD_PARENT_REMOVALS = [
   ["progressive house", ["house", "progressive"]],
   ["organic progressive house", ["house", "organic house", "progressive house", "progressive"]],
   ["melodic house", ["house"]],
+  ["melodic house and techno", ["house", "techno", "melodic house", "melodic techno"]],
   ["deep house", ["house"]],
   ["melodic techno", ["techno", "deep techno"]],
   ["progressive melodic techno", ["techno", "melodic techno", "progressive techno", "progressive"]],
@@ -359,18 +379,31 @@ const CHILD_PARENT_REMOVALS = [
   ["drum and bass", ["bass music"]],
   ["liquid dnb", ["drum and bass"]],
   ["atmospheric dnb", ["drum and bass"]],
-  ["progressive dnb", ["drum and bass", "progressive"]]
+  ["progressive dnb", ["drum and bass", "progressive"]],
+  ["progressive rock", ["rock", "progressive"]],
+  ["psychedelic rock", ["rock"]],
+  ["art rock", ["rock"]],
+  ["space rock", ["rock"]],
+  ["alternative rock", ["rock"]],
+  ["indie rock", ["rock"]],
+  ["classic rock", ["rock"]],
+  ["hard rock", ["rock"]],
+  ["soft rock", ["rock"]],
+  ["folk rock", ["rock"]],
+  ["pop rock", ["rock"]],
+  ["post rock", ["rock"]]
 ];
 
 function sortedAliases(entries) {
   const aliases = [];
   for (const item of entries) {
     for (const alias of item.aliases) {
+      const normalized = normalize(alias);
       aliases.push({
         entry: item,
         alias,
-        normalized: normalize(alias),
-        length: normalize(alias).length
+        normalized,
+        length: normalized.length
       });
     }
   }
@@ -382,8 +415,9 @@ function sortedAliases(entries) {
 function findMatches(text, entries) {
   const matches = [];
   const seen = new Set();
+  const source = ` ${normalize(text)} `;
   for (const alias of sortedAliases(entries)) {
-    if (!normalizedContains(text, alias.alias)) continue;
+    if (!source.includes(` ${alias.normalized} `)) continue;
     const key = alias.entry.canonical;
     if (seen.has(key)) continue;
     seen.add(key);

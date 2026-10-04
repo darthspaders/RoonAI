@@ -4,10 +4,224 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   buildDiscoveryProfile,
+  buildSearchQueries,
   candidateIdentityKeys,
+  admissionDiagnosticsFor,
+  genreValuesMatchTarget,
+  requestedLabelMatch,
   rejectReason,
   scoreBreakdownFor
 } = require("../src/discoveryEngine");
+
+test("hard bass discovery filters learned Progressive House seeds before query generation", () => {
+  const options = {
+    genres: "dubstep",
+    mood: "psychedelic, dark",
+    count: 30,
+    llmSearchPlan: {
+      candidateArtists: ["D-Nox", "Beckers", "Maze 28", "Jeremy Olander", "Quivver", "Fluke"],
+      searchQueries: ["D-Nox", "Maze 28 dubstep", "Tape B dubstep"]
+    }
+  };
+  const profile = buildDiscoveryProfile(options);
+  const queries = buildSearchQueries(options, null, profile);
+
+  assert.equal(profile.intent.genreConstraint, "hard");
+  assert.deepEqual(profile.seedArtists, []);
+  assert.deepEqual(profile.filteredPlanArtists, ["D-Nox", "Beckers", "Maze 28", "Jeremy Olander", "Quivver", "Fluke"]);
+  assert.ok(queries.some((query) => /Tape B/i.test(query)));
+  assert.ok(!queries.some((query) => /D-Nox|Beckers|Maze 28|Jeremy Olander|Quivver|Fluke/i.test(query)));
+});
+
+test("rock intent becomes a hard current lane and excludes unrelated electronic taste seeds", () => {
+  const options = {
+    request: "Find new tracks for a Pink Floyd listener: expansive psychedelic progressive rock",
+    genres: "Progressive Rock, Psychedelic Rock, Art Rock",
+    mood: "atmospheric, emotional, expansive",
+    count: 8,
+    llmSearchPlan: {
+      candidateArtists: ["D-Nox", "Beckers", "Pink Floyd", "Camel", "King Crimson"],
+      searchQueries: [
+        "D-Nox psychedelic",
+        "Beckers progressive rock",
+        "Pink Floyd progressive rock",
+        "Camel psychedelic rock"
+      ]
+    }
+  };
+  const profile = buildDiscoveryProfile(options);
+  const queries = buildSearchQueries(options, null, profile);
+
+  assert.equal(profile.intent.genreConstraint, "hard");
+  assert.ok(profile.targetGenres.some((term) => /progressive rock/i.test(term)));
+  assert.ok(profile.seedArtists.includes("Pink Floyd"));
+  assert.ok(!profile.seedArtists.some((artist) => /D-Nox|Beckers/i.test(artist)));
+  assert.ok(profile.filteredPlanArtists.some((artist) => /D-Nox|Beckers/i.test(artist)));
+  assert.ok(queries.some((query) => /Pink Floyd|Camel|King Crimson/i.test(query)));
+  assert.ok(!queries.some((query) => /D-Nox|Beckers/i.test(query)));
+});
+
+test("rock discovery rejects genre-SEO and AI-style catalog uploads", () => {
+  const options = {
+    request: "Find new progressive psychedelic rock",
+    genres: "Progressive Rock, Psychedelic Rock, Art Rock",
+    mood: "atmospheric, expansive"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const examples = [
+    {
+      artist: "Astral Fog",
+      title: "Still Here, Still Warm (70s Psychedelic Progressive Rock)",
+      album: "Still Here, Still Warm (70s Psychedelic Progressive Rock)"
+    },
+    {
+      artist: "Propektus",
+      title: "Paradoks: Bizi Bitiren Döngü | Anadolu Rock & Progressive | Psychedelic Rock",
+      album: "Paradoks"
+    },
+    {
+      artist: "AI Next Wave",
+      title: "Baki H'na (The Moroccan Pink Floyd) (Psychedelic Progressive Moroccan Rock)",
+      album: "Baki H'na"
+    },
+    {
+      artist: "Dionigi",
+      title: "Psychedelic Rock",
+      album: "Psychedelic Rock"
+    },
+    {
+      artist: "The Alfee",
+      title: "Weekend Shuffle (Progressive Rock Arrange)",
+      album: "Weekend Shuffle"
+    },
+    {
+      artist: "Düşsel Yol",
+      title: "Koyma Beni Dara Gule – Emotional Anatolian Psychedelic Rock",
+      album: "Koyma Beni Dara Gule"
+    }
+  ];
+
+  for (const track of examples) {
+    const reason = rejectReason(track, options, profile);
+    assert.match(reason, /SEO|catalogue|genre|style/i, track.title);
+  }
+});
+
+test("hard-lane discovery rejects numbered radio-series compilation discs", () => {
+  const options = {
+    genres: "progressive trance",
+    minDurationMinutes: 7,
+    request: "Find progressive trance tracks, minimum length 7 minutes"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const reason = rejectReason({
+    artist: "John 00 Fleming",
+    title: "Future Sound Of Egypt 550 - A World Beyond (Disc 1)",
+    album: "Future Sound Of Egypt 550 - A World Beyond (Disc 1)",
+    label: "Future Sound of Egypt",
+    durationMs: 4_809_000
+  }, options, profile);
+
+  assert.match(reason, /compilation|catalogue/i);
+});
+
+test("current genre stays the query lane when the requested genre is outside the learned profile", () => {
+  const options = {
+    request: "Discover future house",
+    genres: "future house",
+    scoringMode: "taste-guided",
+    llmSearchPlan: {
+      candidateArtists: ["D-Nox", "Fresh Future House Artist"],
+      searchQueries: [
+        "D-Nox",
+        "D-Nox future house",
+        "Fresh Future House Artist future house",
+        "future house"
+      ]
+    }
+  };
+  const profile = buildDiscoveryProfile(options);
+  const queries = buildSearchQueries(options, null, profile);
+
+  assert.equal(profile.intent.genreConstraint, "hard");
+  assert.equal(profile.intent.tasteInfluence, "lightly");
+  assert.match(profile.intent.tastePolicy, /soft ranking|never a genre whitelist/i);
+  assert.deepEqual(profile.seedArtists, ["Fresh Future House Artist"]);
+  assert.ok(queries.some((query) => /future house/i.test(query)));
+  assert.ok(queries.some((query) => /Fresh Future House Artist/i.test(query)));
+  assert.ok(!queries.some((query) => /D-Nox/i.test(query)));
+});
+
+test("taste remains a bounded ranking signal inside a new explicit genre lane", () => {
+  const options = {
+    request: "Discover future house",
+    genres: "future house",
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const breakdown = scoreBreakdownFor({
+    artist: "Fresh Future House Artist",
+    title: "Neon Current",
+    album: "Neon Current",
+    label: "Fresh Lane",
+    genre: ["Future House"],
+    year: 2026,
+    durationMs: 225000,
+    query: "future house"
+  }, options, {
+    adjustmentFor() {
+      return { value: 12, reasons: ["learned style signal"] };
+    }
+  }, profile);
+
+  assert.ok(breakdown.tasteAdjustment > 0);
+  assert.ok(breakdown.tasteAdjustment <= 4);
+  assert.ok(breakdown.genreMatch > 0);
+});
+
+test("generic Music label does not satisfy a specific requested label", () => {
+  const options = {
+    genres: "dubstep",
+    request: "Find dubstep on 1985 Music",
+    llmSearchPlan: {
+      candidateLabels: ["Music", "1985 Music"]
+    }
+  };
+  const profile = buildDiscoveryProfile(options);
+  const candidate = {
+    artist: "Unknown Artist",
+    title: "Dark Dubstep Track",
+    album: "Dark Dubstep",
+    label: "Music",
+    genre: ["dubstep"],
+    durationMs: 300000,
+    query: "1985 Music dubstep"
+  };
+
+  assert.deepEqual(profile.requestedLabels, ["1985 Music"]);
+  assert.equal(requestedLabelMatch(candidate, profile), "");
+});
+
+test("explicit genre discovery accepts a valid unfamiliar genre without taste-profile evidence", () => {
+  const options = {
+    request: "Discover future house outside my usual taste",
+    genres: "future house",
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const reason = rejectReason({
+    artist: "Fresh Future Artist",
+    title: "Neon Current",
+    album: "Neon Current",
+    label: "Fresh Lane",
+    genre: ["Future House"],
+    year: 2026,
+    durationMs: 225000,
+    query: "future house"
+  }, options, profile);
+
+  assert.equal(reason, "");
+});
 
 test("genre date catalogue filler is rejected as SEO sludge", () => {
   const options = {
@@ -640,4 +854,200 @@ test("requested vibe traits score higher when metadata corroborates them", () =>
   assert.ok(metadata.vibeInference.confidence >= queryOnly.vibeInference.confidence + 40);
   assert.ok(metadata.genreMatch > queryOnly.genreMatch);
   assert.match(metadata.vibeInference.summary, /cosmic|hypnotic|psychedelic/i);
+});
+
+test("catalogue and identity safety gates stay hard while vibe remains soft", () => {
+  const options = {
+    request: "Find progressive trance with a cosmic hypnotic mood",
+    genres: "Progressive Trance",
+    mood: "cosmic, hypnotic",
+    scoringMode: "explore"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const diagnostics = admissionDiagnosticsFor({
+    artist: "Various Artists",
+    title: "Top 100 Best Selling Progressive Psy Trance Tracks",
+    album: "Best Selling Progressive Psy Trance Compilation",
+    label: "Generic Catalogue",
+    genre: ["Progressive Trance"],
+    durationMs: 420000,
+    query: "progressive trance"
+  }, options, profile);
+
+  assert.equal(diagnostics.catalogueQuality.hard, true);
+  assert.equal(diagnostics.catalogueQuality.passed, false);
+  assert.equal(diagnostics.identityCorrectness.hard, true);
+  assert.equal(diagnostics.vibeMoodCompatibility.hard, false);
+  assert.equal(diagnostics.vibeMoodCompatibility.enforcement, "ranking-only");
+
+  const wrongLane = {
+    artist: "D-Nox, Beckers",
+    title: "Skylab (Original Mix)",
+    album: "Skylab",
+    label: "Selador",
+    genre: ["Progressive House"],
+    durationMs: 8 * 60 * 1000,
+    query: "progressive trance"
+  };
+  assert.match(rejectReason(wrongLane, options, profile), /specific child genre|weak requested-genre evidence/i);
+});
+
+test("canonical compound genre metadata can be split across official tags", () => {
+  const options = {
+    request: "Find melodic house and techno",
+    genres: "Melodic House & Techno",
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const track = {
+    artist: "Legitimate Lane Artist",
+    title: "Open Horizon",
+    album: "Open Horizon",
+    label: "Independent Label",
+    genre: ["Melodic House", "Techno"],
+    durationMs: 420000,
+    query: "melodic house and techno"
+  };
+
+  assert.deepEqual(profile.targetGenres, ["melodic house techno"]);
+  assert.equal(genreValuesMatchTarget(track.genre, profile.targetGenres), true);
+  assert.equal(rejectReason(track, options, profile), "");
+  assert.equal(admissionDiagnosticsFor(track, options, profile).genreLaneCompatibility.passed, true);
+});
+
+test("in-lane tracks with incomplete vibe metadata are not rejected", () => {
+  const options = {
+    request: "Find progressive trance with cosmic hypnotic atmosphere",
+    genres: "Progressive Trance",
+    mood: "cosmic, hypnotic",
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const track = {
+    artist: "Fresh Trance Artist",
+    title: "Open Circuit",
+    album: "Open Circuit",
+    label: "Independent Label",
+    genre: ["Progressive Trance"],
+    durationMs: 420000,
+    query: "progressive trance"
+  };
+
+  assert.equal(rejectReason(track, options, profile), "");
+  const vibe = admissionDiagnosticsFor(track, options, profile).vibeMoodCompatibility;
+  assert.equal(vibe.hard, false);
+  assert.equal(vibe.enforcement, "ranking-only");
+});
+
+test("progressive trance scene evidence admits trusted artists and labels without vibe words", () => {
+  const options = {
+    request: "Find progressive trance tracks at least 7 minutes with hypnotic, melodic, driving energy and minimal vocals",
+    genres: "progressive trance",
+    mood: "hypnotic, melodic, driving",
+    minDurationMinutes: 7,
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const track = {
+    artist: "John 00 Fleming",
+    title: "Corruption",
+    album: "Corruption",
+    label: "JOOF Recordings",
+    genre: [],
+    durationMs: 17 * 60 * 1000,
+    query: "John 00 Fleming progressive trance"
+  };
+
+  assert.equal(profile.isProgressiveTranceTarget, true);
+  assert.equal(rejectReason(track, options, profile), "");
+  const diagnostics = admissionDiagnosticsFor(track, options, profile);
+  assert.equal(diagnostics.genreLaneCompatibility.passed, true);
+  assert.equal(diagnostics.artistSceneEvidence.trustedSceneArtist, "John 00 Fleming");
+  assert.equal(diagnostics.labelSceneEvidence.trustedSceneLabel, "JOOF Recordings");
+  assert.equal(diagnostics.vibeMoodCompatibility.hard, false);
+  assert.equal(diagnostics.vibeMoodCompatibility.enforcement, "ranking-only");
+});
+
+test("missing exact progressive trance metadata can be corroborated by trusted remixer and parent genre evidence", () => {
+  const options = {
+    request: "Find progressive trance tracks at least 7 minutes",
+    genres: "progressive trance",
+    minDurationMinutes: 7,
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const track = {
+    artist: "Unknown Artist",
+    title: "Firebird (Gai Barone Remix)",
+    album: "Firebird",
+    label: "Independent Label",
+    genre: ["Trance"],
+    durationMs: 8 * 60 * 1000,
+    query: "Pure Trance progressive trance"
+  };
+
+  assert.equal(rejectReason(track, options, profile), "");
+  const diagnostics = admissionDiagnosticsFor(track, options, profile);
+  assert.equal(diagnostics.childGenreEvidence.exact, false);
+  assert.equal(diagnostics.childGenreEvidence.sceneRemixer, "Gai Barone");
+  assert.deepEqual(diagnostics.parentGenreEvidence.officialMatches, ["trance"]);
+  assert.equal(diagnostics.exactGenreConflictDetected, false);
+  assert.equal(diagnostics.genreLaneCompatibility.passed, true);
+});
+
+test("progressive trance diagnostics preserve exact hard rejection stage and evidence", () => {
+  const options = {
+    request: "Find progressive trance tracks at least 7 minutes",
+    genres: "progressive trance",
+    minDurationMinutes: 7,
+    scoringMode: "taste-guided"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const track = {
+    artist: "Unknown Artist",
+    title: "Short Build",
+    album: "Short Build",
+    label: "Unknown Label",
+    genre: ["Trance"],
+    durationMs: 6 * 60 * 1000,
+    query: "progressive trance"
+  };
+  const reason = rejectReason(track, options, profile);
+  const diagnostics = admissionDiagnosticsFor(track, options, profile, {
+    scoreBeforeRejection: 44,
+    hardFailReason: reason
+  });
+
+  assert.match(reason, /hard minimum/i);
+  assert.equal(diagnostics.candidate.artist, "Unknown Artist");
+  assert.equal(diagnostics.normalizedRequestedGenre[0], "progressive trance");
+  assert.deepEqual(diagnostics.candidateGenreEvidence.official, ["Trance"]);
+  assert.equal(diagnostics.durationResult.status, "failed");
+  assert.equal(diagnostics.rejectionStage, "duration-constraints");
+  assert.equal(diagnostics.hardFailReason, reason);
+  assert.equal(diagnostics.hardFail, true);
+  assert.equal(diagnostics.scoreBeforeRejection, 44);
+});
+
+test("known wrong-artist drift remains rejected", () => {
+  const options = {
+    request: "Find tracks by Pink Floyd",
+    genres: "Progressive Rock",
+    scoringMode: "pure"
+  };
+  const profile = buildDiscoveryProfile(options);
+  const track = {
+    artist: "Camel",
+    title: "The Snow Goose",
+    album: "The Snow Goose",
+    label: "Decca",
+    genre: ["Progressive Rock"],
+    durationMs: 420000,
+    query: "Pink Floyd progressive rock"
+  };
+
+  assert.match(rejectReason(track, options, profile), /Pink Floyd.*Camel/i);
+  const identity = admissionDiagnosticsFor(track, options, profile).identityCorrectness;
+  assert.equal(identity.hard, true);
+  assert.equal(identity.passed, false);
 });

@@ -162,7 +162,7 @@ function scoringModeKey(options = {}) {
 function hasExplicitGenre(options = {}) {
   const text = normalize(`${options.genres || ""} ${options.request || ""}`);
   if (cleanText(options.genres)) return true;
-  return /\b(?:house|techno|trance|psytrance|psy trance|ambient|downtempo|chillout|breaks|breakbeat|dubstep|bass|drum and bass|dnb|electro|disco|synthwave|electronica|idm|jungle|garage|country|folk|rock|pop|indie|alternative|soul|r and b|rnb|jazz|classical|metal|hip hop|rap|singer songwriter)\b/.test(text);
+  return /\b(?:edm|electronic dance music|electronic music|dance music|house|techno|trance|psytrance|psy trance|ambient|downtempo|chillout|breaks|breakbeat|dubstep|bass|drum and bass|dnb|electro|disco|synthwave|electronica|idm|jungle|garage|country|folk|rock|pop|indie|alternative|soul|r and b|rnb|jazz|classical|metal|hip hop|rap|singer songwriter)\b/.test(text);
 }
 
 function hasEraIntent(options = {}) {
@@ -170,7 +170,11 @@ function hasEraIntent(options = {}) {
 }
 
 function hasSimilarityIntent(text = "") {
-  return /\b(?:like|similar to|sounds like|around|based on|in the vein of|for fans of|more from|more tracks by|discover from artist)\b/.test(normalize(text));
+  // “radio-like” and similar descriptive compounds are not a request for
+  // track similarity. Strip that adjective before checking the standalone
+  // similarity language so standby's taste-profile prompt stays cluster-led.
+  const normalized = normalize(text).replace(/\bradio like\b/g, " ");
+  return /\b(?:like|similar to|sounds like|around|based on|in the vein of|for fans of|more from|more tracks by|discover from artist)\b/.test(normalized);
 }
 
 function hasOutsideTasteLanguage(text = "") {
@@ -184,12 +188,23 @@ function hasOmnivoreOpenDiscoveryLanguage(text = "") {
     /\b(?:surprise me|anything good|good music|great music|best music|best tracks|hidden gems|wide net|open discovery|omnivore)\b/.test(normalized);
 }
 
+function hasBroadElectronicLanguage(text = "") {
+  const normalized = normalize(text);
+  return /\b(?:any|all|open|broad|various|different|multiple)\b.{0,32}\b(?:edm|electronic dance music|electronic music|dance music)\b/.test(normalized) ||
+    /\b(?:edm|electronic dance music|electronic music|dance music)\b.{0,20}\b(?:lane|lanes|genre|genres|style|styles)\b/.test(normalized);
+}
+
 function hasExplicitThemeRequest(text = "") {
   return /\b(?:about|theme|story|stories|lyric|lyrics|song about|songs about|track about|tracks about)\b/.test(normalize(text));
 }
 
 function hasStrictTasteLanguage(text = "") {
   return /\b(?:only my taste|strict taste|stay in my taste|known taste only|similar mode|more of what i like|close to my taste)\b/.test(normalize(text));
+}
+
+function hasTasteProfileLanguage(text = "") {
+  return /\b(?:use|match|based on|from)\b.{0,24}\b(?:my|current|known)\b.{0,24}\b(?:taste|profile|preferences?)\b/.test(normalize(text)) ||
+    /\b(?:my|current|known)\b.{0,24}\b(?:taste|profile|preferences?)\b/.test(normalize(text));
 }
 
 function normalizeBoolean(value) {
@@ -248,7 +263,9 @@ function routePromptIntent(options = {}) {
   const request = cleanText(options.request);
   const text = cleanText(`${options.request || ""} ${options.reference || ""}`);
   const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
-  const suppressPlanConcepts = hasOmnivoreOpenDiscoveryLanguage(text) && !hasExplicitThemeRequest(text);
+  const genreContext = cleanText(`${text} ${options.genres || ""}`);
+  const explicitBroadElectronicOption = /^(?:edm|electronic|electronic music|electronic dance music|dance music)$/i.test(cleanText(options.genres));
+  const suppressPlanConcepts = (hasOmnivoreOpenDiscoveryLanguage(text) || hasBroadElectronicLanguage(genreContext) || explicitBroadElectronicOption) && !hasExplicitThemeRequest(text);
   const planThemeTerms = suppressPlanConcepts ? [] : uniqueValues(Array.isArray(plan.themeTerms) ? plan.themeTerms : [], 8);
   const planActivityTerms = suppressPlanConcepts ? [] : uniqueValues(Array.isArray(plan.activityTerms) ? plan.activityTerms : [], 6);
   const themeHits = [
@@ -279,6 +296,12 @@ function routePromptIntent(options = {}) {
   const similarityIntent = hasSimilarityIntent(text);
   const outsideLanguage = hasOutsideTasteLanguage(text);
   const strictTaste = hasStrictTasteLanguage(text);
+  const tasteProfileRequest = hasTasteProfileLanguage(text);
+  // “Use my taste” is a request to make the learned profile the primary
+  // discovery compass. It is still a soft preference—not a genre whitelist—
+  // and explicit branch-out language continues to open the lane.
+  const tasteProfileLed = tasteProfileRequest && !outsideLanguage && !explicitGenre && !similarityIntent;
+  const planAllowsOutsideTaste = normalizeBoolean(plan.allowOutsideTaste) && !tasteProfileLed;
   const planRoute = normalize(plan.intentRoute);
   const planRouteAllowed = !suppressPlanConcepts && ["theme", "activity", "genre", "era", "mood", "artist", "similarity", "open"].includes(planRoute);
   const route = themeHits.length
@@ -295,19 +318,26 @@ function routePromptIntent(options = {}) {
             ? "era"
             : (explicitMood ? "mood" : (request ? "open" : "open")))))));
 
+  const explicitTastePreference = normalize(options.tasteInfluence || options.taste_influence);
   const allowOutsideTaste = scoringMode === "pure" ||
     scoringMode === "explore" ||
-    normalizeBoolean(plan.allowOutsideTaste) ||
+    planAllowsOutsideTaste ||
     outsideLanguage ||
-    ((route === "theme" || route === "activity" || route === "open") && !strictTaste && scoringMode !== "similar");
+    (explicitGenre && !strictTaste) ||
+    ((route === "theme" || route === "activity" || route === "open") && !strictTaste && scoringMode !== "similar" && !tasteProfileLed);
   const planTasteInfluence = ["strongly", "lightly", "not at all"].includes(normalize(plan.tasteInfluence))
     ? normalize(plan.tasteInfluence)
     : "";
+  const requestedTasteInfluence = ["strongly", "lightly", "not at all"].includes(explicitTastePreference)
+    ? explicitTastePreference
+    : planTasteInfluence;
   const tasteInfluence = scoringMode === "pure"
     ? "not at all"
-    : (scoringMode === "similar" || strictTaste
+    : (scoringMode === "similar" || strictTaste || tasteProfileLed
       ? "strongly"
-      : (planTasteInfluence || "lightly"));
+      : (requestedTasteInfluence === "not at all" && explicitGenre
+        ? "lightly"
+        : (requestedTasteInfluence || "lightly")));
   const inferredVibes = uniqueValues([
     ...themeHits.flatMap((hit) => hit.vibes),
     ...activityHits.flatMap((hit) => hit.vibes)
@@ -343,7 +373,21 @@ function routePromptIntent(options = {}) {
     primarySearchTerm,
     allowOutsideTaste,
     tasteInfluence,
-    genreConstraint: explicitGenre ? (route === "theme" || route === "activity" ? "soft" : "hard") : "none",
+    tastePolicy: scoringMode === "pure"
+      ? "Taste weighting is disabled only for Pure Search."
+      : (explicitGenre
+        ? "Current requested genre is the hard search lane; saved taste is a soft ranking/style preference and never a genre whitelist."
+      : (tasteProfileLed
+        ? "The current taste profile is the primary cluster guide; unfamiliar music can still enter when it earns strong evidence."
+        : "Saved taste is a soft preference; prompt evidence can lead outside the known profile.")),
+    outsideTasteMode: outsideLanguage
+      ? "explicit"
+      : (explicitGenre ? "genre-lane" : (tasteProfileLed ? "taste-profile" : (allowOutsideTaste ? "open-discovery" : "none"))),
+    // A dedicated genres field is an explicit lane constraint even when the
+    // natural-language request also contains an activity or theme. This is a
+    // search boundary, not a claim that the user's taste profile is limited
+    // to that genre or that unfamiliar genres should be rejected.
+    genreConstraint: explicitGenre ? (cleanText(options.genres) ? "hard" : (route === "theme" || route === "activity" ? "soft" : "hard")) : "none",
     themeSource: themeHits.length ? "explicit" : "not specified",
     activitySource: activityHits.length ? "explicit" : "not specified",
     verificationMethods: route === "theme"
@@ -353,7 +397,7 @@ function routePromptIntent(options = {}) {
         : ["genre/label/artist metadata", "TIDAL/Roon verification"]),
     notes: allowOutsideTaste
       ? "Prompt can approve outside known taste when the catalogue evidence matches."
-      : "Learned taste remains a strong preference for this request."
+      : "Learned taste remains the primary preference for this request, without becoming a hard whitelist."
   };
 }
 
@@ -361,5 +405,6 @@ module.exports = {
   routePromptIntent,
   routeLabel,
   cleanText,
-  normalize
+  normalize,
+  hasTasteProfileLanguage
 };

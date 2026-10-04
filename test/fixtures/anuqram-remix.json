@@ -1,0 +1,23 @@
+{
+  "tidal": {
+    "id": "502471838",
+    "artist": "Julian Nates",
+    "title": "A Better Place (ANUQRAM Remix)",
+    "album": "A Better Place",
+    "durationMs": 472000,
+    "isrc": "US83Z2612357",
+    "label": "Mango Alley",
+    "releaseDate": "2026-05-07"
+  },
+  "beatport": {
+    "id": "24501011",
+    "artist": "Julian Nates",
+    "title": "A Better Place",
+    "mixName": "ANUQRAM Remix",
+    "album": "A Better Place",
+    "durationMs": 472200,
+    "isrc": "US83Z2612357",
+    "label": "Mango Alley",
+    "releaseDate": "2026-05-07"
+  }
+}

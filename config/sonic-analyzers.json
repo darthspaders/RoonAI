@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "preprocessing": "ffmpeg-mono-24000-v1",
+  "analyzers": [
+    { "id": "effnet-control", "repo": "discogs-effnet", "revision": "bc9af341852dfd8e84b75c4b2504e1b133ca145261149edc112d7d8f1594d355", "kind": "embedding", "runtime": "effnet", "dimensions": 1280, "sampleRate": 16000, "pooling": "patch-mean-l2-v1", "precision": "float32", "windowSeconds": 30, "policy": "center", "maxWindows": 1 },
+    { "id": "mert-fullsong", "repo": "m-a-p/MERT-v2-FullSong", "revision": "d8ba1c745e733b3908ce6ad16ebeb17ac7600a42", "kind": "embedding", "runtime": "mert2", "dimensions": 1024, "sampleRate": 24000, "layer": 24, "pooling": "masked-mean-l2-duration-mean-v1", "precision": "float32", "windowSeconds": 30, "policy": "center", "maxWindows": 1 },
+    { "id": "mert-30s", "repo": "m-a-p/MERT-v2-30s", "revision": "5d9a407112c28ff8821fc17a9858406f4a7f85ad", "kind": "embedding", "runtime": "mert2", "dimensions": 1024, "sampleRate": 24000, "layer": 24, "pooling": "masked-mean-l2-duration-mean-v1", "precision": "float32", "windowSeconds": 30, "policy": "center", "maxWindows": 1 },
+    { "id": "mert-330m", "repo": "m-a-p/MERT-v1-330M", "revision": "5240c2708a5acaee1007f43fb9735c7dcd0b78c9", "kind": "embedding", "runtime": "mert1", "dimensions": 1024, "sampleRate": 24000, "layer": 24, "pooling": "masked-mean-l2-duration-mean-v1", "precision": "float32", "windowSeconds": 30, "chunkSeconds": 5, "policy": "center", "maxWindows": 1 },
+    { "id": "emotion", "repo": "huyleit/mert-v1-95m-music-emotion-int8", "revision": "080701a30fa9021ccacd2a7bddb9d61f58c48ead", "kind": "emotion", "runtime": "mert2", "sampleRate": 24000, "precision": "int8", "windowSeconds": 15, "policy": "spread", "maxWindows": 5 },
+    { "id": "sheetsage", "repo": "m-a-p/SheetSage2", "revision": "55bfe14e32d8b663629b3a86b0f3285c2ca5da0b", "parentRevision": "d8ba1c745e733b3908ce6ad16ebeb17ac7600a42", "kind": "structure", "runtime": "sheetsage", "sampleRate": 24000, "precision": "float32", "windowSeconds": 30, "policy": "center", "maxWindows": 1 },
+    { "id": "mert-fullsong-long", "repo": "m-a-p/MERT-v2-FullSong", "revision": "d8ba1c745e733b3908ce6ad16ebeb17ac7600a42", "kind": "embedding", "runtime": "mert2", "dimensions": 1024, "sampleRate": 24000, "layer": 24, "pooling": "masked-mean-l2-duration-mean-v1", "precision": "float32", "windowSeconds": 120, "overlapSeconds": 30, "policy": "overlap", "maxWindows": 8 }
+  ]
+}
