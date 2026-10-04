@@ -103,7 +103,21 @@ test("runAutoBroadenSearches executes passes and merges diagnostics", async () =
         tracks: [{ id: "new", artist: "B", title: "Two" }],
         alternates: [{ id: "alt", artist: "C", title: "Three" }],
         discarded: [{ id: "bad" }],
-        verification: { generated: 3, queryYield: { recordCount: 1, attempted: 1, returned: 3 } }
+        verification: {
+          generated: 3,
+          queryYield: { recordCount: 1, attempted: 1, returned: 3 },
+          poolDiagnostics: {
+            candidateAccumulation: {
+              rawCandidates: 3,
+              uniqueCandidatesBeforeSelection: 1,
+              validDurationCandidatesBeforeSelection: 1,
+              durationCandidates: [{ key: "new", artist: "B", title: "Two" }]
+            },
+            acceptedQueryFamilies: [{ query: "branch", lane: "yield-retry", source: "retry", accepted: 1 }],
+            searchStops: [{ query: "branch", reason: "page-available" }],
+            deepCatalog: { enabled: true, triggered: true, attempted: 1, returned: 2, accepted: 1 }
+          }
+        }
       };
     }
   });
@@ -124,6 +138,39 @@ test("runAutoBroadenSearches executes passes and merges diagnostics", async () =
   assert.equal(result.verification.autoBroaden.attempted, 1);
   assert.equal(result.verification.autoBroaden.added, 2);
   assert.equal(result.verification.autoBroaden.yieldAware, true);
+  assert.equal(result.verification.poolDiagnostics.candidateAccumulation.rawCandidates, 3);
+  assert.equal(result.verification.poolDiagnostics.candidateAccumulation.uniqueCandidatesBeforeSelection, 3);
+  assert.equal(result.verification.poolDiagnostics.candidateAccumulation.validDurationCandidatesBeforeSelection, 1);
+  assert.equal(result.verification.poolDiagnostics.candidateAccumulation.durationCandidates.length, 1);
+  assert.equal(result.verification.poolDiagnostics.deepCatalog.attempted, 1);
+  assert.equal(result.verification.poolDiagnostics.searchStops.length, 1);
+  assert.equal(result.verification.poolDiagnostics.acceptedQueryFamilies.length, 1);
+});
+
+test("hard-duration genre searches stop generic broadening once the requested pool is filled", async () => {
+  let calls = 0;
+  const o = orchestration({
+    hardDurationConstraintFor: () => ({ minimumMs: 420000 }),
+    autoBroadenSearchPasses: () => [
+      { lane: "yield-retry", label: "Yield retry", targetPool: 110, options: {} },
+      { lane: "branch-out", label: "Branch out", targetPool: 110, options: {} }
+    ],
+    discoverTracks: async () => {
+      calls += 1;
+      return { tracks: [], alternates: [], discarded: [], verification: {} };
+    }
+  });
+
+  const result = await o.runAutoBroadenSearches({
+    tracks: Array.from({ length: 10 }, (_, index) => ({ id: String(index), artist: `Artist ${index}`, title: `Track ${index}` })),
+    alternates: [],
+    discarded: [],
+    verification: {}
+  }, {}, { targetGenres: ["progressive trance"] }, 10, null, { discoveryTimeoutMs: 45000 });
+
+  assert.equal(calls, 0);
+  assert.equal(result.verification.autoBroaden.durationConstrainedGenreSearch, true);
+  assert.equal(result.verification.autoBroaden.targetPool, 20);
 });
 
 test("rebalanceDiscoveryResult updates lane quota diagnostics from selected pool", () => {
@@ -142,4 +189,42 @@ test("rebalanceDiscoveryResult updates lane quota diagnostics from selected pool
   assert.equal(result.verification.poolDiagnostics.artistSpread.selectedArtists, 2);
   assert.equal(result.verification.poolDiagnostics.artistSpread.retainedArtists, 3);
   assert.ok(result.verification.poolDiagnostics.notes.some((note) => /Final pool rebalanced/.test(note)));
+});
+
+test("rebalanceDiscoveryResult runs the guarded v2 reranker before lane selection", () => {
+  const calls = [];
+  const o = orchestration({
+    recommendationV2Reranker: (pool, context) => {
+      calls.push({ pool, context });
+      return {
+        candidates: pool.map(track => ({ ...track, score: Number(track.score || 0) + 10 })),
+        diagnostics: {
+          enabled: true,
+          mode: "shadow",
+          applied: false,
+          candidateCount: pool.length,
+          scoredCount: 1,
+          coverage: 0.5,
+          model: "discogs-effnet",
+          modelVersion: "1"
+        }
+      };
+    },
+    selectDiscoveryLaneCandidates: (pool, requestedCount) => ({
+      tracks: pool.slice().sort((left, right) => right.score - left.score).slice(0, requestedCount),
+      alternates: [],
+      quota: { selected: {}, available: {}, targets: {} }
+    })
+  });
+  const result = o.rebalanceDiscoveryResult({
+    tracks: [{ id: "1", artist: "A", title: "One", score: 10 }],
+    alternates: [{ id: "2", artist: "B", title: "Two", score: 30 }],
+    verification: { poolDiagnostics: { notes: [] } }
+  }, { genres: "Dubstep" }, { targetGenres: ["dubstep"] }, 1);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].context.requestedCount, 1);
+  assert.equal(result.tracks[0].id, "2");
+  assert.equal(result.verification.recommendationV2.model, "discogs-effnet");
+  assert.ok(result.verification.poolDiagnostics.notes.some(note => /Recommendation Engine v2 shadow/.test(note)));
 });

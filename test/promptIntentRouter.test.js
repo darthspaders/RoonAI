@@ -68,6 +68,27 @@ test("explicit genre prompt still routes as genre-first", () => {
   assert.equal(profile.intent.searchRoute, "Genre First");
   assert.equal(profile.targetGenres.includes("progressive house"), true);
   assert.equal(profile.intent.progressiveBias, "relevant to prompt");
+  assert.match(profile.intent.tastePolicy, /soft ranking|soft preference/i);
+  assert.match(profile.intent.outsideTaste, /allowed/i);
+});
+
+test("a new explicit genre is not limited by the learned genre profile", () => {
+  const profile = buildDiscoveryProfile({
+    request: "discover future house",
+    genres: "future house",
+    scoringMode: "taste-guided",
+    llmSearchPlan: {
+      tasteInfluence: "not at all",
+      seedArtists: ["Progressive Taste Artist"],
+      candidateArtists: ["Fresh Future House Artist"]
+    }
+  });
+
+  assert.equal(profile.targetGenres.includes("future house"), true);
+  assert.equal(profile.intent.tasteInfluence, "lightly");
+  assert.match(profile.intent.tastePolicy, /never a genre whitelist/i);
+  assert.match(profile.intent.outsideTaste, /allowed/i);
+  assert.deepEqual(profile.seedArtists, ["Fresh Future House Artist"]);
 });
 
 test("outside-taste language keeps the genre but relaxes learned taste", () => {
@@ -80,6 +101,40 @@ test("outside-taste language keeps the genre but relaxes learned taste", () => {
   assert.equal(profile.targetGenres.includes("ambient"), true);
   assert.equal(profile.intent.tasteInfluence, "lightly");
   assert.match(profile.intent.outsideTaste, /allowed/i);
+});
+
+test("use-my-taste prompts stay cluster-led without turning taste into a hard whitelist", () => {
+  const intent = routePromptIntent({
+    request: "find tracks that match my current taste profile, but go deeper and avoid repeats",
+    scoringMode: "taste-guided"
+  });
+
+  assert.equal(intent.allowOutsideTaste, false);
+  assert.equal(intent.outsideTasteMode, "taste-profile");
+  assert.equal(intent.tasteInfluence, "strongly");
+  assert.match(intent.tastePolicy, /primary cluster guide/i);
+  assert.match(intent.notes, /without becoming a hard whitelist/i);
+});
+
+test("radio-like standby wording does not become similarity intent", () => {
+  const intent = routePromptIntent({
+    request: "find tracks that fit my current Rabbit Hole taste profile; prefer radio-like sources and non-obvious discoveries",
+    scoringMode: "taste-guided"
+  });
+
+  assert.equal(intent.outsideTasteMode, "taste-profile");
+  assert.equal(intent.tasteInfluence, "strongly");
+  assert.notEqual(intent.route, "similarity");
+});
+
+test("explicit branch-out language still opens taste-led discovery", () => {
+  const intent = routePromptIntent({
+    request: "use my taste profile but branch out into fresh artists",
+    scoringMode: "taste-guided"
+  });
+
+  assert.equal(intent.allowOutsideTaste, true);
+  assert.equal(intent.outsideTasteMode, "explicit");
 });
 
 test("router can consume local model theme hints as soft prompt intent", () => {

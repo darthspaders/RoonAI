@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#08070f">
+    <title>Rabbit Hole Ratings Remote</title>
+    <link rel="stylesheet" href="/remote.css?v=20260912-feedback-vocab-01">
+  </head>
+  <body class="rabbitRemotePage">
+    <main class="rabbitRemoteShell">
+      <section class="rabbitRemoteStage" aria-live="polite">
+        <div id="remoteBadge" class="rabbitRemoteBadge">Unscored now playing</div>
+
+        <figure class="rabbitRemoteArtworkFrame">
+          <img id="remoteArtwork" class="rabbitRemoteArtwork" alt="" hidden>
+          <div id="remoteArtworkEmpty" class="rabbitRemoteArtworkEmpty">No active track</div>
+        </figure>
+
+        <section class="rabbitRemoteTrack" aria-labelledby="remoteTitle">
+          <h1 id="remoteTitle">No active zone</h1>
+          <p id="remoteArtist">Rabbit Hole is waiting for Roon.</p>
+          <p id="remoteAlbum" class="rabbitRemoteAlbum"></p>
+        </section>
+
+        <dl id="remoteMetadata" class="rabbitRemoteMetadata" aria-label="Track metadata"></dl>
+
+        <section class="rabbitRemotePlayback" aria-label="Playback controls">
+          <div class="rabbitRemoteTransport">
+            <button type="button" data-remote-control="previous" aria-label="Previous track">Prev</button>
+            <button type="button" class="rabbitRemotePlay" data-remote-control="playpause" aria-label="Play or pause">Play / Pause</button>
+            <button type="button" data-remote-control="next" aria-label="Next track">Next</button>
+          </div>
+          <div class="rabbitRemoteSeek">
+            <div class="rabbitRemoteSeekMeta">
+              <span id="remotePlayState">Stopped</span>
+              <span id="remoteSeekTimes">0:00 / 0:00</span>
+            </div>
+            <input id="remoteSeek" type="range" min="0" max="0" value="0" disabled aria-label="Seek position">
+          </div>
+        </section>
+      </section>
+
+      <section class="rabbitRemoteRatingDock" aria-label="Track rating">
+        <button id="remoteRatingTrigger" class="rabbitRemoteRatingTrigger" type="button" aria-haspopup="dialog" aria-controls="remoteRatingSheet" aria-expanded="false" disabled>
+          <span id="remoteRatingTriggerText">Rate this track</span>
+          <span class="rabbitRemoteChevron" aria-hidden="true">⌄</span>
+        </button>
+        <p id="remoteFeedbackStatus" class="rabbitRemoteFeedbackStatus" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <section id="remoteRatingSheet" class="rabbitRemoteRatingSheet" hidden aria-labelledby="remoteRatingHeading">
+      <button id="remoteRatingBackdrop" class="rabbitRemoteRatingBackdrop" type="button" aria-label="Close rating choices"></button>
+      <div class="rabbitRemoteRatingPanel" role="dialog" aria-modal="true">
+        <div class="rabbitRemoteRatingPanelHeader">
+          <div>
+            <p class="rabbitRemoteKicker">Rabbit Hole</p>
+            <h2 id="remoteRatingHeading">Rate this track</h2>
+          </div>
+          <button id="remoteRatingClose" class="rabbitRemoteClose" type="button" aria-label="Close rating choices">×</button>
+        </div>
+        <div id="remoteRatingOptions" class="rabbitRemoteRatingOptions"></div>
+      </div>
+    </section>
+
+    <script src="/remote.js?v=20261004-status-live-1" defer></script>
+  </body>
+</html>

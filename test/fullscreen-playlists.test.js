@@ -117,13 +117,16 @@ test('fullscreen source quality shows Beatport genre and subgenre explicitly', (
     }
   });
 
-  assert.match(html, /Genre: Progressive House/);
-  assert.match(html, /Subgenre: Melodic House &amp; Techno/);
-  assert.match(html, /Released: 2026-03-14 • Anjunadeep/);
+  assert.match(html, /<span class="sourceLabel">Genre<\/span><span class="sourceValue">Progressive House<\/span>/);
+  assert.match(html, /<span class="sourceLabel">Subgenre<\/span><span class="sourceValue">Melodic House &amp; Techno<\/span>/);
+  assert.match(html, /<span class="sourceLabel">Released<\/span><span class="sourceValue">2026-03-14<\/span>/);
+  assert.match(html, /<span class="sourceLabel">Label<\/span><span class="sourceValue">Anjunadeep<\/span>/);
   assert.match(html, /123 BPM/);
   assert.match(html, /Gb Major/);
   assert.match(html, /2B/);
-  assert.match(html, /Beatport #23107095/);
-  assert.match(html, /Release #123456/);
-  assert.doesNotMatch(html, /sourceTagBadge/);
+  assert.match(html, /sourceTechnical/);
+  assert.match(html, /<span class="sourceLabel">Beatport Track ID<\/span><span class="sourceValue">#23107095<\/span>/);
+  assert.match(html, /<span class="sourceLabel">Release ID<\/span><span class="sourceValue">#123456<\/span>/);
+  assert.match(html, /<span class="sourceTagBadge">Progressive House<\/span>/);
+  assert.match(html, /<span class="sourceTagBadge">Melodic House &amp; Techno<\/span>/);
 });

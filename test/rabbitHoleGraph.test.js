@@ -92,6 +92,46 @@ test("similar artist expansion uses Last.fm artist similarity as controlled craw
 
     assert.deepEqual(artists.map((artist) => artist.name), ["Related One", "Related Two"]);
     assert.equal(artists[0].source, "Last.fm similar");
+    assert.equal(artists[0].matchScore, 0.98);
+  } finally {
+    global.fetch = previousFetch;
+  }
+});
+
+test("similar artist expansion skips an external seed whose Last.fm identity conflicts with its learned facet", async () => {
+  const previousFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url) => {
+    const parsed = new URL(String(url));
+    calls.push(parsed.searchParams.get("method"));
+    if (parsed.searchParams.get("method") === "artist.getinfo") {
+      return {
+        ok: true,
+        json: async () => ({ artist: { tags: { tag: [{ name: "classical" }, { name: "renaissance" }, { name: "trance" }] } } })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ similarartists: { artist: [{ name: "Wrong Branch", match: "0.99" }] } })
+    };
+  };
+
+  try {
+    const graphStore = new RabbitHoleGraph({ file: tempCacheFile() });
+    const artists = await graphStore.similarArtistsForSeeds(["John Johnson"], {
+      config: { rabbitHole: { lastfmApiKey: "test-key" } }
+    }, {
+      seedLimit: 1,
+      perSeed: 3,
+      limit: 3,
+      validateSeedContext: true,
+      seedContexts: { "john johnson": "Progressive House" }
+    });
+
+    assert.equal(artists.length, 0);
+    assert.deepEqual(calls, ["artist.getinfo"]);
+    assert.equal(artists.seedValidation[0].artist, "John Johnson");
+    assert.equal(artists.seedValidation[0].accepted, false);
   } finally {
     global.fetch = previousFetch;
   }

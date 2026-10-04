@@ -178,8 +178,12 @@ function siblingCommand(command, replacementArg) {
 }
 
 function defaultPtyWorker() {
-  const worker = "C:\\Users\\spade\\Documents\\Codex\\RoonPresence\\src\\hqplayerPtyWorker.js";
-  return fs.existsSync(worker) ? worker : "";
+  const candidates = [
+    process.env.HQPLAYER_PTY_WORKER,
+    path.resolve(__dirname, "..", "..", "RoonPresence", "src", "hqplayerPtyWorker.js"),
+    path.resolve(__dirname, "..", "..", "..", "RoonPresence", "src", "hqplayerPtyWorker.js")
+  ];
+  return candidates.find(worker => worker && fs.existsSync(worker)) || "";
 }
 
 function runPtyCommand(command, timeoutMs = 4000, workerPath = defaultPtyWorker()) {

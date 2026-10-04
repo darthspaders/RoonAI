@@ -18,6 +18,7 @@ function policy(overrides = {}) {
       ...(overrides.config || {})
     },
     minimumScoreFor: (options = {}) => Number(options.minimumScore || 0),
+    hardDurationConstraintFor: overrides.hardDurationConstraintFor,
     normalizeMatchText,
     openAiCompatibleProviders: new Set(["openai-compatible", "openai_compatible", "lmstudio", "llamacpp"]),
     yearRangeUtil
@@ -30,6 +31,19 @@ test("normal search budgets preserve short discovery and queue timeouts", () => 
     modelTimeoutMs: 30000,
     discoveryTimeoutMs: 12000,
     roonQueueTimeoutMs: 10000
+  });
+});
+
+test("genre searches with an explicit hard duration get a catalog-sized crawl budget", () => {
+  const p = policy({
+    hardDurationConstraintFor: () => ({ minimumMs: 420000, source: "hard duration language" })
+  });
+
+  assert.deepEqual(p.strictSearchBudgets({ genreProfile: "progressive trance" }, 8), {
+    roonFirstTimeoutMs: 16000,
+    modelTimeoutMs: 25000,
+    discoveryTimeoutMs: 50000,
+    roonQueueTimeoutMs: 24000
   });
 });
 

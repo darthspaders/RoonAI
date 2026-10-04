@@ -3,15 +3,19 @@
 const fs = require("fs");
 const path = require("path");
 const { fetchWithTimeout } = require("./tidalRequestGuard");
+const { baseTitle, rankBeatportCandidates } = require("./beatportVersionMatch");
 
 const DEFAULT_BASE_URL = "https://api.beatport.com/v4";
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_MAX_RESULTS = 8;
+const DEFAULT_MAX_SEARCH_PAGES = 3;
+const DEFAULT_MAX_SEARCH_QUERIES = 3;
 const DEFAULT_REQUESTS_PER_SECOND = 2;
 const DEFAULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_MAX_CACHE_ENTRIES = 2000;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_BACKOFF_MS = 1000;
+const DEFAULT_MAX_PREVIEW_BYTES = 32 * 1024 * 1024;
 const MAX_BACKOFF_MS = 30_000;
 const REFRESH_SKEW_MS = 90_000;
 
@@ -32,6 +36,11 @@ function cleanUrl(value, fallback = DEFAULT_BASE_URL) {
 function cleanNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
 }
 
 function firstText(...values) {
@@ -158,6 +167,18 @@ function normalizeBeatportTrack(raw = {}) {
   const title = firstText(track.name, track.title);
   const mixName = firstText(track.mix_name, track.mixName);
   const imageUrl = firstImageUrl(release.image, release.images, track.image, track.images);
+  const previewUrl = firstText(
+    track.sample_url,
+    track.sampleUrl,
+    track.preview_url,
+    track.previewUrl,
+    attributes.sample_url,
+    attributes.sampleUrl,
+    attributes.preview_url,
+    attributes.previewUrl
+  );
+  const previewStartMs = numberOrNull(track.sample_start_ms ?? track.sampleStartMs ?? track.preview_start_ms ?? track.previewStartMs);
+  const previewEndMs = numberOrNull(track.sample_end_ms ?? track.sampleEndMs ?? track.preview_end_ms ?? track.previewEndMs);
   return {
     source: "beatport",
     id: firstText(track.id, track.track_id),
@@ -181,6 +202,13 @@ function normalizeBeatportTrack(raw = {}) {
     year: releaseDate,
     durationMs: cleanNumber(track.length_ms || track.duration_ms),
     isrc: firstText(track.isrc),
+    previewUrl,
+    previewStartMs,
+    previewEndMs,
+    previewDurationMs: previewStartMs !== null && previewEndMs !== null && previewEndMs > previewStartMs
+      ? previewEndMs - previewStartMs
+      : null,
+    isAvailableForStreaming: track.is_available_for_streaming ?? track.isAvailableForStreaming ?? null,
     imageUrl,
     beatportUrl: firstText(track.url, track.href, beatportTrackUrl(track)),
     rawJson: raw
@@ -479,10 +507,13 @@ class BeatportClient {
     baseUrl = DEFAULT_BASE_URL,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxResults = DEFAULT_MAX_RESULTS,
+    maxSearchPages = DEFAULT_MAX_SEARCH_PAGES,
+    maxSearchQueries = DEFAULT_MAX_SEARCH_QUERIES,
     requestsPerSecond = DEFAULT_REQUESTS_PER_SECOND,
     cacheTtlMs = DEFAULT_CACHE_TTL_MS,
     maxCacheEntries = DEFAULT_MAX_CACHE_ENTRIES,
     maxRetries = DEFAULT_MAX_RETRIES,
+    maxPreviewBytes = DEFAULT_MAX_PREVIEW_BYTES,
     sleepFn = sleep,
     now = Date.now,
     fetchImpl = globalThis.fetch,
@@ -496,10 +527,13 @@ class BeatportClient {
     this.baseUrl = cleanUrl(baseUrl);
     this.timeoutMs = Math.max(500, Math.min(30000, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
     this.maxResults = Math.max(1, Math.min(25, Number(maxResults) || DEFAULT_MAX_RESULTS));
+    this.maxSearchPages = Math.max(1, Math.min(5, Number(maxSearchPages) || DEFAULT_MAX_SEARCH_PAGES));
+    this.maxSearchQueries = Math.max(1, Math.min(5, Number(maxSearchQueries) || DEFAULT_MAX_SEARCH_QUERIES));
     this.requestsPerSecond = Math.max(0.1, Math.min(10, Number(requestsPerSecond) || DEFAULT_REQUESTS_PER_SECOND));
     this.cacheTtlMs = Math.max(0, Number(cacheTtlMs) || DEFAULT_CACHE_TTL_MS);
     this.maxCacheEntries = Math.max(0, Math.min(10000, Number(maxCacheEntries) || DEFAULT_MAX_CACHE_ENTRIES));
     this.maxRetries = Math.max(0, Math.min(5, Number(maxRetries) || DEFAULT_MAX_RETRIES));
+    this.maxPreviewBytes = Math.max(1_048_576, Math.min(256 * 1024 * 1024, Number(maxPreviewBytes) || DEFAULT_MAX_PREVIEW_BYTES));
     this.now = now;
     this.sleepFn = sleepFn;
     this.limiter = new BeatportRateLimiter({ requestsPerSecond: this.requestsPerSecond, now, sleepFn });
@@ -515,6 +549,7 @@ class BeatportClient {
     };
     this.fetchImpl = fetchImpl;
     this.logger = logger;
+    this.lastIdentityDiagnostics = null;
   }
 
   isConfigured() {
@@ -532,6 +567,9 @@ class BeatportClient {
       hasRefreshToken: Boolean(this.refreshToken || store.refreshTokenStored),
       baseUrl: this.baseUrl,
       maxResults: this.maxResults,
+      maxSearchPages: this.maxSearchPages,
+      maxSearchQueries: this.maxSearchQueries,
+      maxPreviewBytes: this.maxPreviewBytes,
       throttle: {
         requestsPerSecond: this.requestsPerSecond,
         minSpacingMs: this.limiter.minSpacingMs
@@ -731,36 +769,225 @@ class BeatportClient {
     return response.json().catch(() => null);
   }
 
-  async findTrack(track = {}) {
+  async getTrackById(trackId) {
+    const id = firstText(trackId);
+    if (!/^\d+$/.test(id)) return null;
+    const payload = await this.requestJson(`/catalog/tracks/${encodeURIComponent(id)}/`);
+    const raw = extractBeatportTracks(payload)[0] || payload?.data || payload;
+    if (!raw || typeof raw !== "object") return null;
+    const normalized = normalizeBeatportTrack(raw);
+    return normalized.title || normalized.artist
+      ? { ...normalized, id: normalized.id || id }
+      : null;
+  }
+
+  async findTrack(track = {}, { beatportTrackId = "" } = {}) {
+    this.lastIdentityDiagnostics = null;
+    const requestedId = firstText(
+      beatportTrackId,
+      track.beatportTrackId,
+      track.beatportId,
+      track.beatport?.id
+    );
+    if (requestedId) {
+      const byId = await this.getTrackById(requestedId);
+      if (byId) {
+        const ranked = rankBeatportCandidates(track, [byId], { requestedBeatportTrackId: requestedId });
+        if (ranked.best) return ranked.best;
+      }
+    }
+
     const isrc = cleanText(track.isrc).replace(/[^a-z0-9]/gi, "").toUpperCase();
     if (isrc) {
       const byIsrc = await this.requestJson(`/catalog/tracks/store/${encodeURIComponent(isrc)}/`);
       const exact = extractBeatportTracks(byIsrc)[0] || byIsrc?.data || byIsrc;
       if (exact && typeof exact === "object") {
         const normalized = normalizeBeatportTrack(exact);
-        if (normalized.title || normalized.artist) return normalized;
+        if (normalized.title || normalized.artist) {
+          const requestedIsrc = isrc;
+          const normalizedIsrc = cleanText(normalized.isrc).replace(/[^a-z0-9]/gi, "").toUpperCase();
+          if (requestedIsrc && requestedIsrc === normalizedIsrc) return normalized;
+          const ranked = rankBeatportCandidates(track, [normalized], { requestedBeatportTrackId: requestedId });
+          if (ranked.best) return ranked.best;
+        }
         const trackId = beatportTrackIdFromUrl(exact.store_url);
         if (trackId) {
           const detail = await this.requestJson(`/catalog/tracks/${encodeURIComponent(trackId)}/`);
           const detailNormalized = normalizeBeatportTrack(detail || {});
-          if (detailNormalized.title || detailNormalized.artist) return detailNormalized;
+          if (detailNormalized.title || detailNormalized.artist) {
+            const detailIsrc = cleanText(detailNormalized.isrc).replace(/[^a-z0-9]/gi, "").toUpperCase();
+            if (isrc && isrc === detailIsrc) return detailNormalized;
+            const ranked = rankBeatportCandidates(track, [detailNormalized], { requestedBeatportTrackId: requestedId });
+            if (ranked.best) return ranked.best;
+          }
         }
       }
     }
 
-    const query = [track.artist, track.title].map(cleanText).filter(Boolean).join(" ");
-    if (!query) return null;
-    const payload = await this.requestJson("/catalog/search/", {
-      q: query,
-      type: "tracks",
-      page: 1,
-      per_page: this.maxResults
-    });
-    for (const candidate of extractBeatportTracks(payload).slice(0, this.maxResults)) {
-      const normalized = normalizeBeatportTrack(candidate);
-      if (normalized.title || normalized.artist) return normalized;
+    const artist = cleanText(track.artist);
+    const title = cleanText(track.title || track.name);
+    const canonicalTitle = cleanText(baseTitle(title));
+    const album = cleanText(typeof track.album === "object" ? track.album.title : track.album || track.releaseTitle);
+    const queryPlans = [...new Map([
+      [artist && title ? `${artist} ${title}` : "", "artist-title"],
+      [artist && canonicalTitle && canonicalTitle !== title ? `${artist} ${canonicalTitle}` : "", "artist-base-title"],
+      [artist && album && canonicalTitle ? `${artist} ${album} ${canonicalTitle}` : "", "artist-album-base-title"]
+    ].filter(([query]) => query).map(([query, label]) => [query, { query, label }])).values()]
+      .slice(0, this.maxSearchQueries);
+    if (!queryPlans.length) return null;
+
+    const candidates = [];
+    const seenCandidates = new Set();
+    const attemptedSearches = [];
+    let ranked = rankBeatportCandidates(track, [], { requestedBeatportTrackId: requestedId });
+    outer:
+    for (const plan of queryPlans) {
+      const maxPages = plan.label === "artist-title" ? this.maxSearchPages : 1;
+      for (let page = 1; page <= maxPages; page += 1) {
+        const payload = await this.requestJson("/catalog/search/", {
+          q: plan.query,
+          type: "tracks",
+          page,
+          per_page: this.maxResults
+        });
+        const pageCandidates = extractBeatportTracks(payload)
+          .slice(0, this.maxResults)
+          .map(normalizeBeatportTrack)
+          .filter((candidate) => candidate.title || candidate.artist);
+        attemptedSearches.push({ label: plan.label, query: plan.query, page, returnedCount: pageCandidates.length });
+        for (const candidate of pageCandidates) {
+          const key = cleanText(candidate.id) || `${cleanText(candidate.artist).toLowerCase()}|${cleanText(candidate.title).toLowerCase()}|${cleanText(candidate.mixName).toLowerCase()}|${cleanText(candidate.releaseDate)}`;
+          if (!seenCandidates.has(key)) {
+            seenCandidates.add(key);
+            candidates.push(candidate);
+          }
+        }
+        ranked = rankBeatportCandidates(track, candidates, { requestedBeatportTrackId: requestedId });
+        if (ranked.best) break outer;
+      }
     }
-    return null;
+    this.lastIdentityDiagnostics = {
+      attemptedSearches,
+      candidateCount: candidates.length,
+      safeCandidateCount: ranked.safeCount,
+      selectedSafe: ranked.selectedSafe,
+      selectedCandidateId: cleanText(ranked.best?.id),
+      selectionReasons: ranked.selectionReasons,
+      evaluated: ranked.evaluated.slice(0, 16).map((item) => ({
+        id: cleanText(item.candidate?.id),
+        artist: cleanText(item.candidate?.artist),
+        title: cleanText(item.candidate?.title),
+        mixName: cleanText(item.candidate?.mixName),
+        releaseDate: cleanText(item.candidate?.releaseDate),
+        score: item.score,
+        safe: item.safe,
+        reasons: item.reasons,
+        rejectionReasons: item.match?.reasons || []
+      }))
+    };
+    this.logger?.debug?.("Beatport identity candidate selection", {
+      requestedArtist: artist,
+      requestedTitle: title,
+      candidateCount: candidates.length,
+      safeCandidateCount: ranked.safeCount,
+      selectedSafe: ranked.selectedSafe,
+      selectionReasons: ranked.selectionReasons,
+      attemptedSearches
+    });
+    return ranked.best;
+  }
+
+  async searchTracks({ query = "", page = 1, perPage = this.maxResults } = {}) {
+    const cleanQuery = cleanText(query);
+    if (!cleanQuery) return { tracks: [], pagination: { count: 0, page: 1, perPage: 0 }, diagnostics: this.diagnostics() };
+    const normalizedPerPage = Math.max(1, Math.min(100, Number(perPage) || this.maxResults));
+    const normalizedPage = Math.max(1, Number(page) || 1);
+    const payload = await this.requestJson("/catalog/search/", {
+      q: cleanQuery,
+      type: "tracks",
+      page: normalizedPage,
+      per_page: normalizedPerPage
+    });
+    const tracks = extractBeatportTracks(payload)
+      .map(normalizeBeatportTrack)
+      .filter((track) => track.id && (track.title || track.artist));
+    return {
+      tracks,
+      pagination: {
+        count: Number(payload?.count || tracks.length) || tracks.length,
+        page: cleanText(payload?.page) || String(normalizedPage),
+        perPage: Number(payload?.per_page || normalizedPerPage) || normalizedPerPage,
+        next: cleanText(payload?.next),
+        previous: cleanText(payload?.previous)
+      },
+      diagnostics: this.diagnostics()
+    };
+  }
+
+  async fetchPreviewBuffer(trackOrUrl = {}, { timeoutMs = this.timeoutMs, maxBytes = this.maxPreviewBytes } = {}) {
+    const track = typeof trackOrUrl === "string" ? { previewUrl: cleanText(trackOrUrl) } : (trackOrUrl || {});
+    const previewUrl = firstText(
+      track.previewUrl,
+      track.preview_url,
+      track.sampleUrl,
+      track.sample_url,
+      track.rawJson?.previewUrl,
+      track.rawJson?.preview_url,
+      track.rawJson?.sampleUrl,
+      track.rawJson?.sample_url
+    );
+    if (!/^https?:\/\//i.test(previewUrl)) {
+      const error = new Error("Beatport track does not expose a streamable preview URL.");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const safeMaxBytes = Math.max(1_048_576, Math.min(256 * 1024 * 1024, Number(maxBytes) || this.maxPreviewBytes));
+    const response = await fetchWithTimeout(previewUrl, {
+      headers: {
+        accept: "audio/mpeg,audio/*;q=0.9,*/*;q=0.1",
+        "user-agent": "RabbitHole/0.1.0"
+      }
+    }, {
+      timeoutMs,
+      fetchImpl: this.fetchImpl,
+      label: "Beatport audio preview"
+    });
+    if (!response?.ok) {
+      const error = new Error(`Beatport audio preview failed: HTTP ${response?.status || 0}`);
+      error.statusCode = response?.status === 404 ? 404 : 502;
+      throw error;
+    }
+    const contentLength = Number(responseHeader(response, "content-length"));
+    if (Number.isFinite(contentLength) && contentLength > safeMaxBytes) {
+      const error = new Error(`Beatport audio preview exceeds the ${safeMaxBytes} byte safety limit.`);
+      error.statusCode = 413;
+      throw error;
+    }
+    let buffer;
+    if (typeof response.arrayBuffer === "function") {
+      buffer = Buffer.from(await response.arrayBuffer());
+    } else if (Buffer.isBuffer(response.buffer)) {
+      buffer = Buffer.from(response.buffer);
+    } else {
+      buffer = Buffer.from(await response.text());
+    }
+    if (!buffer.length) throw new Error("Beatport audio preview returned an empty body.");
+    if (buffer.length > safeMaxBytes) {
+      buffer.fill(0);
+      const error = new Error(`Beatport audio preview exceeds the ${safeMaxBytes} byte safety limit.`);
+      error.statusCode = 413;
+      throw error;
+    }
+    const normalized = normalizeBeatportTrack(track);
+    return {
+      track: normalized,
+      buffer,
+      bytes: buffer.length,
+      contentType: responseHeader(response, "content-type") || "audio/mpeg",
+      previewUrl,
+      previewDurationMs: normalized.previewDurationMs
+    };
   }
 
   async getCharts({ genreId = 15, page = 1, perPage = 50, source = "genre", query = "" } = {}) {
@@ -954,6 +1181,7 @@ class BeatportClient {
 module.exports = {
   BeatportClient,
   BeatportTokenStore,
+  DEFAULT_MAX_PREVIEW_BYTES,
   beatportTrackIdFromUrl,
   extractBeatportCharts,
   extractBeatportTracks,

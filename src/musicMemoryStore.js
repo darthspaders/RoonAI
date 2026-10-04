@@ -2,6 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { parseCanonicalCatalogIdentity } = require("./catalogIdentityNormalization");
 let DatabaseSync = null;
 try {
   ({ DatabaseSync } = require("node:sqlite"));
@@ -9,7 +10,7 @@ try {
   DatabaseSync = null;
 }
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 3;
 const DEFAULT_BEATPORT_MISSING_RETRY_MS = 7 * 24 * 60 * 60 * 1000;
 
 function cleanText(value) {
@@ -110,6 +111,26 @@ function trackIdentityKey(track = {}) {
   const title = normalizeText(track.title);
   const version = normalizeText(normalizeMixVersion(track));
   return artist && title ? `text:${artist}|${title}|${version}` : "";
+}
+
+function normalizedTokens(value) {
+  return Array.from(new Set(normalizeText(value).split(" ").filter(Boolean)));
+}
+
+function normalizedIdentityTitle(value) {
+  return normalizeText(value)
+    .replace(/\b(?:original|main|extended|radio|club|instrumental|mix|version|edit|remix|rework|dub|live|acoustic|unplugged)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function compactIdentityArtist(value) {
+  return normalizeText(value).replace(/\s+/g, "");
+}
+
+function tokenSubset(smaller = [], larger = []) {
+  const largerSet = new Set(larger);
+  return smaller.length > 0 && smaller.every((token) => largerSet.has(token));
 }
 
 function trackProviderIds(track = {}) {
@@ -253,6 +274,7 @@ class MusicMemoryStore {
       fs.mkdirSync(path.dirname(this.dbFile), { recursive: true });
       this.db = new DatabaseSync(this.dbFile);
       this.db.exec("PRAGMA journal_mode = WAL");
+      this.db.exec("PRAGMA busy_timeout = 10000");
       this.db.exec("PRAGMA foreign_keys = ON");
       this.migrate();
     } catch (error) {
@@ -293,6 +315,8 @@ class MusicMemoryStore {
       CREATE INDEX IF NOT EXISTS idx_track_identity_tidal_id ON track_identity(tidal_id);
       CREATE INDEX IF NOT EXISTS idx_track_identity_isrc ON track_identity(isrc);
       CREATE INDEX IF NOT EXISTS idx_track_identity_text ON track_identity(normalized_artist, normalized_title, normalized_mix_version);
+      CREATE INDEX IF NOT EXISTS idx_track_identity_normalized_title ON track_identity(normalized_title);
+      CREATE INDEX IF NOT EXISTS idx_track_identity_artist_folded ON track_identity(LOWER(TRIM(artist)));
 
       CREATE TABLE IF NOT EXISTS beatport_enrichment (
         track_identity_id INTEGER PRIMARY KEY,
@@ -317,6 +341,9 @@ class MusicMemoryStore {
         FOREIGN KEY(track_identity_id) REFERENCES track_identity(id) ON DELETE CASCADE
       );
 
+      CREATE INDEX IF NOT EXISTS idx_beatport_enrichment_label_time
+        ON beatport_enrichment(LOWER(TRIM(label)), fetched_at DESC);
+
       CREATE TABLE IF NOT EXISTS track_observation (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         track_identity_id INTEGER NOT NULL,
@@ -328,6 +355,9 @@ class MusicMemoryStore {
         raw_json TEXT,
         FOREIGN KEY(track_identity_id) REFERENCES track_identity(id) ON DELETE CASCADE
       );
+
+      CREATE INDEX IF NOT EXISTS idx_track_observation_track_source
+        ON track_observation(track_identity_id, source);
 
       CREATE TABLE IF NOT EXISTS taste_feedback (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -343,6 +373,9 @@ class MusicMemoryStore {
         raw_json TEXT,
         FOREIGN KEY(track_identity_id) REFERENCES track_identity(id) ON DELETE CASCADE
       );
+
+      CREATE INDEX IF NOT EXISTS idx_taste_feedback_track_id_rating
+        ON taste_feedback(track_identity_id, id DESC, rating);
 
       CREATE TABLE IF NOT EXISTS provider_enrichment (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -383,6 +416,47 @@ class MusicMemoryStore {
         raw_json TEXT,
         FOREIGN KEY(track_identity_id) REFERENCES track_identity(id) ON DELETE CASCADE
       );
+
+      -- Status snapshots check the latest attempt per track/provider. Without
+      -- this index, their correlated lookups block the Roon heartbeat as history grows.
+      CREATE INDEX IF NOT EXISTS idx_enrichment_attempt_track_provider_time
+        ON enrichment_attempt(track_identity_id, provider, fetched_at DESC, id DESC);
+
+      CREATE TABLE IF NOT EXISTS sonic_analysis_request (
+        track_identity_id INTEGER PRIMARY KEY,
+        status TEXT NOT NULL,
+        policy TEXT NOT NULL,
+        required_source TEXT,
+        beatport_track_id TEXT,
+        source_audio_type TEXT,
+        source_match_type TEXT,
+        confidence INTEGER,
+        reason TEXT,
+        requested_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        fulfilled_at TEXT,
+        raw_json TEXT,
+        FOREIGN KEY(track_identity_id) REFERENCES track_identity(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS track_identity_alias (
+        alias_identity_id INTEGER PRIMARY KEY,
+        canonical_identity_id INTEGER NOT NULL,
+        relation TEXT NOT NULL,
+        confidence INTEGER,
+        source TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(alias_identity_id) REFERENCES track_identity(id) ON DELETE CASCADE,
+        FOREIGN KEY(canonical_identity_id) REFERENCES track_identity(id) ON DELETE CASCADE,
+        CHECK(alias_identity_id <> canonical_identity_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_track_identity_alias_canonical
+        ON track_identity_alias(canonical_identity_id);
+
+      CREATE INDEX IF NOT EXISTS idx_sonic_analysis_request_status
+        ON sonic_analysis_request(status, updated_at);
     `);
     this.addColumnIfMissing("track_identity", "album", "TEXT");
     this.addColumnIfMissing("track_identity", "duration_ms", "INTEGER");
@@ -393,11 +467,32 @@ class MusicMemoryStore {
     this.addColumnIfMissing("track_observation", "raw_json", "TEXT");
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_track_observation_event ON track_observation(source_event_id)");
     this.db.prepare("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', ?)").run(String(SCHEMA_VERSION));
+    this.reclassifyDeterministicSonicFailures();
   }
 
   addColumnIfMissing(table, column, definition) {
     const columns = this.db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name);
     if (!columns.includes(column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+
+  reclassifyDeterministicSonicFailures() {
+    if (!this.enabled || !this.db) return;
+    this.db.prepare(`
+      UPDATE sonic_analysis_request
+      SET status = 'NEEDS_LOCAL_FILE',
+          required_source = 'local_file',
+          source_audio_type = '',
+          source_match_type = 'BEATPORT_MATCH_REJECTED',
+          reason = 'Previous Beatport candidate rejection was deterministic; local file required: ' || reason
+      WHERE status = 'ANALYSIS_FAILED'
+        AND (
+          reason LIKE '%Beatport candidate was rejected%'
+          OR reason LIKE '%artist credits do not match exactly%'
+          OR reason LIKE '%base titles do not match%'
+          OR reason LIKE '%Beatport track ID does not match%'
+          OR raw_json LIKE '%Beatport candidate was rejected%'
+        )
+    `).run();
   }
 
   close() {
@@ -417,6 +512,9 @@ class MusicMemoryStore {
     const feedbackCount = this.db.prepare("SELECT COUNT(*) AS count FROM taste_feedback").get()?.count || 0;
     const providerEnrichmentCount = this.db.prepare("SELECT COUNT(*) AS count FROM provider_enrichment").get()?.count || 0;
     const enrichmentAttemptCount = this.db.prepare("SELECT COUNT(*) AS count FROM enrichment_attempt").get()?.count || 0;
+    const sonicAnalysisRequestCount = this.db.prepare("SELECT COUNT(*) AS count FROM sonic_analysis_request").get()?.count || 0;
+    const sonicNeedsLocalFileCount = this.db.prepare("SELECT COUNT(*) AS count FROM sonic_analysis_request WHERE status = 'NEEDS_LOCAL_FILE'").get()?.count || 0;
+    const sonicAnalyzedCount = this.db.prepare("SELECT COUNT(*) AS count FROM sonic_analysis_request WHERE status LIKE 'ANALYZED%'").get()?.count || 0;
     const beatportMissingCount = this.db.prepare(`
       SELECT COUNT(*) AS count
       FROM enrichment_attempt ea
@@ -461,6 +559,9 @@ class MusicMemoryStore {
       feedbackCount,
       providerEnrichmentCount,
       enrichmentAttemptCount,
+      sonicAnalysisRequestCount,
+      sonicNeedsLocalFileCount,
+      sonicAnalyzedCount,
       beatportMissingCount,
       beatportRetryBlockedCount
     };
@@ -527,6 +628,292 @@ class MusicMemoryStore {
       lastSeenAt || now
     );
     return this.db.prepare("SELECT * FROM track_identity WHERE identity_key = ?").get(identityKey);
+  }
+
+  findValidatedTidalIdentities(track = {}, { limit = 24 } = {}) {
+    if (!this.enabled || !this.db) return [];
+    const requestedTitle = normalizedIdentityTitle(track.title || track.name);
+    const requestedArtist = compactIdentityArtist(track.artist);
+    if (!requestedTitle || !requestedArtist) return [];
+
+    // This is intentionally a narrow lookup. It only returns identities that
+    // already have a TIDAL id; the shared TIDAL identity scorer remains the
+    // authority that decides whether a prior identity is safe to reuse.
+    const rows = this.db.prepare(`
+      SELECT
+        ti.*,
+        (
+          SELECT pe.release_date
+          FROM provider_enrichment pe
+          WHERE pe.track_identity_id = ti.id
+          ORDER BY pe.fetched_at DESC, pe.id DESC
+          LIMIT 1
+        ) AS provider_release_date,
+        (
+          SELECT pe.raw_json
+          FROM provider_enrichment pe
+          WHERE pe.track_identity_id = ti.id
+          ORDER BY pe.fetched_at DESC, pe.id DESC
+          LIMIT 1
+        ) AS provider_raw_json,
+        (
+          SELECT be.release_date
+          FROM beatport_enrichment be
+          WHERE be.track_identity_id = ti.id
+          LIMIT 1
+        ) AS beatport_release_date
+      FROM track_identity ti
+      WHERE ti.tidal_id IS NOT NULL
+        AND ti.tidal_id <> ''
+        AND (
+          ti.normalized_title = ?
+          OR ti.normalized_title LIKE ?
+          OR ? LIKE ti.normalized_title || '%'
+        )
+      ORDER BY ti.observation_count DESC, ti.last_seen_at DESC, ti.id DESC
+      LIMIT ?
+    `).all(
+      requestedTitle,
+      `${requestedTitle}%`,
+      requestedTitle,
+      Math.max(1, Math.min(100, Number(limit) || 24))
+    );
+
+    const requestedTitleTokens = new Set(requestedTitle.split(" ").filter(Boolean));
+    return rows.map((row) => {
+      const rootId = this.canonicalTrackIdentityId(row.id) || Number(row.id);
+      const root = rootId && rootId !== Number(row.id)
+        ? this.db.prepare("SELECT * FROM track_identity WHERE id = ? LIMIT 1").get(rootId)
+        : row;
+      const candidate = memoryTrackFromRow({
+        ...(root || row),
+        provider_release_date: row.provider_release_date,
+        provider_raw_json: row.provider_raw_json,
+        beatport_release_date: row.beatport_release_date
+      });
+      const candidateTitle = normalizedIdentityTitle(candidate.title);
+      const candidateTitleTokens = new Set(candidateTitle.split(" ").filter(Boolean));
+      const candidateArtist = compactIdentityArtist(candidate.artist);
+      const titleMatches = candidateTitle === requestedTitle
+        || candidateTitle.startsWith(`${requestedTitle} `)
+        || requestedTitle.startsWith(`${candidateTitle} `);
+      const artistMatches = candidateArtist === requestedArtist
+        || candidateArtist.includes(requestedArtist)
+        || requestedArtist.includes(candidateArtist);
+      if (!titleMatches || !artistMatches || !requestedTitleTokens.size || !candidateTitleTokens.size) return null;
+      const providerRaw = jsonParse(row.provider_raw_json, null) || {};
+      const releaseDate = cleanText(
+        row.provider_release_date ||
+        row.beatport_release_date ||
+        providerRaw.releaseDate || providerRaw.release_date ||
+        providerRaw.albumYear || providerRaw.releaseYear
+      );
+      return {
+        ...candidate,
+        releaseDate,
+        releaseYear: releaseDate,
+        year: releaseDate,
+        validatedIdentitySource: "music-memory-track-identity",
+        validatedIdentityKey: cleanText(row.identity_key),
+        validatedIdentityCanonicalKey: cleanText(root?.identity_key || row.identity_key),
+        validatedObservationCount: Number(row.observation_count || 0) || 0
+      };
+    }).filter(Boolean);
+  }
+
+  canonicalTrackIdentityId(identityId) {
+    if (!this.enabled || !this.db || !identityId) return Number(identityId || 0) || null;
+    let currentId = Number(identityId) || 0;
+    const visited = new Set();
+    for (let depth = 0; currentId && depth < 8 && !visited.has(currentId); depth += 1) {
+      visited.add(currentId);
+      const link = this.db.prepare("SELECT canonical_identity_id FROM track_identity_alias WHERE alias_identity_id = ?").get(currentId);
+      const nextId = Number(link?.canonical_identity_id || 0) || 0;
+      if (!nextId || nextId === currentId) break;
+      currentId = nextId;
+    }
+    return currentId || null;
+  }
+
+  findReversedRoonTrack(track = {}) {
+    if (!this.enabled || !this.db) return null;
+    const rawArtist = normalizeText(track.artist);
+    const rawTitle = normalizeText(track.title);
+    if (!rawArtist || !rawTitle) return null;
+
+    // Roon's normal now-playing shape is title in two_line.line1 and artist
+    // in two_line.line2. Some integrations occasionally deliver those fields
+    // reversed. Only repair that case when the observed artist is an exact
+    // match for a known TIDAL title and the observed title contains every
+    // token of that track's known artist credit. This deliberately fails
+    // closed when the evidence is ambiguous.
+    const candidates = this.db.prepare(`
+      SELECT ti.*
+      FROM track_identity ti
+      WHERE ti.tidal_id IS NOT NULL
+        AND ti.tidal_id <> ''
+        AND ti.normalized_title = ?
+    `).all(rawArtist)
+      .filter((row) => tokenSubset(normalizedTokens(row.normalized_artist), normalizedTokens(rawTitle)));
+    if (!candidates.length) return null;
+
+    const roots = new Map();
+    for (const row of candidates) {
+      const rootId = this.canonicalTrackIdentityId(row.id) || Number(row.id);
+      if (!roots.has(rootId)) roots.set(rootId, row);
+    }
+    if (roots.size !== 1) return null;
+
+    const row = Array.from(roots.values())[0];
+    const canonicalId = this.canonicalTrackIdentityId(row.id) || Number(row.id);
+    const canonicalRow = this.db.prepare("SELECT * FROM track_identity WHERE id = ? LIMIT 1").get(canonicalId);
+    return canonicalRow || row;
+  }
+
+  reconcileReversedRoonTrack(track = {}) {
+    if (!this.enabled || !this.db) return null;
+    if (cleanTidalId(track.tidalId || track.tidal_id || track.tidalTrackId || track.tidalUrl)) return null;
+    const canonicalRow = this.findReversedRoonTrack(track);
+    if (!canonicalRow?.tidal_id) return null;
+    const result = this.linkTrackIdentity(
+      track,
+      memoryTrackFromRow(canonicalRow),
+      {
+        relation: "REVERSED_ROON_METADATA",
+        confidence: 99,
+        source: "music_memory_identity_reconciliation",
+        updatedAt: track.observedAt || track.updatedAt || ""
+      }
+    );
+    if (!result || result.conflict) return null;
+    return {
+      ...result,
+      canonicalTrack: memoryTrackFromRow(canonicalRow)
+    };
+  }
+
+  linkTrackIdentity(aliasTrack = {}, canonicalTrack = {}, {
+    relation = "CANONICAL_TIDAL",
+    confidence = null,
+    source = "metadata_enrichment",
+    updatedAt = ""
+  } = {}) {
+    if (!this.enabled || !this.db) return null;
+    const alias = this.upsertTrackIdentity({ ...aliasTrack, observedAt: updatedAt || undefined });
+    const canonical = this.upsertTrackIdentity({ ...canonicalTrack, observedAt: updatedAt || undefined });
+    if (!alias?.id || !canonical?.id) return null;
+    const canonicalId = this.canonicalTrackIdentityId(canonical.id) || canonical.id;
+    if (alias.id === canonicalId) return {
+      linked: false,
+      conflict: false,
+      aliasIdentityKey: alias.identity_key,
+      canonicalIdentityKey: canonical.identity_key
+    };
+
+    const existing = this.db.prepare("SELECT * FROM track_identity_alias WHERE alias_identity_id = ?").get(alias.id);
+    if (existing && Number(existing.canonical_identity_id) !== canonicalId) {
+      return {
+        linked: false,
+        conflict: true,
+        aliasIdentityKey: alias.identity_key,
+        canonicalIdentityKey: canonical.identity_key,
+        existingCanonicalIdentityId: Number(existing.canonical_identity_id)
+      };
+    }
+
+    this.mergeSonicAnalysisRequestIdentity(alias.id, canonicalId);
+    const now = isoTime(updatedAt, this.clock());
+    this.db.prepare(`
+      INSERT INTO track_identity_alias (
+        alias_identity_id, canonical_identity_id, relation, confidence, source,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(alias_identity_id) DO UPDATE SET
+        canonical_identity_id = excluded.canonical_identity_id,
+        relation = excluded.relation,
+        confidence = excluded.confidence,
+        source = excluded.source,
+        updated_at = excluded.updated_at
+    `).run(
+      alias.id,
+      canonicalId,
+      cleanText(relation) || "ALIAS",
+      Number(confidence || 0) || null,
+      cleanText(source),
+      now,
+      now
+    );
+    const canonicalRow = this.db.prepare("SELECT * FROM track_identity WHERE id = ?").get(canonicalId);
+    return {
+      linked: true,
+      conflict: false,
+      aliasIdentityKey: alias.identity_key,
+      canonicalIdentityKey: canonicalRow?.identity_key || canonical.identity_key,
+      relation: cleanText(relation) || "ALIAS",
+      confidence: Number(confidence || 0) || null
+    };
+  }
+
+  mergeSonicAnalysisRequestIdentity(aliasIdentityId, canonicalIdentityId) {
+    if (!this.enabled || !this.db || !aliasIdentityId || !canonicalIdentityId || aliasIdentityId === canonicalIdentityId) return;
+    const aliasRequest = this.db.prepare("SELECT * FROM sonic_analysis_request WHERE track_identity_id = ?").get(aliasIdentityId);
+    if (!aliasRequest) return;
+    const canonicalRequest = this.db.prepare("SELECT * FROM sonic_analysis_request WHERE track_identity_id = ?").get(canonicalIdentityId);
+    const priority = (status) => ({
+      ANALYZED_BEATPORT_PREVIEW: 6,
+      ANALYZING_BEATPORT_PREVIEW: 5,
+      READY_BEATPORT_PREVIEW: 4,
+      PENDING_METADATA: 3,
+      NEEDS_LOCAL_FILE: 2,
+      ANALYSIS_FAILED: 1
+    }[cleanText(status).toUpperCase()] || 0);
+    if (!canonicalRequest) {
+      this.db.prepare(`
+        INSERT INTO sonic_analysis_request (
+          track_identity_id, status, policy, required_source, beatport_track_id,
+          source_audio_type, source_match_type, confidence, reason,
+          requested_at, updated_at, fulfilled_at, raw_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        canonicalIdentityId,
+        aliasRequest.status,
+        aliasRequest.policy,
+        aliasRequest.required_source,
+        aliasRequest.beatport_track_id,
+        aliasRequest.source_audio_type,
+        aliasRequest.source_match_type,
+        aliasRequest.confidence,
+        aliasRequest.reason,
+        aliasRequest.requested_at,
+        aliasRequest.updated_at,
+        aliasRequest.fulfilled_at,
+        aliasRequest.raw_json
+      );
+    } else if (priority(aliasRequest.status) > priority(canonicalRequest.status)
+      || (priority(aliasRequest.status) === priority(canonicalRequest.status)
+        && String(aliasRequest.updated_at || "") > String(canonicalRequest.updated_at || ""))) {
+      this.db.prepare(`
+        UPDATE sonic_analysis_request SET
+          status = ?, policy = ?, required_source = ?, beatport_track_id = ?,
+          source_audio_type = ?, source_match_type = ?, confidence = ?, reason = ?,
+          updated_at = ?, fulfilled_at = ?, raw_json = ?
+        WHERE track_identity_id = ?
+      `).run(
+        aliasRequest.status,
+        aliasRequest.policy,
+        aliasRequest.required_source,
+        aliasRequest.beatport_track_id,
+        aliasRequest.source_audio_type,
+        aliasRequest.source_match_type,
+        aliasRequest.confidence,
+        aliasRequest.reason,
+        aliasRequest.updated_at,
+        aliasRequest.fulfilled_at,
+        aliasRequest.raw_json,
+        canonicalIdentityId
+      );
+    }
+    this.db.prepare("DELETE FROM sonic_analysis_request WHERE track_identity_id = ?").run(aliasIdentityId);
   }
 
   rememberObservation(track = {}, source = "metadata_enrichment", options = {}) {
@@ -644,16 +1031,187 @@ class MusicMemoryStore {
     return identity;
   }
 
+  saveSonicAnalysisRequest(track = {}, request = {}) {
+    if (!this.enabled || !this.db) return null;
+    const updatedAt = isoTime(request.updatedAt || request.requestedAt || request.createdAt, this.clock());
+    const identity = this.upsertTrackIdentity({ ...track, observedAt: updatedAt });
+    if (!identity?.id) return null;
+    const canonicalIdentityId = this.canonicalTrackIdentityId(identity.id) || identity.id;
+    const existing = this.db.prepare("SELECT * FROM sonic_analysis_request WHERE track_identity_id = ?").get(canonicalIdentityId);
+    const requestedStatus = cleanText(request.status).toUpperCase() || "PENDING_METADATA";
+    if (existing?.status?.startsWith("ANALYZED") && !request.force) return existing;
+    const requestedAt = existing?.requested_at || updatedAt;
+    const fulfilledAt = requestedStatus.startsWith("ANALYZED")
+      ? (cleanText(request.fulfilledAt) || updatedAt)
+      : (cleanText(request.fulfilledAt) || existing?.fulfilled_at || null);
+    this.db.prepare(`
+      INSERT INTO sonic_analysis_request (
+        track_identity_id, status, policy, required_source, beatport_track_id,
+        source_audio_type, source_match_type, confidence, reason,
+        requested_at, updated_at, fulfilled_at, raw_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(track_identity_id) DO UPDATE SET
+        status = excluded.status,
+        policy = excluded.policy,
+        required_source = excluded.required_source,
+        beatport_track_id = excluded.beatport_track_id,
+        source_audio_type = excluded.source_audio_type,
+        source_match_type = excluded.source_match_type,
+        confidence = excluded.confidence,
+        reason = excluded.reason,
+        updated_at = excluded.updated_at,
+        fulfilled_at = excluded.fulfilled_at,
+        raw_json = excluded.raw_json
+    `).run(
+      canonicalIdentityId,
+      requestedStatus,
+      cleanText(request.policy) || "LIVE_BEATPORT_ONLY",
+      cleanText(request.requiredSource) || "beatport_preview_or_local_file",
+      cleanText(request.beatportTrackId),
+      cleanText(request.sourceAudioType),
+      cleanText(request.sourceMatchType),
+      Number(request.confidence || 0) || null,
+      cleanText(request.reason),
+      requestedAt,
+      updatedAt,
+      fulfilledAt,
+      jsonStringify(request.rawJson || request)
+    );
+    return this.db.prepare(`
+      SELECT sar.*, ti.identity_key, ti.tidal_id, ti.roon_identity, ti.isrc, ti.artist, ti.title, ti.mix_version, ti.album, ti.duration_ms
+      FROM sonic_analysis_request sar
+      JOIN track_identity ti ON ti.id = sar.track_identity_id
+      WHERE sar.track_identity_id = ?
+    `).get(canonicalIdentityId) || null;
+  }
+
+  findSonicAnalysisRequest(track = {}) {
+    if (!this.enabled || !this.db) return null;
+    const identityKey = trackIdentityKey(track);
+    if (!identityKey) return null;
+    const identity = this.db.prepare("SELECT id FROM track_identity WHERE identity_key = ? LIMIT 1").get(identityKey);
+    const canonicalIdentityId = this.canonicalTrackIdentityId(identity?.id);
+    if (!canonicalIdentityId) return null;
+    return this.db.prepare(`
+      SELECT sar.*, ti.identity_key, ti.tidal_id, ti.roon_identity, ti.isrc, ti.artist, ti.title, ti.mix_version, ti.album, ti.duration_ms
+      FROM sonic_analysis_request sar
+      JOIN track_identity ti ON ti.id = sar.track_identity_id
+      WHERE sar.track_identity_id = ?
+      LIMIT 1
+    `).get(canonicalIdentityId) || null;
+  }
+
+  sonicAnalysisRequirements({ status = "", limit = 100 } = {}) {
+    if (!this.enabled || !this.db) return [];
+    const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 100));
+    const cleanStatus = cleanText(status).toUpperCase();
+    const rows = cleanStatus
+      ? this.db.prepare(`
+          SELECT sar.*, ti.identity_key, ti.tidal_id, ti.roon_identity, ti.isrc, ti.artist, ti.title, ti.mix_version, ti.album, ti.duration_ms
+          FROM sonic_analysis_request sar
+          JOIN track_identity ti ON ti.id = sar.track_identity_id
+          WHERE sar.status = ?
+          ORDER BY sar.updated_at ASC, sar.track_identity_id ASC
+          LIMIT ?
+        `).all(cleanStatus, safeLimit)
+      : this.db.prepare(`
+          SELECT sar.*, ti.identity_key, ti.tidal_id, ti.roon_identity, ti.isrc, ti.artist, ti.title, ti.mix_version, ti.album, ti.duration_ms
+          FROM sonic_analysis_request sar
+          JOIN track_identity ti ON ti.id = sar.track_identity_id
+          ORDER BY sar.updated_at ASC, sar.track_identity_id ASC
+          LIMIT ?
+        `).all(safeLimit);
+    return rows;
+  }
+
   findBeatportEnrichment(track = {}) {
+    return this.findBeatportEnrichmentCandidate(track)?.result || null;
+  }
+
+  findBeatportEnrichmentCandidate(track = {}) {
     const identityKey = trackIdentityKey(track);
     if (!this.enabled || !this.db || !identityKey) return null;
-    const row = this.db.prepare(`
+    const directRow = this.db.prepare(`
       SELECT be.*, ti.artist, ti.title, ti.mix_version
       FROM track_identity ti
       JOIN beatport_enrichment be ON be.track_identity_id = ti.id
       WHERE ti.identity_key = ?
     `).get(identityKey);
-    return entryToBeatportResult(row);
+    if (directRow) {
+      return {
+        result: entryToBeatportResult(directRow),
+        identityReuse: null
+      };
+    }
+
+    const identity = this.db.prepare("SELECT * FROM track_identity WHERE identity_key = ? LIMIT 1").get(identityKey);
+    if (!identity?.id) return null;
+    const aliasLink = this.db.prepare(`
+      SELECT relation, confidence, source
+      FROM track_identity_alias
+      WHERE alias_identity_id = ?
+      LIMIT 1
+    `).get(identity.id);
+    const canonicalId = this.canonicalTrackIdentityId(identity.id);
+    if (!aliasLink || !canonicalId || canonicalId === Number(identity.id)
+      || cleanText(aliasLink.relation).toUpperCase() !== "CANONICAL_TIDAL"
+      || Number(aliasLink.confidence || 0) < 80) {
+      return null;
+    }
+
+    const canonical = this.db.prepare("SELECT * FROM track_identity WHERE id = ? LIMIT 1").get(canonicalId);
+    if (!canonical?.tidal_id) return null;
+    const requestedIdentity = parseCanonicalCatalogIdentity({
+      title: identity.title,
+      mixVersion: identity.mix_version
+    });
+    const canonicalIdentity = parseCanonicalCatalogIdentity({
+      title: canonical.title,
+      mixVersion: canonical.mix_version
+    });
+    if (!requestedIdentity.normalizedBaseTitle || requestedIdentity.normalizedBaseTitle !== canonicalIdentity.normalizedBaseTitle) {
+      return null;
+    }
+    if (requestedIdentity.version.explicit) {
+      const sameVersion = canonicalIdentity.version.explicit
+        && requestedIdentity.version.kind === canonicalIdentity.version.kind
+        && requestedIdentity.version.semantic === canonicalIdentity.version.semantic;
+      if (!sameVersion) return null;
+    } else if (!["none", "original", "alternate"].includes(canonicalIdentity.version.kind)) {
+      return null;
+    }
+
+    const row = this.db.prepare(`
+      SELECT be.*, ti.artist, ti.title, ti.mix_version
+      FROM track_identity ti
+      JOIN beatport_enrichment be ON be.track_identity_id = ti.id
+      WHERE ti.id = ?
+    `).get(canonicalId);
+    if (!row) return null;
+    const validationTrack = {
+      tidalId: cleanTidalId(canonical.tidal_id),
+      isrc: cleanIsrc(canonical.isrc),
+      artist: cleanText(canonical.artist),
+      title: cleanText(canonical.title),
+      mixVersion: cleanText(canonical.mix_version),
+      album: cleanText(canonical.album),
+      durationMs: Number(canonical.duration_ms || 0) || null
+    };
+    return {
+      result: entryToBeatportResult(row),
+      identityReuse: {
+        reused: true,
+        source: "canonical-tidal-alias",
+        relation: cleanText(aliasLink.relation),
+        relationConfidence: Number(aliasLink.confidence || 0) || 0,
+        aliasIdentityKey: cleanText(identity.identity_key),
+        canonicalIdentityKey: cleanText(canonical.identity_key),
+        canonicalTidalId: cleanTidalId(canonical.tidal_id),
+        normalizedBaseTitle: canonicalIdentity.normalizedBaseTitle,
+        validationTrack
+      }
+    };
   }
 
   latestEnrichmentAttempt(track = {}, provider = "") {
@@ -719,8 +1277,24 @@ class MusicMemoryStore {
     const cleanFeedback = cleanText(feedback).toLowerCase();
     if (cleanFeedback === "any") clauses.push("tf.feedback_count > 0");
     else if (cleanFeedback) {
-      clauses.push("EXISTS (SELECT 1 FROM taste_feedback fb WHERE fb.track_identity_id = ti.id AND LOWER(fb.rating) = ?)");
-      params.push(cleanFeedback);
+      // The UI uses the five current ratings, but searches must include rows
+      // written by older clients so a vocabulary migration does not hide
+      // existing feedback.
+      const feedbackAliases = {
+        love: ["love"],
+        like: ["like", "good", "up"],
+        good: ["like", "good", "up"],
+        ok: ["ok", "okay"],
+        okay: ["ok", "okay"],
+        dislike: ["dislike", "skip", "down"],
+        skip: ["dislike", "skip", "down"],
+        never: ["never", "never_again"],
+        never_again: ["never", "never_again"]
+      };
+      const ratings = feedbackAliases[cleanFeedback] || [cleanFeedback];
+      const placeholders = ratings.map(() => "?").join(", ");
+      clauses.push(`EXISTS (SELECT 1 FROM taste_feedback fb WHERE fb.track_identity_id = ti.id AND LOWER(fb.rating) IN (${placeholders}))`);
+      params.push(...ratings);
     }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     const fromSql = `
@@ -829,13 +1403,10 @@ class MusicMemoryStore {
 
   saveBeatportEnrichment(track = {}, result = {}, { confidence = 0 } = {}) {
     if (!this.enabled || !this.db || !result) return null;
-    const identity = this.upsertTrackIdentity({
-      ...track,
-      isrc: track.isrc || result.isrc,
-      artist: track.artist || result.artist,
-      title: track.title || result.title,
-      mixVersion: track.mixVersion || result.mixName
-    });
+    // Keep provider enrichment attached to the source track identity. Beatport
+    // may return a more specific ISRC or mix name, but those provider fields
+    // must not fork a text-only memory track into a second identity.
+    const identity = this.upsertTrackIdentity(track);
     if (!identity?.id) return null;
     const fetchedAt = new Date(Number(this.clock())).toISOString();
     const release = result.rawJson?.release && typeof result.rawJson.release === "object" ? result.rawJson.release : {};

@@ -16,6 +16,22 @@ function tempCacheFile(name) {
   return path.join(os.tmpdir(), `rabbit-hole-${name}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
 }
 
+test("status accepts cached music-memory counts without calling the live SQL summary", () => {
+  let reads = 0;
+  const live = { enabled: true, trackCount: 4 }, cached = { enabled: true, trackCount: 9 };
+  const service = new MetadataEnrichmentService({ cacheFile: "", musicMemory: { status: () => { reads++; return live; } },
+    beatport: { status: () => ({ enabled: true }) }, discogs: { status: () => ({ enabled: false }) } });
+  const original = service.status();
+  assert.equal(original.musicMemory, live);
+  assert.equal(reads, 1);
+  const overridden = service.status({ musicMemoryStatus: cached });
+  assert.deepEqual(overridden, { ...original, musicMemory: cached });
+  assert.equal(service.status({ musicMemoryStatus: null }).musicMemory, null);
+  assert.equal(reads, 1);
+  assert.equal(service.status().musicMemory, live);
+  assert.equal(reads, 2);
+});
+
 test("metadata title normalization strips only generic version text", () => {
   assert.equal(stripSearchVersionTerms("Small Things (Extended)"), "Small Things");
   assert.equal(stripSearchVersionTerms("Small Things (Extended Mix) [2021 Remaster]"), "Small Things");
@@ -293,6 +309,124 @@ test("metadata enrichment reuses Rabbit Hole memory before calling Beatport", as
   assert.equal(beatportCalls, 0);
   assert.equal(entry.source, "beatport");
   assert.equal(entry.genre, "Melodic House & Techno, Progressive House");
+});
+
+test("metadata enrichment revalidates and persists Beatport data reused through a canonical alias", async () => {
+  const cacheFile = tempCacheFile("metadata-canonical-alias-beatport");
+  const calls = [];
+  const saved = [];
+  const canonical = {
+    tidalId: "132973114",
+    artist: "Eleonora, Morttagua",
+    title: "Blue Enigma",
+    isrc: "US83Z2006403",
+    durationMs: 515000
+  };
+  const stored = {
+    id: "28956045",
+    artist: "Eleonora, Morttagua",
+    title: "Blue Enigma",
+    mixName: "Original Mix",
+    isrc: "US83Z2006403",
+    genre: "Progressive House",
+    subGenre: "",
+    bpm: 123,
+    keyName: "C Major",
+    camelot: "8B",
+    label: "Timeless Moment",
+    releaseDate: "2026-05-25",
+    releaseId: "6944658",
+    durationMs: 515121,
+    beatportUrl: "https://www.beatport.com/track/blue-enigma/28956045"
+  };
+  const service = new MetadataEnrichmentService({
+    cacheFile,
+    tidal: { isConfigured: () => false },
+    beatport: {
+      isConfigured: () => true,
+      findTrack: async (track, options) => {
+        calls.push({ track, options });
+        return { ...stored };
+      }
+    },
+    musicMemory: {
+      rememberObservation: () => {},
+      findBeatportEnrichmentCandidate: () => ({
+        result: stored,
+        identityReuse: {
+          reused: true,
+          source: "canonical-tidal-alias",
+          canonicalIdentityKey: "tidal:132973114",
+          validationTrack: canonical
+        }
+      }),
+      beatportLookupBlocked: () => true,
+      saveBeatportEnrichment: (...args) => saved.push(["beatport", ...args]),
+      saveProviderEnrichment: (...args) => saved.push(["provider", ...args]),
+      saveEnrichmentAttempt: (...args) => saved.push(["attempt", ...args])
+    },
+    metadataResolver: null,
+    logger: null
+  });
+
+  const entry = await service.enrich({
+    artist: "Eleonora / Morttagua / Ubbah",
+    title: "Blue Enigma"
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].track, canonical);
+  assert.deepEqual(calls[0].options, { beatportTrackId: "28956045" });
+  assert.equal(entry.source, "beatport");
+  assert.equal(entry.beatport.id, "28956045");
+  assert.equal(entry.genre, "Progressive House");
+  assert.equal(saved.length, 3);
+  assert.equal(service.lastBeatportIdentityReuseDiagnostics.accepted, true);
+});
+
+test("metadata enrichment rejects a canonical-alias Beatport reuse when stored identity revalidation fails", async () => {
+  const cacheFile = tempCacheFile("metadata-canonical-alias-rejected");
+  let beatportCalls = 0;
+  let saveCalls = 0;
+  const service = new MetadataEnrichmentService({
+    cacheFile,
+    tidal: { isConfigured: () => false },
+    beatport: {
+      isConfigured: () => true,
+      findTrack: async () => {
+        beatportCalls += 1;
+        return null;
+      }
+    },
+    musicMemory: {
+      rememberObservation: () => {},
+      findBeatportEnrichmentCandidate: () => ({
+        result: { id: "28956045", artist: "Wrong Artist", title: "Blue Enigma" },
+        identityReuse: {
+          reused: true,
+          source: "canonical-tidal-alias",
+          canonicalIdentityKey: "tidal:132973114",
+          validationTrack: {
+            tidalId: "132973114",
+            artist: "Eleonora, Morttagua",
+            title: "Blue Enigma",
+            isrc: "US83Z2006403"
+          }
+        }
+      }),
+      beatportLookupBlocked: () => true,
+      saveBeatportEnrichment: () => { saveCalls += 1; }
+    },
+    metadataResolver: null,
+    logger: null
+  });
+
+  const entry = await service.enrich({ artist: "Eleonora / Morttagua / Ubbah", title: "Blue Enigma" });
+
+  assert.equal(entry, null);
+  assert.equal(beatportCalls, 1);
+  assert.equal(saveCalls, 0);
+  assert.equal(service.lastBeatportIdentityReuseDiagnostics.accepted, false);
 });
 
 test("metadata enrichment skips Beatport API while durable miss is retry-blocked", async () => {

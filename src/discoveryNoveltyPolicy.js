@@ -37,7 +37,10 @@ function createDiscoveryNoveltyPolicy({
 
     for (const track of result.tracks || []) {
       const entry = previouslySuggestedTrack(track);
-      if (entry) heldBack.push(previouslySuggestedDiscard(track, entry));
+      // Discovery can deliberately promote an otherwise valid previous track
+      // as a starvation fallback. Preserve that explicit policy decision at
+      // the final result guard; ordinary previous tracks remain suppressed.
+      if (entry && !track.previousFallbackRelaxed) heldBack.push(previouslySuggestedDiscard(track, entry));
       else tracks.push(track);
     }
 

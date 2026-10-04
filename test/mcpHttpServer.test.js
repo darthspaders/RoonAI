@@ -109,6 +109,43 @@ test("HTTP MCP handler exposes Rabbit Hole tools over JSON-RPC", async (t) => {
         result: { accepted: true }
       });
     }
+    if (req.method === "GET" && url.pathname === "/api/discovery/diagnostics") {
+      assert.equal(url.searchParams.get("runId"), "test-run");
+      return sendJson(res, 200, { ok: true, runId: "test-run", sonic: { sonicInvoked: true, sonicBlendApplied: false, scoredCount: 0 } });
+    }
+    if (req.method === "GET" && url.pathname === "/api/recommendation-v2/coverage") {
+      return sendJson(res, 200, { ok:true, scope:"embedding-coverage-only", queueDepth:7 });
+    }
+    if (req.method === "POST" && url.pathname === "/api/recommendation-v2/coverage/pause") {
+      let body = "";
+      req.on("data", chunk => { body += chunk; });
+      req.on("end", () => {
+        assert.deepEqual(JSON.parse(body), {scope:"bulk"});
+        sendJson(res, 200, {ok:true, job:{state:"paused"}, queueDepth:7});
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/recommendation-v2/sonic-neighbor-candidates") {
+      return sendJson(res, 200, {
+        ok: true,
+        candidates: [{
+          identityKey: "tidal:neighbor-1",
+          artist: "Neighbor Artist",
+          title: "Neighbor Track",
+          tidalId: "neighbor-1",
+          shadowOnly: true,
+          queueable: false,
+          sonicNeighbor: { anchorIdentityKey: "tidal:seed", similarity: 0.91 }
+        }],
+        diagnostics: { source: "sonic-neighbor", mode: "shadow", acceptedCount: 1 }
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/api/recommendation-v2/sonic-review/schema") {
+      return sendJson(res, 200, { ok: true, profile: { genreLane: [{ id: "genre:house", label: "House" }] }, evidence: { rawEmbeddingsReturned: false } });
+    }
+    if (req.method === "POST" && url.pathname === "/api/recommendation-v2/sonic-review/sessions") {
+      return sendJson(res, 200, { sessionId: "sonic-review:test", status: "READY", candidateCount: 1, currentItem: { candidateIdentity: "tidal:neighbor-1" } });
+    }
     if (req.method === "POST" && url.pathname === "/api/tracks/verify") {
       return sendJson(res, 200, {
         requestedCount: 1,
@@ -161,16 +198,85 @@ test("HTTP MCP handler exposes Rabbit Hole tools over JSON-RPC", async (t) => {
   });
   assert.equal(listed.response.status, 200);
   const toolNames = listed.payload.result.tools.map((tool) => tool.name);
-  assert.equal(toolNames.length, 24);
+  assert.equal(new Set(toolNames).size, toolNames.length, "MCP tool names must be unique");
+  assert.equal(toolNames.length, 44 + require("../src/parallelMusicTools.json").length);
+  for (const tool of require("../src/parallelMusicTools.json")) assert.ok(toolNames.includes(tool.name));
+  for (const name of ["lyrion_players", "lyrion_browse", "lyrion_search", "lyrion_playback"]) assert.ok(toolNames.includes(name));
+  assert.ok(toolNames.includes("get_discovery_diagnostics"));
+  for (const name of ["get_sonic_coverage_status", "control_sonic_coverage"]) assert.ok(toolNames.includes(name));
+  const coverage = await postJson(`${mcp.url}/mcp`, {jsonrpc:"2.0",id:701,method:"tools/call",params:{name:"get_sonic_coverage_status",arguments:{}}});
+  assert.equal(coverage.payload.result.structuredContent.queueDepth, 7);
+  const pausedCoverage = await postJson(`${mcp.url}/mcp`, {jsonrpc:"2.0",id:702,method:"tools/call",params:{name:"control_sonic_coverage",arguments:{action:"pause",scope:"bulk"}}});
+  assert.equal(pausedCoverage.payload.result.structuredContent.job.state, "paused");
   for (const name of ["roon_queue_tracks", "roon_search_track", "roon_get_queue", "retry_pending_bridge_tracks"]) assert.ok(toolNames.includes(name));
   assert.ok(toolNames.includes("get_rabbit_hole_status"));
   assert.ok(toolNames.includes("search_rabbit_hole"));
   assert.ok(toolNames.includes("verify_tracks"));
   assert.ok(toolNames.includes("control_roon"));
+  assert.ok(toolNames.includes("find_sonic_neighbors"));
+  assert.ok(toolNames.includes("generate_sonic_neighbor_candidates"));
+  assert.ok(toolNames.includes("analyze_beatport_preview"));
+  for (const name of [
+    "sonic_start_review_session",
+    "sonic_get_review_session",
+    "sonic_get_next_review_item",
+    "sonic_get_assistant_review_context",
+    "sonic_get_review_schema",
+    "sonic_generate_review_context_summary",
+    "sonic_list_review_sessions",
+    "sonic_pause_review_session",
+    "sonic_resume_review_session",
+    "sonic_save_review_item",
+    "sonic_advance_review_session",
+    "sonic_queue_review_item",
+    "sonic_rate_review_item",
+    "sonic_cancel_review_session"
+  ]) assert.ok(toolNames.includes(name));
   assert.equal(
     listed.payload.result.tools.find((tool) => tool.name === "get_rabbit_hole_status").annotations.readOnlyHint,
     true
   );
+
+  const savedDiagnostics = await postJson(`${mcp.url}/mcp`, {
+    jsonrpc: "2.0", id: 24, method: "tools/call",
+    params: { name: "get_discovery_diagnostics", arguments: { runId: "test-run" } }
+  });
+  assert.equal(savedDiagnostics.payload.result.structuredContent.sonic.sonicInvoked, true);
+  assert.equal(savedDiagnostics.payload.result.structuredContent.sonic.scoredCount, 0);
+
+  const sonicCandidates = await postJson(`${mcp.url}/mcp`, {
+    jsonrpc: "2.0",
+    id: 25,
+    method: "tools/call",
+    params: {
+      name: "generate_sonic_neighbor_candidates",
+      arguments: { anchors: ["tidal:seed"], count: 1 }
+    }
+  });
+  assert.equal(sonicCandidates.response.status, 200);
+  assert.equal(sonicCandidates.payload.result.structuredContent.candidates[0].identityKey, "tidal:neighbor-1");
+  assert.equal(sonicCandidates.payload.result.structuredContent.candidates[0].shadowOnly, true);
+
+  const sonicSession = await postJson(`${mcp.url}/mcp`, {
+    jsonrpc: "2.0",
+    id: 26,
+    method: "tools/call",
+    params: {
+      name: "sonic_start_review_session",
+      arguments: { anchor: "current", count: 1 }
+    }
+  });
+  assert.equal(sonicSession.response.status, 200);
+  assert.equal(sonicSession.payload.result.structuredContent.sessionId, "sonic-review:test");
+
+  const sonicSchema = await postJson(`${mcp.url}/mcp`, {
+    jsonrpc: "2.0",
+    id: 27,
+    method: "tools/call",
+    params: { name: "sonic_get_review_schema", arguments: {} }
+  });
+  assert.equal(sonicSchema.response.status, 200);
+  assert.equal(sonicSchema.payload.result.structuredContent.evidence.rawEmbeddingsReturned, false);
 
   const status = await postJson(`${mcp.url}/mcp`, {
     jsonrpc: "2.0",

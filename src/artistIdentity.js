@@ -1,16 +1,32 @@
 "use strict";
 
+const normalizedNames = new Map();
+const strictFingerprints = new Map();
+const collisionSensitivity = new Map();
+
+function cachedArtistText(cache, value, compute) {
+  // Only memoize bounded primitive strings. Identity rules and non-string
+  // coercion retain their existing behavior, and catalog churn cannot grow
+  // these process-local caches without a limit.
+  if (typeof value !== "string" || value.length > 512) return compute();
+  if (cache.has(value)) return cache.get(value);
+  const result = compute();
+  if (cache.size >= 2048) cache.delete(cache.keys().next().value);
+  cache.set(value, result);
+  return result;
+}
+
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function normalizeArtistName(value) {
-  return cleanText(value)
+  return cachedArtistText(normalizedNames, value, () => cleanText(value)
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+    .trim());
 }
 
 function hasDiacritics(value = "") {
@@ -34,20 +50,24 @@ function isDottedAcronym(value = "") {
 }
 
 function strictArtistFingerprint(value = "") {
-  const text = cleanText(value)
-    .toLowerCase()
-    .normalize("NFC")
-    .replace(/[’‘]/g, "'")
-    .replace(/[“”]/g, "\"")
-    .replace(/\s+/g, " ")
-    .trim();
+  return cachedArtistText(strictFingerprints, value, () => {
+    const text = cleanText(value)
+      .toLowerCase()
+      .normalize("NFC")
+      .replace(/[’‘]/g, "'")
+      .replace(/[“”]/g, "\"")
+      .replace(/\s+/g, " ")
+      .trim();
 
-  if (isDottedAcronym(text)) return text.replace(/[.·]+$/g, "");
-  return text;
+    if (isDottedAcronym(text)) return text.replace(/[.·]+$/g, "");
+    return text;
+  });
 }
 
 function isCollisionSensitiveArtist(value = "") {
-  return Boolean(cleanText(value) && (hasDiacritics(value) || isDottedAcronym(value)));
+  return cachedArtistText(collisionSensitivity, value, () => (
+    Boolean(cleanText(value) && (hasDiacritics(value) || isDottedAcronym(value)))
+  ));
 }
 
 function artistIdentityKey(value = "") {

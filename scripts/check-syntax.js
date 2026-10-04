@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 
 const root = path.resolve(__dirname, "..");
-const scanDirs = ["src", "public", "test"];
+const scanDirs = ["src", "public", "test", "scripts", "integrations"];
 
 function walk(dir) {
   if (!fs.existsSync(dir)) return [];
@@ -16,7 +16,7 @@ function walk(dir) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...walk(fullPath));
-    } else if (entry.isFile() && entry.name.endsWith(".js")) {
+    } else if (entry.isFile() && /\.(?:js|cjs|mjs)$/.test(entry.name)) {
       files.push(fullPath);
     }
   }

@@ -3,6 +3,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { TidalVerifier, trackSourceQualityFromMetadata } = require("../src/tidalVerifier");
+const { isCurrentSearchRequest, currentSearchDocument } = require("./tidalSearchFixture");
 
 function abortingFetch(callCounter) {
   return async (url, options = {}) => {
@@ -18,6 +19,7 @@ function abortingFetch(callCounter) {
 }
 
 function jsonResponse(body, status = 200) {
+  if (Array.isArray(body.data) && body.data.every(item => item.type === "tracks")) body = currentSearchDocument(body);
   return {
     ok: status >= 200 && status < 300,
     status,
@@ -56,7 +58,7 @@ test("TIDAL verifier prefers exact remix result over earlier loose title hit", a
     countryCode: "US",
     fetchImpl: async (url) => {
       const parsed = new URL(url);
-      if (parsed.pathname.includes("/searchResults/")) {
+      if (isCurrentSearchRequest(parsed)) {
         return jsonResponse({
           data: [
             { id: "wrong", type: "tracks" },
@@ -126,6 +128,54 @@ test("TIDAL verifier prefers exact remix result over earlier loose title hit", a
   assert.equal(result.id, "correct");
   assert.equal(result.title, "For An Angel (PvD's E-Werk Club Mix)");
   assert.equal(result.artist, "Paul van Dyk");
+});
+
+test("TIDAL exact lookup accepts additional credited collaborators and reports ambiguous recordings", async () => {
+  const tidal = new TidalVerifier({
+    enabled: true,
+    accessToken: "token",
+    countryCode: "US",
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      if (!isCurrentSearchRequest(parsed)) return jsonResponse({}, 404);
+      const requested = parsed.searchParams.get("include") || "";
+      assert.equal(requested, "tracks");
+      return jsonResponse({
+        data: [
+          { id: "1001", type: "tracks" },
+          { id: "1002", type: "tracks" }
+        ],
+        included: [
+          { id: "1001", type: "tracks", attributes: { title: "Universal Language", externalLinks: [{ href: "https://tidal.com/browse/track/1001" }] }, relationships: { artists: { data: [{ id: "simon", type: "artists" }, { id: "roland", type: "artists" }] } } },
+          { id: "1002", type: "tracks", attributes: { title: "Universal Language", externalLinks: [{ href: "https://tidal.com/browse/track/1002" }] }, relationships: { artists: { data: [{ id: "simon", type: "artists" }, { id: "roland", type: "artists" }] } } },
+          { id: "simon", type: "artists", attributes: { name: "Simon Doty" } },
+          { id: "roland", type: "artists", attributes: { name: "Roland Clark" } }
+        ]
+      });
+    }
+  });
+
+  const ambiguous = await tidal.findExactTrack({ artist: "Simon Doty", title: "Universal Language" }, { strict: true, maxQueries: 1, limit: 2 });
+  assert.equal(ambiguous, null);
+  assert.equal(tidal.lastExactIdentityDiagnostics.failureType, "AMBIGUOUS");
+  assert.equal(tidal.lastExactIdentityDiagnostics.candidateIdentities.length, 2);
+
+  const single = new TidalVerifier({
+    enabled: true,
+    accessToken: "token",
+    fetchImpl: async () => jsonResponse({
+      data: [{ id: "1001", type: "tracks" }],
+      included: [
+        { id: "1001", type: "tracks", attributes: { title: "Universal Language", externalLinks: [{ href: "https://tidal.com/browse/track/1001" }] }, relationships: { artists: { data: [{ id: "simon", type: "artists" }, { id: "roland", type: "artists" }] } } },
+        { id: "simon", type: "artists", attributes: { name: "Simon Doty" } },
+        { id: "roland", type: "artists", attributes: { name: "Roland Clark" } }
+      ]
+    })
+  });
+  const resolved = await single.findExactTrack({ artist: "Simon Doty", title: "Universal Language" }, { strict: true, maxQueries: 1, limit: 1 });
+  assert.equal(resolved.id, "1001");
+  assert.equal(resolved.identityOutcome, "VERIFIED_EQUIVALENT_RECORDING");
+  assert.equal(resolved.identityDiagnostics.artistRelation.type, "requested-artists-subset");
 });
 
 test("TIDAL verifier retries catalog lookup with client credentials after stale manual token", async () => {
@@ -200,7 +250,7 @@ test("TIDAL verifier enriches tracks-only v2 search results before exact matchin
     fetchImpl: async (url) => {
       const parsed = new URL(url);
       calls.push(parsed.toString());
-      if (parsed.pathname.includes("/searchResults/")) {
+      if (isCurrentSearchRequest(parsed)) {
         assert.equal(parsed.searchParams.get("include"), "tracks");
         return jsonResponse({
           data: [
@@ -285,7 +335,8 @@ test("standby search fetches related metadata in one request and retains version
   let calls=0;
   const tidal=new TidalVerifier({enabled:true,accessToken:"token",countryCode:"US",fetchImpl:async url=>{
     calls++;
-    assert.equal(new URL(url).searchParams.get("include"),"tracks.artists,tracks.albums");
+    assert.equal(isCurrentSearchRequest(new URL(url)), true);
+    assert.equal(new URL(url).searchParams.get("include"),"tracks,tracks.artists,tracks.albums");
     return jsonResponse({data:[{id:"1",type:"tracks"}],included:[
       {id:"1",type:"tracks",attributes:{title:"Flashes",version:"D-Nox & Beckers Remix",duration:"PT7M",externalLinks:[{href:"https://tidal.com/track/1"}]},relationships:{artists:{data:[{id:"a",type:"artists"}]},albums:{data:[{id:"b",type:"albums"}]}}},
       {id:"a",type:"artists",attributes:{name:"Stereo Underground, Sealine"}},
@@ -297,6 +348,63 @@ test("standby search fetches related metadata in one request and retains version
   assert.equal(tracks[0].title,"Flashes (D-Nox & Beckers Remix)");
 });
 
+test("album expansion uses TIDAL's current collection include shape", async () => {
+  const calls = [];
+  const tidal = new TidalVerifier({
+    enabled: true,
+    accessToken: "token",
+    countryCode: "US",
+    fetchImpl: async (url) => {
+      const parsed = new URL(url);
+      calls.push(parsed);
+      assert.equal(parsed.pathname, "/v2/albums");
+      assert.equal(parsed.searchParams.get("filter[id]"), "album-1");
+      assert.equal(parsed.searchParams.get("include"), "items,items.artists");
+      return jsonResponse({
+        data: [{
+          id: "album-1",
+          type: "albums",
+          relationships: {
+            items: { data: [{ id: "track-1", type: "tracks" }] }
+          }
+        }],
+        included: [
+          {
+            id: "track-1",
+            type: "tracks",
+            attributes: {
+              title: "Long Form Signal",
+              duration: "PT7M",
+              externalLinks: [{ href: "https://tidal.com/browse/track/track-1" }]
+            },
+            relationships: {
+              artists: { data: [{ id: "artist-1", type: "artists" }] },
+              albums: { data: [{ id: "album-1", type: "albums" }] }
+            }
+          },
+          { id: "artist-1", type: "artists", attributes: { name: "Anchor Artist" } }
+        ]
+      });
+    }
+  });
+
+  const tracks = await tidal.getAlbumTracks({
+    id: "album-1",
+    title: "Anchor Album",
+    artist: "Anchor Artist",
+    label: "Anjunadeep",
+    year: 2026,
+    releaseDate: "2026-05-01"
+  }, { limit: 1 });
+
+  assert.equal(calls.length, 1);
+  assert.equal(tracks.length, 1);
+  assert.equal(tracks[0].artist, "Anchor Artist");
+  assert.equal(tracks[0].album, "Anchor Album");
+  assert.equal(tracks[0].label, "Anjunadeep");
+  assert.equal(tracks[0].year, 2026);
+});
+
 test("TIDAL searchTracks enriches tracks-only v2 search rows before filtering", async () => {
   const detailCalls = [];
   const tidal = new TidalVerifier({
@@ -305,8 +413,8 @@ test("TIDAL searchTracks enriches tracks-only v2 search rows before filtering", 
     countryCode: "US",
     fetchImpl: async (url) => {
       const parsed = new URL(url);
-      if (parsed.pathname.includes("/searchResults/")) {
-        assert.equal(parsed.searchParams.get("include"), "tracks");
+      if (isCurrentSearchRequest(parsed)) {
+        assert.equal(parsed.searchParams.get("include"), "tracks,tracks.artists,tracks.albums");
         return jsonResponse({
           data: [
             { id: "1", type: "tracks" },
@@ -362,7 +470,7 @@ test("TIDAL exact lookup stops after the first high-confidence tracks-only match
     countryCode: "US",
     fetchImpl: async (url) => {
       const parsed = new URL(url);
-      if (parsed.pathname.includes("/searchResults/")) {
+      if (isCurrentSearchRequest(parsed)) {
         assert.equal(parsed.searchParams.get("include"), "tracks");
         return jsonResponse({
           data: [

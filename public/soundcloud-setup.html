@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SoundCloud connection · Rabbit Hole</title><link rel="stylesheet" href="/soundcloud-setup.css"></head>
+<body><main><a href="/">← Rabbit Hole</a><h1>Connect SoundCloud</h1><p>Use Lyrion to find and play music. Connect your SoundCloud account here to save exact tracks to playlists.</p>
+<section><h2>1. Register your app</h2><p>Open <a href="https://soundcloud.com/you/apps" target="_blank" rel="noopener noreferrer">SoundCloud applications</a> and register an application for Rabbit Hole. SoundCloud may require an Artist Pro subscription for API access.</p><p>Register this exact redirect address:</p><code id="redirect">http://127.0.0.1:3777/api/soundcloud/callback</code>
+<p>On the Rabbit Hole computer, add your app credentials to its local <code>.env</code> file, then restart Rabbit Hole:</p><pre>SOUNDCLOUD_CLIENT_ID=your_client_id
+SOUNDCLOUD_CLIENT_SECRET=your_client_secret
+SOUNDCLOUD_REDIRECT_URI=http://127.0.0.1:3777/api/soundcloud/callback</pre><p>Keep secrets in that file. Do not paste them into ChatGPT. Open this setup page on the Rabbit Hole computer to finish connecting with the default redirect.</p></section>
+<section><h2>2. Authorize playlist access</h2><p id="connection">Checking connection…</p><button id="connect" disabled>Connect SoundCloud</button><a id="authorize" hidden rel="noopener noreferrer">Continue to SoundCloud</a></section>
+<section><h2>3. Synapse Finds</h2><p>Create or reuse your dedicated playlist. New playlists are private. Tracks are added only when you ask, using their exact SoundCloud identities.</p><button id="create" disabled>Create or find Synapse Finds</button><p id="playlist"></p></section>
+<p id="message" role="status" aria-live="polite"></p></main><script src="/soundcloud-setup.js"></script></body></html>

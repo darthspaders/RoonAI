@@ -106,6 +106,31 @@ test("standbySearchOptions uses explicit overrides instead of session options", 
   assert.equal(options.standbyPool, "true");
 });
 
+test("standby defaults to a multi-facet taste reservoir instead of a progressive-only lane", () => {
+  const service = createService({
+    tasteProfile: {
+      getTopArtists: () => ["Guy J", "Mersiv"],
+      read: () => ({
+        feedback: {},
+        labels: { one: { name: "Anjunadeep", score: 4 } }
+      })
+    }
+  });
+  const options = service.standbySearchOptions({}, { useSession: false });
+
+  assert.equal(options.genres, undefined);
+  assert.equal(options.years, undefined);
+  assert.equal(options.minScore, "50");
+  assert.equal(options.scoringMode, "taste-guided");
+  assert.deepEqual(options.learnedTasteArtists, ["Guy J", "Mersiv"]);
+  assert.deepEqual(options.learnedTasteLabels, ["Anjunadeep"]);
+  assert.match(options.request, /soft multi-facet taste guide/i);
+  assert.equal(options.mood, undefined);
+  assert.doesNotMatch(options.request, /Taste anchors:/i);
+  assert.doesNotMatch(options.request, /Guy J|Mersiv|Anjunadeep/i);
+  assert.doesNotMatch(options.request, /radio-like|underground/i);
+});
+
 test("standbyPlanAnchorMatches filters query-anchored tracks that do not match metadata", () => {
   const service = createService();
   const options = {
@@ -128,6 +153,72 @@ test("standbyPlanAnchorMatches filters query-anchored tracks that do not match m
     title: "Track",
     label: "Lost & Found"
   }, options), true);
+});
+
+test("standby activity cutoff ignores suggestions created by the current refresh", () => {
+  const service = createService({
+    discoveryHistory: {
+      uniqueEntries: () => [
+        { artist: "Old Artist", title: "Old Track", lastShownAt: 900 },
+        { artist: "Current Artist", title: "Current Track", lastShownAt: 1100 }
+      ]
+    }
+  });
+
+  const events = service.standbyActivityEvents({ discoveryBefore: 1000 });
+
+  assert.deepEqual(events.filter(event => event.kind === "discovery").map(event => event.title), ["Old Track"]);
+});
+
+test("standby does not treat a failed Roon queue attempt as completed activity", () => {
+  const service = createService({
+    standbyEvents: {
+      entries: [{ key: "retry:1", kind: "queued", artist: "Retry Artist", title: "Retry Track", at: 1000 }]
+    },
+    candidateIdentityKeys: track => [track.key || `${track.artist || ""}|${track.title || ""}`],
+    standbyStore: {
+      read: () => ({
+        candidates: [{ key: "retry:1", artist: "Retry Artist", title: "Retry Track", standbyQueueFailure: {
+          failureType: "error",
+          reason: "Roon browse service is not connected.",
+          retainUntil: Date.now() + 60_000
+        } }]
+      })
+    }
+  });
+
+  assert.equal(service.standbyActivityEvents().some(event => event.kind === "queued"), false);
+});
+
+test("standby display keeps a candidate when its own discovery record is newer than standby entry", () => {
+  const service = createService({
+    FreshPool: class extends TestFreshPool {
+      constructor(options = {}) {
+        super(options);
+        this.events = options.events || [];
+      }
+
+      eligible(track = {}) {
+        return !this.events.some(event => (event.kind === "suggested" || event.kind === "discovery") && event.key === track.key);
+      }
+    },
+    candidateIdentityKeys: track => [track.key || ""],
+    discoveryHistory: {
+      uniqueEntries: () => [{ key: "standby:1", artist: "Current Artist", title: "Current Track", lastShownAt: 2000 }]
+    },
+    standbyStore: {
+      summary: () => ({
+        tracks: [{ key: "standby:1", artist: "Current Artist", title: "Current Track", standbyAddedAt: 1000 }],
+        count: 1,
+        nextRefreshAt: "later"
+      })
+    }
+  });
+
+  const summary = service.standbyFreshSummary();
+
+  assert.equal(summary.count, 1);
+  assert.equal(summary.filteredPreviouslySuggested, 0);
 });
 
 test("standbyFreshSummary filters newly ineligible tracks and reports hidden count", () => {

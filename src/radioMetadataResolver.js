@@ -14,7 +14,7 @@ const DEFAULT_MIN_LOOKUP_INTERVAL_MS = 1500;
 const DEFAULT_CACHE_MAX = 200;
 const USER_AGENT = "RoonPresence/0.1.0 (https://github.com/darthspaders/RoonPresence)";
 const TIDAL_TOKEN_URL = "https://auth.tidal.com/v1/oauth2/token";
-const TIDAL_SEARCH_ROOT = "https://openapi.tidal.com/v2/searchResults";
+const { createSearchUrl, searchRelationForUrl, toLegacySearchShape } = require("./tidalSearchCompat");
 const TIDAL_TRACK_ROOT = "https://openapi.tidal.com/v2/tracks";
 const TIDAL_ALBUM_ROOT = "https://openapi.tidal.com/v2/albums";
 const TIDAL_LEGACY_SEARCH_URL = "https://api.tidal.com/v1/search/tracks";
@@ -1016,10 +1016,9 @@ class RadioMetadataResolver extends EventEmitter {
     this.logger?.info?.("TIDAL web artwork not found; trying TIDAL API: " + (track.artist ? track.artist + " - " : "") + track.title);
 
     for (const query of this.createSearchQueries(track)) {
-      const searchUrl = new URL(`${TIDAL_SEARCH_ROOT}/${encodeURIComponent(query)}/relationships/tracks`);
+      const searchUrl = createSearchUrl(query, "tracks");
       searchUrl.searchParams.set("countryCode", this.tidalCountryCode);
-      searchUrl.searchParams.set("include", "tracks,albums,artists");
-      searchUrl.searchParams.set("limit", "5");
+      searchUrl.searchParams.set("include", "tracks,tracks.albums,tracks.artists");
 
       const searchJson = await this.fetchTidalSearchJson(searchUrl.toString());
       const candidate = chooseTidalCandidate(searchJson, track);
@@ -1219,7 +1218,7 @@ class RadioMetadataResolver extends EventEmitter {
     }
 
     try {
-      return await this.fetchTidalJsonWithGuard(url, accessToken);
+      return toLegacySearchShape(await this.fetchTidalJsonWithGuard(url, accessToken), searchRelationForUrl(url));
     } catch (error) {
       if (error.status !== 401 || !this.tidalAccessToken || !this.tidalClientId || !this.tidalClientSecret) {
         throw error;
@@ -1227,7 +1226,7 @@ class RadioMetadataResolver extends EventEmitter {
 
       this.logger?.warn?.("Manual TIDAL access token was rejected; retrying with client credentials");
       const retryToken = await this.getTidalAccessToken({ ignoreManual: true });
-      return this.fetchTidalJsonWithGuard(url, retryToken);
+      return toLegacySearchShape(await this.fetchTidalJsonWithGuard(url, retryToken), searchRelationForUrl(url));
     }
   }
 
@@ -1392,7 +1391,9 @@ class RadioMetadataResolver extends EventEmitter {
   }
 
   async searchRecordings(track) {
-    const localRecordings = this.musicBrainzIndex?.searchRecordings?.(track) || [];
+    const localRecordings = (this.musicBrainzIndex?.searchRecordingsAsync
+      ? await this.musicBrainzIndex.searchRecordingsAsync(track)
+      : this.musicBrainzIndex?.searchRecordings?.(track)) || [];
     if (localRecordings.length) return localRecordings;
     if (!this.musicBrainzPublicFallback) return [];
 

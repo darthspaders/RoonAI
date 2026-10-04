@@ -16,6 +16,7 @@ function normalizeCachedTidalPlaylist(playlist = {}) {
     title,
     itemCount: Number(playlist.itemCount || playlist.numberOfItems || 0) || 0,
     url: cleanCachedPlaylistText(playlist.url || playlist.tidalUrl || ""),
+    imageUrl: cleanCachedPlaylistText(playlist.imageUrl || playlist.coverArtUrl || ""),
     rawType: cleanCachedPlaylistText(playlist.rawType || playlist.type || "playlist"),
     description: cleanCachedPlaylistText(playlist.description || "")
   };
@@ -87,6 +88,9 @@ const state = {
   tidalMixes: null,
   tidalVisibleMixes: [],
   tidalMixesNeedsRefresh: true,
+  tidalLibraryNeedsRefresh: true,
+  tidalLibraryLoading: false,
+  tidalLibraryFilter: "all",
   radioStations: [],
   radioStationsLoaded: false,
   radioStationsLoading: false,
@@ -121,6 +125,17 @@ const state = {
   nowQualityInfo: null,
   nowQualityCache: {},
   nowMatchIndex: -1,
+  nowSonicProfile: {
+    anchor: null,
+    anchorIdentityKey: "",
+    profile: null,
+    loading: false,
+    saving: false,
+    error: "",
+    status: "",
+    requestId: 0,
+    profileRequestId: 0
+  },
   rabbitHoleGraph: null,
   rabbitHoleKey: "",
   isSeeking: false,
@@ -132,7 +147,38 @@ const state = {
   pcMonitorLoading: false,
   bridgeSyncAlertId: "",
   rejectedDebugOpen: false,
-  resultArtistConfirmedOnly: false
+  resultArtistConfirmedOnly: false,
+  sonicProduction: {
+    enabled: false,
+    productionMode: "off",
+    maxAdjustment: 0.08,
+    maxAdjustmentPoints: 8,
+    loading: false,
+    saving: false,
+    loaded: false,
+    error: ""
+  },
+  sonicReview: {
+    anchor: null,
+    anchorIdentityKey: "",
+    candidates: [],
+    diagnostics: null,
+    index: 0,
+    reviewed: {},
+    loading: false,
+    saving: false,
+    queueing: false,
+    queueResult: null,
+    profile: null,
+    profileLoading: false,
+    profileError: "",
+    profileStatus: "",
+    loaded: false,
+    error: "",
+    status: "",
+    requestId: 0,
+    formDirty: false
+  }
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -392,6 +438,16 @@ function withLocalFeedback(track = null) {
   return feedback && !track.feedback ? { ...track, feedback } : track;
 }
 
+function artworkMetadataMatchesRoon(now = {}, enrichment = {}) {
+  const roonLengthMs = Number(now?.length || 0) * 1000;
+  const enrichmentLengthMs = Number(enrichment?.durationMs || 0);
+  if (!Number.isFinite(roonLengthMs) || !Number.isFinite(enrichmentLengthMs) || roonLengthMs <= 0 || enrichmentLengthMs <= 0) {
+    return true;
+  }
+  const toleranceMs = Math.max(30000, roonLengthMs * 0.12);
+  return Math.abs(roonLengthMs - enrichmentLengthMs) <= toleranceMs;
+}
+
 function nowPlayingTrack(zone = activeZone()) {
   const now = summarizeNowPlaying(zone);
   if (!now?.title) return null;
@@ -407,7 +463,9 @@ function nowPlayingTrack(zone = activeZone()) {
     ? `/api/roon/image/${encodeURIComponent(rawNow.image_key)}?width=360&height=360`
     : "";
   const enrichedImageUrl = enriched?.sourceImageUrl || enriched?.imageUrl || "";
-  const metadataImageUrl = metadataEnrichment?.sourceImageUrl || metadataEnrichment?.imageUrl || "";
+  const metadataImageUrl = artworkMetadataMatchesRoon(rawNow, metadataEnrichment)
+    ? (metadataEnrichment?.sourceImageUrl || metadataEnrichment?.imageUrl || "")
+    : "";
   const imageUrl = isRadio
     ? (metadataImageUrl || trustedRadioArtworkUrl(rawNow) || roonImageUrl)
     : (roonImageUrl || enrichedImageUrl || metadataImageUrl || "");
@@ -476,6 +534,9 @@ function findNowPlayingMatch(zone = activeZone()) {
       album: fallback.album || localTrack.album || "",
       durationMs: fallback.durationMs || localTrack.durationMs || null,
       imageUrl: fallback.imageUrl || localTrack.imageUrl || "",
+      genre: localTrack.genre || fallback.genre || "",
+      subgenre: localTrack.subgenre || fallback.subgenre || "",
+      metadataEnrichment: localTrack.metadataEnrichment || fallback.metadataEnrichment || null,
       tidal: localTrack.tidal || fallback.tidal || null,
       tidalUrl: localTrack.tidalUrl || fallback.tidalUrl || "",
       isRadio: fallback.isRadio || localTrack.isRadio || false,
@@ -878,6 +939,30 @@ function liveQueueHtml(zone = {}) {
 
   if (!items.length && !remaining) return "";
 
+  const queueRows = items.slice(0, 50).map((item, index) => {
+    const queueItemId = String(item.id ?? "").trim();
+    const artwork = item.imageKey
+      ? `<span class="queueArt" style="background-image:url('/api/roon/image/${encodeURIComponent(item.imageKey)}?width=80&height=80')" aria-hidden="true"></span>`
+      : "<span class=\"queueArt queueArtEmpty\" aria-hidden=\"true\"></span>";
+    const details = `
+      ${artwork}
+      <span class="queueText">
+        <strong class="queueItemTitle">${escapeHtml(item.title || "Unknown track")}</strong>
+        <small>${escapeHtml([item.subtitle, item.album].filter(Boolean).join(" - "))}</small>
+      </span>
+      <span class="queueItemActionHint" aria-hidden="true">⋮</span>
+    `;
+    if (!queueItemId) return `<li class="queueItemStatic"><span class="queueItemPosition" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span>${details}</li>`;
+    return `
+      <li>
+        <button type="button" class="queueItemButton" data-queue-item-id="${escapeHtml(queueItemId)}" aria-haspopup="menu" aria-controls="queueActionMenu" aria-expanded="false" title="Tap or hold for queue actions">
+          <span class="queueItemPosition" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span>
+          ${details}
+        </button>
+      </li>
+    `;
+  }).join("");
+
   return `
     <div class="liveQueueHead">
       <strong>Roon queue</strong>
@@ -885,18 +970,116 @@ function liveQueueHtml(zone = {}) {
     </div>
     ${items.length ? `
       <ol>
-        ${items.slice(0, 8).map((item) => `
-          <li>
-            ${item.imageKey ? `<span class="queueArt" style="background-image:url('/api/roon/image/${encodeURIComponent(item.imageKey)}?width=80&height=80')"></span>` : "<span class=\"queueArt queueArtEmpty\"></span>"}
-            <span class="queueText">
-              <strong>${escapeHtml(item.title || "Unknown track")}</strong>
-              <small>${escapeHtml([item.subtitle, item.album].filter(Boolean).join(" - "))}</small>
-            </span>
-          </li>
-        `).join("")}
+        ${queueRows}
       </ol>
     ` : (rawItems.length ? "<p>Current track removed from Rabbit Hole queue view.</p>" : "<p>Roon is reporting queued time, but has not sent the queue item list yet.</p>")}
   `;
+}
+
+const queueActionState = {
+  trigger: null,
+  item: null,
+  longPressTimer: null,
+  suppressClick: false,
+  statusTimer: null
+};
+
+function setQueueActionStatus(message, clearAfterMs = 0) {
+  const status = $("#queueActionStatus");
+  if (!status) return;
+  if (queueActionState.statusTimer) window.clearTimeout(queueActionState.statusTimer);
+  status.textContent = message || "";
+  if (clearAfterMs > 0) {
+    queueActionState.statusTimer = window.setTimeout(() => {
+      status.textContent = "";
+      queueActionState.statusTimer = null;
+    }, clearAfterMs);
+  }
+}
+
+function positionQueueActionMenu(trigger, menu) {
+  if (!trigger || !menu || menu.hidden) return;
+  const triggerRect = trigger.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const margin = 12;
+  let left = Math.min(triggerRect.left, window.innerWidth - menuRect.width - margin);
+  let top = triggerRect.bottom + 8;
+  if (top + menuRect.height > window.innerHeight - margin) top = triggerRect.top - menuRect.height - 8;
+  menu.style.left = `${Math.max(margin, left)}px`;
+  menu.style.top = `${Math.max(margin, top)}px`;
+}
+
+function closeQueueActionMenu({ restoreFocus = true } = {}) {
+  const menu = $("#queueActionMenu");
+  const trigger = queueActionState.trigger;
+  if (menu) {
+    menu.hidden = true;
+    menu.setAttribute("aria-hidden", "true");
+  }
+  if (trigger?.isConnected) {
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus) trigger.focus();
+  }
+  queueActionState.trigger = null;
+  queueActionState.item = null;
+}
+
+function openQueueActionMenu(trigger) {
+  const menu = $("#queueActionMenu");
+  const queueItemId = String(trigger?.dataset.queueItemId || "").trim();
+  if (!menu || !trigger || !queueItemId) return;
+
+  queueActionState.trigger = trigger;
+  queueActionState.item = {
+    queueItemId,
+    title: trigger.querySelector(".queueItemTitle")?.textContent?.trim() || "Selected track",
+    subtitle: trigger.querySelector(".queueText small")?.textContent?.trim() || ""
+  };
+  const title = $("#queueActionTitle");
+  if (title) title.textContent = queueActionState.item.title;
+  menu.hidden = false;
+  menu.setAttribute("aria-hidden", "false");
+  trigger.setAttribute("aria-expanded", "true");
+  requestAnimationFrame(() => positionQueueActionMenu(trigger, menu));
+  menu.querySelector("[data-queue-action=\"play-from-here\"]")?.focus();
+}
+
+async function runQueueAction(actionButton) {
+  const action = actionButton?.dataset.queueAction || "";
+  const selection = queueActionState.item;
+  const trigger = queueActionState.trigger;
+  if (action !== "play-from-here" || !selection) return;
+  const zone = activeZone();
+  if (!zone) {
+    setQueueActionStatus("Select a Roon zone first.", 3500);
+    closeQueueActionMenu({ restoreFocus: false });
+    return;
+  }
+
+  const originalText = actionButton.textContent;
+  actionButton.disabled = true;
+  actionButton.textContent = "Starting…";
+  setQueueActionStatus(`Starting ${selection.title} from here…`);
+  closeQueueActionMenu({ restoreFocus: false });
+  try {
+    await api("/api/roon/queue-control", {
+      zoneId: zone.zone_id,
+      action,
+      queueItemId: selection.queueItemId
+    });
+    setQueueActionStatus(`Playing ${selection.title} from here.`, 3500);
+  } catch (error) {
+    setQueueActionStatus(error.message, 5000);
+  } finally {
+    actionButton.textContent = originalText;
+    actionButton.disabled = false;
+    if (trigger?.isConnected) trigger.setAttribute("aria-expanded", "false");
+  }
+}
+
+function clearQueueLongPress() {
+  if (queueActionState.longPressTimer) window.clearTimeout(queueActionState.longPressTimer);
+  queueActionState.longPressTimer = null;
 }
 
 function outputHtml(zone, output) {
@@ -1265,21 +1448,21 @@ function beatportGenreFieldsForTrack(track = {}) {
 function metadataTagBadgesForTrack(track = {}, excludedKeys = new Set()) {
   const seen = new Set();
   const out = [];
-  const add = (value) => {
+  const add = (value, allowExplicitGenre = false) => {
     const text = String(value || "").replace(/\s+/g, " ").trim();
     const key = normalizeMatchText(text);
-    if (!text || !key || seen.has(key) || excludedKeys.has(key) || isAudioQualityGenreTag(text)) return;
+    if (!text || !key || seen.has(key) || (!allowExplicitGenre && excludedKeys.has(key)) || isAudioQualityGenreTag(text)) return;
     seen.add(key);
     out.push(text);
   };
-  const addMany = (value) => {
+  const addMany = (value, allowExplicitGenre = false) => {
     if (Array.isArray(value)) {
-      value.forEach((item) => add(typeof item === "object" && item ? (item.name || item.title || item.value) : item));
+      value.forEach((item) => add(typeof item === "object" && item ? (item.name || item.title || item.value) : item, allowExplicitGenre));
       return;
     }
-    String(value || "").split(/\s*,\s*/).forEach(add);
+    String(value || "").split(/\s*,\s*/).forEach((item) => add(item, allowExplicitGenre));
   };
-  addMany(track.metadataEnrichment?.beatportTags);
+  addMany(track.metadataEnrichment?.beatportTags, true);
   addMany(track.metadataEnrichment?.musicBrainzTags);
   addMany(track.metadataEnrichment?.genres);
   addMany(track.metadataEnrichment?.tags);
@@ -1288,13 +1471,9 @@ function metadataTagBadgesForTrack(track = {}, excludedKeys = new Set()) {
 }
 
 function nowSourceQualityHtml(info = null, track = null) {
-  const primaryParts = [];
-  const display = String(info?.display || track?.playbackSource?.display || "").trim();
-  if (display) primaryParts.push(display);
   const duration = formatTrackDuration(track?.durationMs);
-  if (duration) primaryParts.push(duration);
 
-  const detailLines = [];
+  const detailRows = [];
   const releaseYear = releaseYearForTrack(track || {});
   const releaseDate = releaseDateForTrack(track || {});
   const label = metadataLabelForTrack(track || {});
@@ -1305,14 +1484,11 @@ function nowSourceQualityHtml(info = null, track = null) {
     normalizeMatchText(beatportGenre.subGenre)
   ].filter(Boolean));
   const genre = beatportGenre.genre || metadataGenreForTrack(track || {}, explicitGenreKeys);
-  if (releaseDate || releaseYear || label) {
-    detailLines.push([
-      releaseDate ? `Released: ${releaseDate}` : releaseYear ? `Released: ${releaseYear}` : "",
-      label
-    ].filter(Boolean).join(" • "));
-  }
-  if (genre) detailLines.push(`Genre: ${genre}`);
-  if (beatportGenre.subGenre) detailLines.push(`Subgenre: ${beatportGenre.subGenre}`);
+  if (duration) detailRows.push({ label: "Track length", value: duration, kind: "primary" });
+  if (releaseDate || releaseYear) detailRows.push({ label: "Released", value: releaseDate || releaseYear });
+  if (label) detailRows.push({ label: "Label", value: label });
+  if (genre) detailRows.push({ label: "Genre", value: genre });
+  if (beatportGenre.subGenre) detailRows.push({ label: "Subgenre", value: beatportGenre.subGenre });
   const bpm = Number(beatport.bpm || track?.metadataEnrichment?.bpm || 0);
   const keyName = String(beatport.keyName || track?.metadataEnrichment?.keyName || "").trim();
   const camelot = String(beatport.camelot || track?.metadataEnrichment?.camelot || "").trim();
@@ -1321,25 +1497,18 @@ function nowSourceQualityHtml(info = null, track = null) {
     keyName,
     camelot && camelot !== keyName ? camelot : ""
   ].filter(Boolean).join(" • ");
-  if (beatportDetails) detailLines.push(beatportDetails);
-  const beatportIds = [
-    beatport.id ? `Beatport #${beatport.id}` : "",
-    beatport.releaseId ? `Release #${beatport.releaseId}` : ""
-  ].filter(Boolean).join(" • ");
-  if (beatportIds) detailLines.push(beatportIds);
+  if (beatportDetails) detailRows.push({ label: "BPM / Key", value: beatportDetails });
+  if (beatport.id) detailRows.push({ label: "Beatport Track ID", value: `#${beatport.id}`, kind: "technical" });
+  if (beatport.releaseId) detailRows.push({ label: "Release ID", value: `#${beatport.releaseId}`, kind: "technical" });
 
   const tags = metadataTagBadgesForTrack(track || {}, explicitGenreKeys);
   const tagHtml = tags.length
     ? `<span class="sourceTagRow">${tags.map((tag) => `<span class="sourceTagBadge">${escapeHtml(tag)}</span>`).join("")}</span>`
     : "";
-  const lines = [
-    primaryParts.join(" • "),
-    ...detailLines
-  ].filter(Boolean);
-  if (!lines.length && !tagHtml) return "";
+  if (!detailRows.length && !tagHtml) return "";
 
-  return lines.map((line, index) => (
-    `<span class="${index === 0 ? "sourcePrimary" : "sourceDetail"}">${escapeHtml(line)}</span>`
+  return detailRows.map((row, index) => (
+    `<span class="sourceRow ${index === 0 ? "sourcePrimary" : "sourceDetail"} ${row.kind === "technical" ? "sourceTechnical" : ""}"><span class="sourceLabel">${escapeHtml(row.label)}</span><span class="sourceValue">${escapeHtml(row.value)}</span></span>`
   )).join("") + tagHtml;
 }
 
@@ -2005,11 +2174,14 @@ function discardedEvidenceSummaryHtml(item = {}) {
 function normalizeFeedbackValue(value) {
   const rating = String(value || "").toLowerCase();
   if (rating === "love") return "love";
-  if (rating === "good" || rating === "up") return "good";
+  // Render legacy Good/Up history as the new, more conservative Like choice.
+  if (rating === "like" || rating === "good" || rating === "up") return "like";
   if (rating === "ok" || rating === "okay") return "ok";
+  if (rating === "dislike") return "dislike";
   if (rating === "wrong_genre" || rating === "wrong genre" || rating === "wrong" || rating === "not what i asked for" || rating === "not_asked") return "wrong_genre";
   if (rating === "reject_similar" || rating === "reject similar" || rating === "similar_bad" || rating === "similar") return "reject_similar";
-  if (rating === "skip" || rating === "down") return "skip";
+  // Skip/Down are retained as playback-history aliases and shown as Dislike.
+  if (rating === "skip" || rating === "down") return "dislike";
   if (rating === "never" || rating === "never_again" || rating === "never again") return "never";
   return "";
 }
@@ -2017,8 +2189,9 @@ function normalizeFeedbackValue(value) {
 function feedbackBadgeLabel(value) {
   const rating = normalizeFeedbackValue(value);
   if (rating === "love") return "Loved now playing";
-  if (rating === "good") return "Rated Good";
-  if (rating === "ok") return "Rated OK";
+  if (rating === "like") return "Rated Like";
+  if (rating === "ok") return "Rated Okay";
+  if (rating === "dislike") return "Disliked now playing";
   if (rating === "wrong_genre") return "Marked Wrong Genre";
   if (rating === "reject_similar") return "Rejected similar";
   if (rating === "skip") return "Skipped now playing";
@@ -2026,19 +2199,19 @@ function feedbackBadgeLabel(value) {
   return "";
 }
 
-function feedbackButtonsHtml(track, index, prefix = "") {
+function feedbackButtonsHtml(track, index, prefix = "", allowedValues = null) {
   const feedback = normalizeFeedbackValue(track?.feedback || "");
   const attr = prefix ? `data-${prefix}-feedback` : "data-feedback";
   const indexAttr = prefix ? `data-${prefix}-index` : "data-index";
+  const allowed = Array.isArray(allowedValues) ? new Set(allowedValues) : null;
   const options = [
     { value: "love", label: "&#10084;&#65039; Love", aria: "Love" },
-    { value: "good", label: "&#128077; Good", aria: "Good" },
-    { value: "ok", label: "&#128076; OK", aria: "OK" },
-    { value: "wrong_genre", label: "Wrong Genre", aria: "Not what I asked for" },
-    { value: "skip", label: "&#128078; Skip", aria: "Skip" },
+    { value: "like", label: "&#128077; Like", aria: "Like" },
+    { value: "ok", label: "&#128076; Okay", aria: "Okay" },
+    { value: "dislike", label: "&#128078; Dislike", aria: "Dislike" },
     { value: "never", label: "&#128683; Never Again", aria: "Never Again" }
   ];
-  return options.map((option) => `
+  return options.filter((option) => !allowed || allowed.has(option.value)).map((option) => `
     <button type="button" class="feedbackButton ${escapeHtml(option.value)} ${feedback === option.value ? "active" : ""}" ${attr}="${escapeHtml(option.value)}" ${indexAttr}="${index}" aria-label="${escapeHtml(option.aria)}" title="${escapeHtml(option.aria)}" aria-pressed="${feedback === option.value}">${option.label}</button>
   `).join("");
 }
@@ -2168,6 +2341,7 @@ function rabbitHoleGraphHtml(graph = {}) {
 function setRabbitPrompt(prompt) {
   const text = String(prompt || "").trim();
   if (!text) return;
+  setActiveView("discover", { group: "discover", item: "rabbit-hole" });
   $("#request").value = text;
   const genres = document.querySelector("[name='genres']");
   const mood = document.querySelector("[name='mood']");
@@ -2189,6 +2363,7 @@ function jumpToTrackIdentity(track = {}) {
   const key = trackKeyFor(track);
   const currentIndex = state.lastTracks.findIndex((candidate) => trackKeyFor(candidate) === key);
   if (currentIndex >= 0) {
+    setActiveView("discover", { group: "discover", item: "rabbit-hole" });
     scrollToDiscoveryTrack(currentIndex);
     return true;
   }
@@ -2508,6 +2683,7 @@ async function loadTidalPlaylists({ force = false } = {}) {
     renderNowTidalPlaylistControl();
     renderTidalPlaylistSeedControl();
     renderPlaylistBrowser();
+    renderTidalLibrary();
     return;
   }
   state.tidalPlaylistsLoading = true;
@@ -2552,6 +2728,7 @@ async function loadTidalPlaylists({ force = false } = {}) {
     renderNowTidalPlaylistControl();
     renderTidalPlaylistSeedControl();
     renderPlaylistBrowser();
+    renderTidalLibrary();
   }
 }
 
@@ -2603,6 +2780,53 @@ async function addNowTrackToTidalPlaylist(button = $("#addNowToTidalPlaylist")) 
   }
 }
 
+function renderNowSonicProfileEditor(track = null) {
+  const root = $("#nowSonicProfile");
+  if (!root) return;
+  const profileState = state.nowSonicProfile;
+  const identityKey = sonicReviewIdentityKey(track || {});
+  if (!identityKey) {
+    root.hidden = true;
+    root.innerHTML = "";
+    root.dataset.renderKey = "";
+    return;
+  }
+  if (profileState.anchorIdentityKey !== identityKey) {
+    Object.assign(profileState, {
+      anchor: { ...(track || {}), identityKey },
+      anchorIdentityKey: identityKey,
+      profile: null,
+      loading: true,
+      saving: false,
+      error: "",
+      status: "Loading saved profile…",
+      requestId: Number(profileState.requestId || 0) + 1
+    });
+    root.hidden = false;
+    root.dataset.renderKey = "";
+    root.innerHTML = sonicProfileEditorHtml({ prefix: "now", anchor: track, profileState });
+    loadSonicProfileState(profileState, track, { render: () => renderNowSonicProfileEditor(state.nowTrack) }).catch(() => {});
+    return;
+  }
+  if (track) profileState.anchor = { ...(profileState.anchor || {}), ...track, identityKey };
+  const profile = profileState.profile || {};
+  const metadataGenres = sonicReviewGenreFields(profileState.anchor || track || {});
+  const renderKey = [
+    identityKey,
+    metadataGenres.genre,
+    metadataGenres.subgenre,
+    profile.updatedAt || "",
+    profileState.loading ? "loading" : "ready",
+    profileState.saving ? "saving" : "idle",
+    profileState.status || "",
+    profileState.error || ""
+  ].join("|");
+  if (root.dataset.renderKey === renderKey) return;
+  root.hidden = false;
+  root.dataset.renderKey = renderKey;
+  root.innerHTML = sonicProfileEditorHtml({ prefix: "now", anchor: profileState.anchor || track, profileState });
+}
+
 function updateNowDiscoveryTools(zone = activeZone()) {
   const tools = $("#nowDiscoveryTools");
   const feedback = $("#nowFeedback");
@@ -2630,7 +2854,11 @@ function updateNowDiscoveryTools(zone = activeZone()) {
   tools.hidden = false;
   const feedbackRenderKey = `${trackKeyFor(match.track)}|${normalizeFeedbackValue(match.track.feedback || "")}`;
   if (feedback.dataset.renderKey !== feedbackRenderKey) {
-    feedback.innerHTML = feedbackButtonsHtml(match.track, 0, "now");
+    feedback.innerHTML = `
+      <div class="feedbackRail">
+        ${feedbackButtonsHtml(match.track, 0, "now")}
+      </div>
+    `;
     feedback.dataset.renderKey = feedbackRenderKey;
   }
   badge.innerHTML = nowPlayingBadgeHtml(match.track, match.source);
@@ -3977,6 +4205,12 @@ async function recoverGeneratedSession(startedAt = Date.now()) {
 
 function applyAppState(app = {}) {
   if (!app) return;
+  // Compact updates deliberately omit the saved session. Retain omitted fields
+  // rather than clearing feedback, calibration or the displayed discovery list.
+  if (Object.hasOwn(app, "sessionVersion") && !Object.hasOwn(app, "session")) {
+    app = { ...(state.appStatus || {}), ...app };
+    delete app.session;
+  }
   state.appStatus = app;
   state.memory = app.memory || state.memory;
   if (app.standby) renderStandbyPool(app.standby);
@@ -4142,6 +4376,97 @@ async function updateModelMode(options = {}) {
   renderModelStatus(status);
 }
 
+function renderSonicProductionSettings() {
+  const settings = state.sonicProduction || {};
+  const mode = ["off", "observe", "blend"].includes(settings.productionMode)
+    ? settings.productionMode
+    : "off";
+  const select = $("#sonicProductionModeSelect");
+  if (select && document.activeElement !== select) select.value = mode;
+  if (select) {
+    select.disabled = Boolean(settings.loading || settings.saving);
+    select.setAttribute("aria-busy", String(Boolean(settings.loading || settings.saving)));
+  }
+
+  const status = $("#sonicProductionStatus");
+  if (!status) return;
+  status.dataset.mode = mode;
+  status.classList.toggle("statusUnknown", Boolean(settings.error) || !settings.enabled);
+  status.textContent = settings.error
+    ? `Could not update: ${settings.error}`
+    : !settings.enabled
+      ? "Sonic Review unavailable"
+      : settings.loading
+        ? "Loading…"
+        : settings.saving
+          ? "Saving…"
+          : mode === "blend"
+            ? `Blend active · max ±${Number(settings.maxAdjustmentPoints || 0).toFixed(1)} pts`
+            : mode === "observe"
+              ? "Observe only · ordering preserved"
+              : "Off · current ordering preserved";
+}
+
+async function refreshSonicProductionSettings() {
+  if (state.sonicProduction.loading) return;
+  state.sonicProduction.loading = true;
+  state.sonicProduction.error = "";
+  renderSonicProductionSettings();
+  try {
+    const payload = await getJson("/api/recommendation-v2/production-mode");
+    const settings = payload.sonicProduction || payload || {};
+    state.sonicProduction = {
+      ...state.sonicProduction,
+      ...settings,
+      productionMode: settings.productionMode || "off",
+      maxAdjustmentPoints: Number(settings.maxAdjustmentPoints ?? Number(settings.maxAdjustment || 0) * 100),
+      loading: false,
+      loaded: true,
+      error: ""
+    };
+  } catch (error) {
+    state.sonicProduction = {
+      ...state.sonicProduction,
+      loading: false,
+      loaded: false,
+      error: error.message || "Sonic production settings are unavailable."
+    };
+  }
+  renderSonicProductionSettings();
+}
+
+async function updateSonicProductionMode() {
+  const select = $("#sonicProductionModeSelect");
+  const selected = select?.value || "off";
+  const previous = state.sonicProduction.productionMode;
+  state.sonicProduction = {
+    ...state.sonicProduction,
+    productionMode: selected,
+    saving: true,
+    error: ""
+  };
+  renderSonicProductionSettings();
+  try {
+    const result = await api("/api/recommendation-v2/production-mode", { mode: selected });
+    const settings = result.sonicProduction || {};
+    state.sonicProduction = {
+      ...state.sonicProduction,
+      ...settings,
+      saving: false,
+      loaded: true,
+      error: ""
+    };
+  } catch (error) {
+    state.sonicProduction = {
+      ...state.sonicProduction,
+      productionMode: previous || "off",
+      saving: false,
+      error: error.message || "Sonic production mode could not be updated."
+    };
+  }
+  renderSonicProductionSettings();
+}
+
 const BRIDGE_ARTWORK_RETRY_MS = 30 * 1000;
 
 function isBridgeArtworkUrl(value = "") {
@@ -4157,6 +4482,17 @@ function artworkUrlForLoad(value = "", retryBucket = 0) {
   return `${url}${separator}rh_retry=${retryBucket}`;
 }
 
+function setNowArtworkBackdrop(url = "") {
+  const value = String(url || "").trim();
+  if (!value) {
+    document.body.classList.remove("hasNowArtwork");
+    document.body.style.removeProperty("--now-artwork-backdrop");
+    return;
+  }
+  document.body.classList.add("hasNowArtwork");
+  document.body.style.setProperty("--now-artwork-backdrop", `url("${value.replace(/"/g, "%22")}")`);
+}
+
 function setCoverImage(cover, urls = []) {
   const candidates = urls.map((url) => String(url || "").trim()).filter(Boolean);
   const bridgeRetryBucket = candidates.some(isBridgeArtworkUrl)
@@ -4169,6 +4505,7 @@ function setCoverImage(cover, urls = []) {
     cover.dataset.coverLoaded = "0";
     cover.style.backgroundImage = "";
     cover.classList.remove("hasArt");
+    if (cover.id === "cover") setNowArtworkBackdrop("");
     return;
   }
 
@@ -4183,6 +4520,7 @@ function setCoverImage(cover, urls = []) {
       cover.dataset.coverLoaded = "0";
       cover.style.backgroundImage = "";
       cover.classList.remove("hasArt");
+      if (cover.id === "cover") setNowArtworkBackdrop("");
       return;
     }
     const loadUrl = artworkUrlForLoad(url, bridgeRetryBucket);
@@ -4193,6 +4531,7 @@ function setCoverImage(cover, urls = []) {
       cover.dataset.coverLoaded = "1";
       cover.style.backgroundImage = `url("${loadUrl.replace(/"/g, "%22")}")`;
       cover.classList.add("hasArt");
+      if (cover.id === "cover") setNowArtworkBackdrop(loadUrl);
     };
     image.onerror = () => tryCandidate(index + 1);
     image.src = loadUrl;
@@ -4286,14 +4625,12 @@ function renderState(payload) {
     state.selectedZoneId = resolvedZoneId;
   }
 
+  const reconnecting = !payload.connected && state.zones.length > 0;
   connectionPill.textContent = payload.connected
     ? `Connected to ${payload.core.name}`
-    : "Enable this extension in Roon Settings > Extensions";
-
-  const phoneUrl = safeHttpUrl((payload.urls || []).find((url) => !url.includes("localhost")));
-  $("#phoneAccess").innerHTML = phoneUrl
-    ? `<span class="phoneLabel">Phone</span><a href="${escapeHtml(phoneUrl)}">${escapeHtml(phoneUrl)}</a>`
-    : "";
+    : reconnecting
+      ? "Roon reconnecting…"
+      : "Enable this extension in Roon Settings > Extensions";
 
   const select = $("#zoneSelect");
   select.innerHTML = state.zones.map((zone) => (
@@ -4302,6 +4639,15 @@ function renderState(payload) {
   select.value = state.selectedZoneId;
 
   const zone = activeZone();
+  const visualStage = document.querySelector("#playerView .player");
+  if (visualStage) {
+    const playback = { zoneId: state.selectedZoneId, connected: Boolean(payload.connected), state: zone?.state || "stopped",
+      hqplayer: zone?.display_name === "HQPlayer" && zone.outputs?.length === 1 && zone.outputs[0].display_name === "HQPlayer" };
+    visualStage.dataset.playbackZoneId = playback.zoneId;
+    visualStage.dataset.playbackConnected = String(playback.connected);
+    visualStage.dataset.playbackHqplayer = String(Boolean(playback.hqplayer));
+    visualStage.dispatchEvent(new CustomEvent("roon-playback", { detail: playback }));
+  }
   const now = currentZoneNowPlaying(zone);
   const displayNow = summarizeNowPlaying(zone);
   $("#nowTitle").textContent = displayNow?.title || (zone ? "Nothing Playing" : "No active zone");
@@ -4318,9 +4664,13 @@ function renderState(payload) {
   slider.max = String(liveRadio ? 1 : (length || 0));
   slider.disabled = liveRadio || !zone?.is_seek_allowed || !length;
   if (!state.isSeeking) slider.value = String(liveRadio ? 0 : (position || 0));
+  slider.style.setProperty("--seek-progress", `${liveRadio || !length ? 0 : Math.max(0, Math.min(100, (position / length) * 100))}%`);
 
   const liveQueue = $("#liveQueue");
   const queueHtml = zone ? liveQueueHtml(zone) : "";
+  if (queueActionState.item && !displayQueueItems(zone).some((item) => String(item.id ?? "").trim() === queueActionState.item.queueItemId)) {
+    closeQueueActionMenu({ restoreFocus: false });
+  }
   if (queueHtml) {
     liveQueue.hidden = false;
     liveQueue.innerHTML = queueHtml;
@@ -4330,19 +4680,32 @@ function renderState(payload) {
   }
 
   const cover = $("#cover");
-  const metadataSourceCoverUrl = now?.metadata_enrichment?.sourceImageUrl || "";
-  const metadataCoverUrl = now?.metadata_enrichment?.imageUrl || "";
+  const metadataArtworkAllowed = artworkMetadataMatchesRoon(now, now?.metadata_enrichment);
+  const metadataSourceCoverUrl = metadataArtworkAllowed ? (now?.metadata_enrichment?.sourceImageUrl || "") : "";
+  const metadataCoverUrl = metadataArtworkAllowed ? (now?.metadata_enrichment?.imageUrl || "") : "";
   const radioSourceCoverUrl = now?.radio_enrichment?.sourceImageUrl || "";
   const roonCoverUrl = now?.image_key
     ? `/api/roon/image/${encodeURIComponent(now.image_key)}?width=360&height=360`
     : "";
-  setCoverImage(cover, [
-    metadataSourceCoverUrl,
-    radioSourceCoverUrl,
-    metadataCoverUrl,
-    trustedRadioArtworkUrl(now),
-    roonCoverUrl
-  ]);
+  const coverCandidates = now?.radio_lookup
+    ? [
+      metadataSourceCoverUrl,
+      radioSourceCoverUrl,
+      metadataCoverUrl,
+      trustedRadioArtworkUrl(now),
+      roonCoverUrl
+    ]
+    : [
+      // Roon's live image_key belongs to the current queue item. Catalog
+      // enrichment can resolve a different release/version for the same
+      // artist/title, so it must not replace valid live artwork here.
+      roonCoverUrl,
+      metadataSourceCoverUrl,
+      metadataCoverUrl,
+      radioSourceCoverUrl,
+      trustedRadioArtworkUrl(now)
+    ];
+  setCoverImage(cover, coverCandidates);
 
   const outputs = $("#outputs");
   if (outputs) {
@@ -4350,21 +4713,19 @@ function renderState(payload) {
     outputs.innerHTML = "";
   }
   updateNowDiscoveryTools(zone);
-  updateNowSourceQuality(nowPlayingTrack(zone));
+  updateNowSourceQuality(state.nowTrack || nowPlayingTrack(zone));
   updateJumpTopVisibility();
   renderSystemHealth();
 }
 
-async function refresh() {
-  try {
-    const payload = await getJson("/api/status");
-    renderState(payload);
-    applyAppState(payload.app);
-  } catch (error) {
-    markRabbitConnectionLost(error);
-    throw error;
-  }
-}
+const liveStatus = window.createRabbitStatusLive({
+  getJson,
+  onStatus: payload => { renderState(payload); if (payload.app) applyAppState(payload.app); },
+  onSession: applySession,
+  onError: markRabbitConnectionLost,
+  onSessionError: () => { /* Retain current results; retry on the next live update. */ }
+});
+function refresh() { return liveStatus.refresh(); }
 
 function currentRequestPrefersExtendedMixes() {
   const text = [
@@ -5782,6 +6143,7 @@ function renderTidalMixes(result = state.tidalMixes) {
   const pinnedErrors = Array.isArray(result?.pinnedErrors) ? result.pinnedErrors : [];
   const pinnedItems = Array.isArray(result?.pinnedItems) ? result.pinnedItems : [];
   state.tidalVisibleMixes = [...pinnedMixes, ...mixes];
+  renderTidalLibrary();
 
   if (!result) {
     status.textContent = "TIDAL profile mixes have not been loaded yet.";
@@ -5853,6 +6215,175 @@ function renderTidalMixes(result = state.tidalMixes) {
         <p>The endpoint is reachable, but Rabbit Hole did not see My Mix, Daily Discovery, New Arrivals, Track Radio, or Artist Radio items.</p>
       </div>
     `;
+}
+
+function tidalLibraryM3uHref(item = {}, format = "m3u") {
+  const id = String(item.id || "").trim();
+  const title = String(item.title || "TIDAL collection").trim() || "TIDAL collection";
+  const safeFormat = format === "csv" ? "csv" : "m3u";
+  return `/api/tidal/export?id=${encodeURIComponent(id)}&title=${encodeURIComponent(title)}&format=${safeFormat}`;
+}
+
+function tidalLibraryCardHtml(item = {}, kind = "playlist", index = 0) {
+  const isMix = kind === "mix";
+  const title = item.title || (isMix ? "Untitled mix" : "Untitled playlist");
+  const imageUrl = safeHttpUrl(item.imageUrl);
+  const type = isMix ? (item.category || "TIDAL mix") : "TIDAL playlist";
+  const meta = isMix
+    ? [item.rawType || "", Number(item.itemCount || 0) ? `${Number(item.itemCount)} tracks` : ""].filter(Boolean).join(" - ")
+    : [item.rawType || "playlist", Number(item.itemCount || 0) ? `${Number(item.itemCount)} tracks` : ""].filter(Boolean).join(" - ");
+  const description = item.subtitle || item.description || "";
+  const identity = `data-tidal-library-kind="${escapeHtml(kind)}" data-tidal-library-id="${escapeHtml(item.id || "")}" data-tidal-library-index="${escapeHtml(index)}"`;
+  const prompt = `find discoveries inspired by my TIDAL ${item.category || "playlist"} ${title}`.trim();
+  const externalUrl = safeHttpUrl(item.url);
+  const art = imageUrl
+    ? `<img src="${escapeHtml(imageUrl)}" alt="">`
+    : `<span>${escapeHtml(String(index + 1).padStart(2, "0"))}</span>`;
+  return `
+    <article class="tidalLibraryCard">
+      <div class="tidalLibraryArt">${art}</div>
+      <div class="tidalLibraryBody">
+        <span class="tidalLibraryType">${escapeHtml(type)}</span>
+        <h3>${escapeHtml(title)}</h3>
+        ${description ? `<p>${escapeHtml(description)}</p>` : ""}
+        ${meta ? `<small>${escapeHtml(meta)}</small>` : ""}
+      </div>
+      <div class="tidalLibraryActions">
+        <button type="button" ${identity} data-tidal-library-action="play">Play Roon</button>
+        <button type="button" ${identity} data-tidal-library-action="next">Add Next</button>
+        <button type="button" ${identity} data-tidal-library-action="queue">Queue</button>
+        ${isMix ? `<button type="button" ${identity} data-tidal-library-action="prompt">Use as prompt</button>` : `<button type="button" ${identity} data-tidal-library-action="shuffle">Shuffle</button>`}
+        <a class="buttonLink tidalLibraryExport" href="${escapeHtml(tidalLibraryM3uHref(item, "m3u"))}" download>${isMix ? "Create &amp; download mix .m3u" : "Create &amp; download .m3u"}</a>
+        <a class="buttonLink tidalLibraryChatgptExport" href="${escapeHtml(tidalLibraryM3uHref(item, "csv"))}" download>Create &amp; download for ChatGPT (.csv)</a>
+        ${externalUrl ? `<a class="buttonLink" href="${escapeHtml(externalUrl)}" target="_blank" rel="noreferrer">Open TIDAL</a>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function tidalLibraryItems() {
+  const items = [];
+  if (state.tidalLibraryFilter !== "mixes") {
+    state.tidalPlaylists.forEach((playlist, index) => items.push({ item: playlist, kind: "playlist", index }));
+  }
+  if (state.tidalLibraryFilter !== "playlists") {
+    state.tidalVisibleMixes.forEach((mix, index) => items.push({ item: mix, kind: "mix", index }));
+  }
+  return items;
+}
+
+function renderTidalLibrary() {
+  const status = $("#tidalLibraryStatus");
+  const grid = $("#tidalLibraryGrid");
+  const hint = $("#tidalLibraryExportHint");
+  if (!status || !grid) return;
+
+  const playlistCount = state.tidalPlaylistsLoaded ? state.tidalPlaylists.length : 0;
+  const mixCount = state.tidalMixes ? state.tidalVisibleMixes.length : 0;
+  const loaded = state.tidalPlaylistsLoaded || Boolean(state.tidalMixes);
+  const errors = [state.tidalPlaylistsError, state.tidalMixes?.error].filter(Boolean);
+  if (state.tidalLibraryLoading) {
+    status.textContent = "Loading your TIDAL playlists and mixes...";
+    grid.innerHTML = `<div class="tidalLibraryEmpty">Loading TIDAL collections...</div>`;
+    return;
+  }
+  if (!loaded) {
+    status.textContent = "Open this view or refresh to load your TIDAL collections.";
+    grid.innerHTML = `<div class="tidalLibraryEmpty">Connect TIDAL, then refresh to load playlists and mixes.</div>`;
+    return;
+  }
+
+  status.textContent = `${playlistCount} playlist${playlistCount === 1 ? "" : "s"} · ${mixCount} mix/radio item${mixCount === 1 ? "" : "s"}${errors.length ? ` · ${errors.join(" ")}` : ""}`;
+  if (hint) hint.textContent = "Download .m3u for players or .csv for ChatGPT recommendations.";
+  const items = tidalLibraryItems();
+  grid.innerHTML = items.length
+    ? `<div class="tidalLibraryCards">${items.map(({ item, kind, index }) => tidalLibraryCardHtml(item, kind, index)).join("")}</div>`
+    : `<div class="tidalLibraryEmpty">No collections match this filter.</div>`;
+}
+
+async function refreshTidalLibrary({ force = true } = {}) {
+  const button = $("#refreshTidalLibrary");
+  const originalText = button?.textContent || "Refresh library";
+  state.tidalLibraryLoading = true;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Refreshing...";
+  }
+  renderTidalLibrary();
+  try {
+    await Promise.all([
+      loadTidalPlaylists({ force }),
+      refreshTidalMixes({ force })
+    ]);
+    state.tidalLibraryNeedsRefresh = false;
+  } finally {
+    state.tidalLibraryLoading = false;
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+    renderTidalLibrary();
+  }
+}
+
+function setTidalLibraryFilter(filter = "all") {
+  state.tidalLibraryFilter = ["all", "playlists", "mixes"].includes(filter) ? filter : "all";
+  document.querySelectorAll("[data-tidal-library-filter]").forEach((button) => {
+    const active = button.dataset.tidalLibraryFilter === state.tidalLibraryFilter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  renderTidalLibrary();
+}
+
+function tidalLibraryItem(kind = "", id = "", index = 0) {
+  if (kind === "mix") return state.tidalVisibleMixes[Number(index)] || null;
+  return state.tidalPlaylists.find(playlist => String(playlist.id) === String(id)) || null;
+}
+
+function setTidalLibraryStatus(message = "") {
+  const status = $("#tidalLibraryStatus");
+  if (status && message) status.textContent = message;
+}
+
+async function runTidalLibraryAction(button) {
+  const kind = button?.dataset.tidalLibraryKind || "";
+  const id = button?.dataset.tidalLibraryId || "";
+  const index = Number(button?.dataset.tidalLibraryIndex || 0);
+  const action = button?.dataset.tidalLibraryAction || "";
+  const item = tidalLibraryItem(kind, id, index);
+  if (!item) return;
+
+  if (action === "prompt") {
+    const request = $("#request");
+    if (request) request.value = `find discoveries inspired by my TIDAL ${item.category || "mix"} ${item.title || ""}`.trim();
+    setScoringMode("");
+    setActiveView("discover", { group: "discover", item: "rabbit-hole" });
+    request?.focus();
+    return;
+  }
+
+  const mode = action === "play" ? "replace" : action === "next" ? "next" : action === "shuffle" ? "shuffle" : "append";
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = action === "play" ? "Loading..." : "Working...";
+  setTidalLibraryStatus(`${action === "play" ? "Loading" : "Sending"} ${item.title || "TIDAL collection"}...`);
+  try {
+    if (kind === "mix") {
+      await queueTidalMix(item, button, { mode });
+    } else {
+      const playlistIndex = state.tidalPlaylists.findIndex(playlist => String(playlist.id) === String(item.id));
+      if (playlistIndex < 0) throw new Error("That TIDAL playlist is no longer loaded. Refresh the library and try again.");
+      await playBrowserPlaylist("tidal", playlistIndex, mode, button);
+    }
+    setTidalLibraryStatus(`${item.title || "TIDAL collection"}: request sent to Roon.`);
+  } catch (error) {
+    setTidalLibraryStatus(error.message);
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
 }
 
 async function importPinnedTidalMix(input, button) {
@@ -5984,7 +6515,7 @@ function renderHistoryReport(report = {}) {
     metricCardHtml("Observed plays", metrics.observedPlays || 0, ignoredRadio ? `${ignoredRadio} radio placeholders ignored` : "Recorded while this app is running"),
     metricCardHtml("Listening time", formatHours(metrics.knownDurationSeconds), "Known track durations"),
     metricCardHtml("Active days", metrics.activeDays || 0),
-    metricCardHtml("Feedback", metrics.feedbackCount || 0, "Love, Good, OK, Wrong Genre, Skip, Never Again signals"),
+    metricCardHtml("Feedback", metrics.feedbackCount || 0, "Love, Like, Okay, Dislike, Never Again signals"),
     metricCardHtml("Discovery pool", metrics.discoveryCount || 0, "Previously suggested tracks")
   ].join("");
 
@@ -6044,6 +6575,8 @@ function applyPlayerMaximized() {
   const button = $("#togglePlayerMax");
   if (!player || !button) return;
   player.classList.toggle("isMaximized", state.playerMaximized);
+  player.classList.toggle("player--maximized", state.playerMaximized && !player.classList.contains("isFullWindow"));
+  player.classList.toggle("player--regular", !state.playerMaximized && !player.classList.contains("isFullWindow"));
   document.body.classList.toggle("playerMaximized", state.playerMaximized);
   button.textContent = state.playerMaximized ? "Minimize Player" : "Maximize Player";
   button.setAttribute("aria-pressed", String(state.playerMaximized));
@@ -6204,15 +6737,22 @@ function renderPcMonitorOverlay(snapshot = state.pcMonitor, error = state.pcMoni
   if (!overlay || !cpuText || !gpuText || !player) return;
 
   const full = playerFullscreenElement() === player;
+  const playerViewActive = $("#playerView")?.classList.contains("isActive");
+  const theaterPlayer = playerViewActive && (
+    full
+    || player.classList.contains("player--regular")
+    || player.classList.contains("player--maximized")
+    || player.classList.contains("isFullWindow")
+  );
   const statusStack = document.querySelector(".statusStack");
-  const statusHome = document.querySelector(".topChrome");
+  const statusHome = document.querySelector(".appHeader");
   const statusDock = $("#fullscreenConnectionStatus");
   if (statusStack && statusHome && statusDock) {
-    const destination = full ? statusDock : statusHome;
+    const destination = theaterPlayer ? statusDock : statusHome;
     if (statusStack.parentElement !== destination) destination.appendChild(statusStack);
   }
-  overlay.hidden = !full;
-  if (!full) return;
+  overlay.hidden = !theaterPlayer;
+  if (!theaterPlayer) return;
 
   const cpuTemp = snapshot?.cpu?.temperatureC;
   const gpuTemp = snapshot?.gpu?.temperatureC;
@@ -6228,7 +6768,8 @@ function renderPcMonitorOverlay(snapshot = state.pcMonitor, error = state.pcMoni
 
 async function refreshPcMonitorOverlay() {
   const player = document.querySelector(".player");
-  if (!player || playerFullscreenElement() !== player || state.pcMonitorLoading) return;
+  const playerViewActive = $("#playerView")?.classList.contains("isActive");
+  if (!player || !playerViewActive || state.pcMonitorLoading) return;
   state.pcMonitorLoading = true;
   try {
     const snapshot = await getJson("/api/pc-monitor");
@@ -6243,7 +6784,9 @@ async function refreshPcMonitorOverlay() {
 }
 
 function syncPcMonitorOverlay(full) {
-  if (full) {
+  const player = document.querySelector(".player");
+  const playerViewActive = $("#playerView")?.classList.contains("isActive");
+  if (full || (playerViewActive && player)) {
     renderPcMonitorOverlay();
     refreshPcMonitorOverlay().catch(() => {});
     if (!pcMonitorTimer) {
@@ -6267,6 +6810,9 @@ function applyPlayerFullscreenState() {
   if (!player || !button) return;
   const full = playerFullscreenElement() === player;
   player.classList.toggle("isFullWindow", full);
+  player.classList.toggle("player--fullscreen", full);
+  player.classList.toggle("player--maximized", state.playerMaximized && !full);
+  player.classList.toggle("player--regular", !state.playerMaximized && !full);
   document.body.classList.toggle("playerFullWindow", full);
   button.textContent = full ? "Exit Full Window" : "Full Window";
   button.setAttribute("aria-pressed", String(full));
@@ -6304,18 +6850,742 @@ async function setPlayerFullWindow(value) {
   applyPlayerFullscreenState();
 }
 
-function setActiveView(view) {
-  const target = ["history", "musicMemory", "beatportCharts", "radio", "playlists", "tidal"].includes(view) ? view : "player";
-  document.querySelectorAll("[data-view]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === target);
+function sonicReviewIdentityKey(track = {}) {
+  const explicit = String(track.identityKey || track.identity_key || "").trim();
+  if (explicit) return /^\d+$/.test(explicit) ? `tidal:${explicit}` : explicit;
+  const tidalId = tidalTrackId(track);
+  if (tidalId) return `tidal:${tidalId}`;
+  const isrc = String(track.isrc || track.tidal?.isrc || "").trim();
+  if (isrc) return isrc;
+  return "";
+}
+
+function sonicReviewAnchorFromCurrentTrack() {
+  const track = state.nowTrack || nowPlayingTrack(activeZone());
+  const identityKey = sonicReviewIdentityKey(track || {});
+  return identityKey ? { ...track, identityKey } : null;
+}
+
+function sonicReviewAnchorFromInput(value = "") {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const tidalId = text.match(/(?:tidal:\s*|tidal\.com\/(?:browse\/)?track\/)(\d+)/i)?.[1];
+  if (tidalId) {
+    return {
+      identityKey: `tidal:${tidalId}`,
+      tidalId,
+      tidalUrl: `https://tidal.com/browse/track/${tidalId}`
+    };
+  }
+  if (/^(?:file|text|isrc):/i.test(text)) return { identityKey: text };
+  return { identityKey: text };
+}
+
+function sonicReviewTidalUrl(track = {}) {
+  const existing = tidalTrackUrl(track);
+  if (existing) return existing;
+  const identityKey = sonicReviewIdentityKey(track);
+  const tidalId = identityKey.match(/^tidal:(\d+)$/i)?.[1] || "";
+  return tidalId ? `https://tidal.com/browse/track/${tidalId}` : "";
+}
+
+function sonicReviewTrackLabel(track = {}, fallback = "Unknown track") {
+  const artist = String(track.artist || track.tidal?.artist || "").trim();
+  const title = String(track.title || track.tidal?.title || "").trim();
+  return [artist, title].filter(Boolean).join(" - ") || fallback;
+}
+
+function sonicReviewMetadataText(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return values.map((entry) => {
+    if (entry && typeof entry === "object") return entry.name || entry.title || entry.value || entry.label || "";
+    return entry;
+  }).map((entry) => String(entry || "").replace(/\s+/g, " ").trim()).filter(Boolean).join(", ");
+}
+
+function sonicReviewMetadataField(values = []) {
+  for (const value of values) {
+    const text = sonicReviewMetadataText(value);
+    const parts = text.split(/\s*,\s*/).filter((part) => part && !isAudioQualityGenreTag(part));
+    if (parts.length) return Array.from(new Set(parts)).join(", ");
+  }
+  return "";
+}
+
+function sonicReviewGenreFields(track = {}) {
+  const metadata = track.metadataEnrichment || track.metadata_enrichment || {};
+  const beatport = metadata.beatport || {};
+  const beatportTags = Array.isArray(metadata.beatportTags) ? metadata.beatportTags : [];
+  return {
+    genre: sonicReviewMetadataField([
+      track.genre,
+      track.genres,
+      track.metadata?.genre,
+      track.metadata?.genres,
+      metadata.genre,
+      metadata.genres,
+      track.tidal?.genre,
+      track.tidal?.genres,
+      beatport.genre,
+      metadata.source === "beatport" ? beatportTags[0] : ""
+    ]),
+    subgenre: sonicReviewMetadataField([
+      track.subgenre,
+      track.subGenre,
+      track.metadata?.subgenre,
+      track.metadata?.subGenre,
+      metadata.subgenre,
+      metadata.subGenre,
+      track.tidal?.subgenre,
+      track.tidal?.subGenre,
+      beatport.subGenre,
+      metadata.source === "beatport" ? beatportTags[1] : ""
+    ])
+  };
+}
+
+function sonicReviewTrackMeta(track = {}) {
+  const genreFields = sonicReviewGenreFields(track);
+  return [
+    track.album || track.tidal?.album || "",
+    track.mixVersion || track.tidal?.mixVersion || "",
+    [genreFields.genre, genreFields.subgenre].filter(Boolean).join(" / ") || track.selectionArea || track.sonicNeighbor?.selectionArea || "",
+    track.durationMs ? formatDuration(track.durationMs) : ""
+  ].filter(Boolean).join(" · ");
+}
+
+function sonicReviewDiagnosticsText(diagnostics = {}) {
+  const budget = diagnostics.budgetCost || {};
+  const parts = [
+    `Returned ${Number(diagnostics.neighborRowsReturned ?? diagnostics.returned ?? 0)}`,
+    `accepted ${Number(diagnostics.acceptedCount || 0)}`,
+    `duplicates ${Number(diagnostics.duplicateCount || 0)}`,
+    `rejected ${Number(diagnostics.rejectedCount || 0)}`
+  ];
+  const requested = Number(budget.requestedNeighborRows || budget.requestedRows || 0);
+  const consumed = Number(budget.returnedNeighborRows || budget.returnedRows || 0);
+  if (requested || consumed) parts.push(`budget ${consumed}/${requested} rows`);
+  return parts.join(" · ");
+}
+
+function sonicReviewStatusText() {
+  const review = state.sonicReview;
+  if (review.loading) return "Finding neighbors from the stored sonic profile…";
+  if (review.error) return review.error;
+  if (!review.loaded) return "Use the track playing in Roon, or enter a stored TIDAL identity.";
+  if (!review.candidates.length) return "No eligible shadow neighbors were returned for this anchor.";
+  if (review.index >= review.candidates.length) return "Review complete. The decisions are isolated to sonic-neighbor selection.";
+  return review.status || "One neighbor at a time. Your choice advances the review.";
+}
+
+function sonicProfileField(profile = {}, field = "") {
+  const value = profile[field];
+  return value === undefined || value === null ? "" : String(value);
+}
+
+function sonicProfileEditorHtml({ prefix = "sonicReview", anchor = {}, profileState = {} } = {}) {
+  const identityKey = profileState.anchorIdentityKey || sonicReviewIdentityKey(anchor);
+  if (!identityKey) return "";
+  const profile = profileState.profile || {};
+  const savedProfile = Boolean(profileState.profile);
+  const metadataGenres = sonicReviewGenreFields(anchor);
+  const genre = savedProfile ? sonicProfileField(profile, "genre") : metadataGenres.genre;
+  const subgenre = savedProfile ? sonicProfileField(profile, "subgenre") : metadataGenres.subgenre;
+  const busy = Boolean(profileState.loading || profileState.profileLoading || profileState.saving);
+  const error = Object.prototype.hasOwnProperty.call(profileState, "profileError") ? profileState.profileError : profileState.error;
+  const profileStatus = Object.prototype.hasOwnProperty.call(profileState, "profileStatus") ? profileState.profileStatus : profileState.status;
+  const status = error || profileStatus || (profileState.loading || profileState.profileLoading
+    ? "Loading saved profile…"
+    : profileState.profile
+      ? `Saved ${profileState.profile.updatedAt ? new Date(profileState.profile.updatedAt).toLocaleString() : "profile"}.`
+      : "No saved notes for this anchor yet.");
+  const buttonText = profileState.saving
+    ? "Saving…"
+    : profileState.profile
+      ? "Update Sonic profile"
+      : "Save Sonic profile";
+  const tags = Array.isArray(profile.tags) ? profile.tags.join(", ") : sonicProfileField(profile, "tags");
+  const metadataPrefill = !savedProfile && (genre || subgenre);
+  return `
+    <section class="panel sonicProfileEditor" aria-labelledby="${prefix}SonicProfileHeading">
+      <div class="sonicProfileEditorHead">
+        <div>
+          <p class="eyebrow">Sonic profile</p>
+          <h3 id="${prefix}SonicProfileHeading">Describe this anchor</h3>
+        </div>
+        ${prefix === "now" ? `<button type="button" class="sonicProfileReviewButton" data-sonic-profile-open-review>Review neighbors</button>` : ""}
+      </div>
+      <p class="sonicProfileEditorIntro">Anchor-scoped notes only. They can guide this shadow sonic lane; they never change global taste or production ordering.${metadataPrefill ? " Available Genre/Subgenre metadata is prefilled below." : ""}</p>
+      <form class="sonicProfileForm" data-sonic-profile-form="${prefix}">
+        <div class="sonicProfileGrid">
+          <label>Genre / lane<input id="${prefix}SonicProfileGenre" name="genre" type="text" value="${escapeHtml(genre)}" placeholder="e.g. Progressive House" autocomplete="off"></label>
+          <label>Subgenre<input id="${prefix}SonicProfileSubgenre" name="subgenre" type="text" value="${escapeHtml(subgenre)}" placeholder="e.g. Melodic, deep, peak-time" autocomplete="off"></label>
+          <label>Energy <span class="sonicProfileHint">1–10</span><input id="${prefix}SonicProfileEnergy" name="energy" type="number" min="1" max="10" step="1" value="${escapeHtml(sonicProfileField(profile, "energy"))}" placeholder="7"></label>
+          <label>Mood<input id="${prefix}SonicProfileMood" name="mood" type="text" value="${escapeHtml(sonicProfileField(profile, "mood"))}" placeholder="e.g. hypnotic, driving" autocomplete="off"></label>
+          <label class="sonicProfileWide">Tags <span class="sonicProfileHint">comma separated</span><input id="${prefix}SonicProfileTags" name="tags" type="text" value="${escapeHtml(tags)}" placeholder="rolling, late-night, warm" autocomplete="off"></label>
+          <label class="sonicProfileWide">Listening note<textarea id="${prefix}SonicProfileNote" name="note" rows="2" placeholder="What should a good neighbor preserve?" spellcheck="true">${escapeHtml(sonicProfileField(profile, "note"))}</textarea></label>
+        </div>
+        <div class="sonicProfileFormFooter">
+          <button type="submit" class="sonicProfileSave" data-sonic-profile-save="${prefix}" ${busy ? "disabled" : ""}>${buttonText}</button>
+          <span class="sonicProfileStatus ${error ? "isError" : ""}" role="status">${escapeHtml(status)}</span>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+async function loadSonicProfileState(profileState, anchor, {
+  loadingKey = "loading",
+  errorKey = "error",
+  statusKey = "status",
+  render = () => {}
+} = {}) {
+  const identityKey = sonicReviewIdentityKey(anchor || {});
+  if (!identityKey) return null;
+  const requestId = Number(profileState.profileRequestId || 0) + 1;
+  profileState.profileRequestId = requestId;
+  profileState.anchor = { ...(anchor || {}), identityKey };
+  profileState.anchorIdentityKey = identityKey;
+  profileState.profile = null;
+  profileState[loadingKey] = true;
+  profileState[errorKey] = "";
+  profileState[statusKey] = "Loading saved profile…";
+  render();
+  try {
+    const result = await getJson(`/api/recommendation-v2/sonic-profile?anchor=${encodeURIComponent(identityKey)}`);
+    if (profileState.profileRequestId !== requestId) return result;
+    profileState.profile = result.profile || null;
+    profileState[statusKey] = result.profile ? "Saved profile loaded." : "No saved notes for this anchor yet.";
+    return result;
+  } catch (error) {
+    if (profileState.profileRequestId === requestId) {
+      profileState[errorKey] = error.message || "The saved sonic profile could not be loaded.";
+      profileState[statusKey] = "Profile load failed.";
+    }
+    return null;
+  } finally {
+    if (profileState.profileRequestId === requestId) {
+      profileState[loadingKey] = false;
+      render();
+    }
+  }
+}
+
+async function saveSonicProfileState(profileState, prefix, render = () => {}) {
+  const anchor = profileState.anchor || { identityKey: profileState.anchorIdentityKey };
+  const identityKey = sonicReviewIdentityKey(anchor);
+  if (!identityKey || profileState.saving) return;
+  const value = (field) => String(document.querySelector(`#${prefix}SonicProfile${field}`)?.value || "").trim();
+  const values = {
+    genre: value("Genre"),
+    subgenre: value("Subgenre"),
+    energy: value("Energy"),
+    mood: value("Mood"),
+    tags: value("Tags").split(",").map((tag) => tag.trim()).filter(Boolean),
+    note: value("Note")
+  };
+  profileState.saving = true;
+  profileState.error = "";
+  profileState.profileError = "";
+  profileState.status = "Saving sonic profile…";
+  profileState.profileStatus = "Saving sonic profile…";
+  render();
+  try {
+    const result = await api("/api/recommendation-v2/sonic-profile", {
+      anchor: trackPayload(anchor),
+      genre: values.genre,
+      subgenre: values.subgenre,
+      energy: values.energy === "" ? null : Number(values.energy),
+      mood: values.mood,
+      tags: values.tags,
+      note: values.note,
+      sourceLabel: "rabbit-hole-sonic-review",
+      model: "discogs-effnet",
+      modelVersion: "1"
+    });
+    profileState.profile = result.profile || null;
+    profileState.status = "Sonic profile saved for this anchor.";
+    profileState.profileStatus = "Sonic profile saved for this anchor.";
+    return result;
+  } catch (error) {
+    profileState.error = error.message || "The sonic profile could not be saved.";
+    profileState.profileError = profileState.error;
+    profileState.status = "Profile save failed.";
+    profileState.profileStatus = "Profile save failed.";
+    return null;
+  } finally {
+    profileState.saving = false;
+    render();
+  }
+}
+
+function sonicReviewQueueStatusText() {
+  const result = state.sonicReview.queueResult;
+  if (state.sonicReview.queueing) return "Verifying each neighbor with TIDAL, then checking exact Roon queueability…";
+  if (!result) return "The button sends this bounded pack through strict TIDAL → Roon verification. Unresolved rows stay out of the queue.";
+  return `${Number(result.queuedCount ?? result.queued ?? 0)} queued · ${Number(result.failedCount ?? result.failed ?? 0)} held back by verification`;
+}
+
+async function queueSonicReviewNeighbors() {
+  const review = state.sonicReview;
+  if (!review.candidates.length || review.queueing) return;
+  const zone = activeZone();
+  if (!zone) {
+    review.error = "Select a Roon zone before queueing sonic neighbors.";
+    renderSonicReview();
+    return;
+  }
+  const candidates = review.candidates.slice(0, 40).map(trackPayload);
+  review.queueing = true;
+  review.queueResult = null;
+  review.error = "";
+  renderSonicReview();
+  try {
+    const result = await api("/api/tracks/supplied/queue", {
+      zoneId: zone.zone_id,
+      tracks: candidates,
+      queuePolicy: "strict",
+      verifyBeforeQueue: true,
+      allowBridge: true,
+      source: "sonic-review"
+    });
+    review.queueResult = result;
+    review.status = `${Number(result.queuedCount ?? result.queued ?? 0)} of ${candidates.length} sonic neighbors were queued after exact verification.`;
+  } catch (error) {
+    review.error = error.message || "The verified sonic-neighbor queue request failed.";
+  } finally {
+    review.queueing = false;
+    renderSonicReview();
+  }
+}
+
+function sonicReviewHeaderHtml(anchor = {}) {
+  const review = state.sonicReview;
+  const anchorUrl = sonicReviewTidalUrl(anchor);
+  const anchorKey = review.anchorIdentityKey || sonicReviewIdentityKey(anchor);
+  const anchorName = sonicReviewTrackLabel(anchor, anchorKey || "No anchor selected");
+  const anchorMeta = sonicReviewTrackMeta(anchor);
+  return `
+    <header class="panel sonicReviewHeader">
+      <div>
+        <p class="eyebrow">Shadow review</p>
+        <h2 id="sonicReviewHeading">Sonic Review</h2>
+        <p class="sonicReviewIntro">Play the queued standby tracks in Roon, then use the current Roon track as your anchor. Load its sonic neighbors and record what you hear. Reviews stay out of global taste and production ordering. Queueing still uses strict TIDAL and Roon verification.</p>
+      </div>
+      <div class="sonicReviewHeaderMeta">
+        <span class="sonicReviewMode">Shadow review · strict queue</span>
+        ${review.loaded && review.candidates.length ? `<span class="sonicReviewProgress">${Math.min(review.index + 1, review.candidates.length)} / ${review.candidates.length}</span>` : ""}
+      </div>
+    </header>
+    <section class="panel sonicReviewAnchorTools" aria-label="Choose a sonic review anchor">
+      <div class="sonicReviewAnchorToolsHead">
+        <div>
+          <p class="eyebrow">Anchor</p>
+          <p class="muted">Use the track currently playing in Roon, or paste a stored identity for a track that is not playing.</p>
+        </div>
+        <button type="button" data-sonic-review-load-current>Use current track</button>
+      </div>
+      <form id="sonicReviewAnchorForm" class="sonicReviewAnchorForm">
+        <label for="sonicReviewAnchorInput">Stored identity or TIDAL track URL</label>
+        <div class="sonicReviewAnchorRow">
+          <input id="sonicReviewAnchorInput" name="anchor" type="text" value="${escapeHtml(anchorKey)}" placeholder="tidal:123456789 or https://tidal.com/browse/track/123456789" autocomplete="off">
+          <button type="submit">Load anchor</button>
+        </div>
+      </form>
+      ${anchorKey ? `<p class="sonicReviewAnchorCurrent">Current anchor: <strong>${escapeHtml(anchorName)}</strong>${anchorMeta ? ` · ${escapeHtml(anchorMeta)}` : ""}${anchorUrl ? ` · <a href="${escapeHtml(anchorUrl)}" target="_blank" rel="noreferrer">Open in TIDAL</a>` : ` · <span>No verified TIDAL link</span>`}</p>` : ""}
+    </section>
+  `;
+}
+
+function sonicReviewNeighborHtml(candidate = {}, index = 0, active = false) {
+  const neighbor = candidate.sonicNeighbor || {};
+  const url = sonicReviewTidalUrl(candidate);
+  const label = sonicReviewTrackLabel(candidate);
+  const meta = sonicReviewTrackMeta(candidate);
+  const reviewed = state.sonicReview.reviewed[candidate.identityKey || trackKeyFor(candidate)];
+  return `
+    <div class="sonicReviewNeighbor ${active ? "isActive" : ""} ${reviewed ? "isReviewed" : ""}">
+      <span class="sonicReviewNeighborIndex">${String(index + 1).padStart(2, "0")}</span>
+      <div class="sonicReviewNeighborBody">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(meta || neighbor.selectionArea || "Metadata unavailable")}</span>
+      </div>
+      ${url ? `<a class="sonicReviewNeighborLink" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" aria-label="Open ${escapeHtml(label)} in TIDAL">TIDAL</a>` : `<span class="sonicReviewNeighborLink isMuted">No verified link</span>`}
+      ${reviewed ? `<span class="sonicReviewNeighborReview">${escapeHtml(reviewed === "like" ? "kept" : reviewed.replace(/_/g, " "))}</span>` : ""}
+    </div>
+  `;
+}
+
+function renderSonicReview() {
+  const root = $("#sonicReviewApp");
+  if (!root) return;
+  if (window.SonicBlindReviewUi?.mount(root)) return;
+  const review = state.sonicReview;
+  const draft = review.formDirty ? captureSonicReviewDraft(root, review.anchorIdentityKey) : null;
+  const anchor = review.anchor || {};
+  const candidate = review.candidates[review.index] || null;
+  const remaining = review.candidates.slice(review.index + 1, review.index + 5);
+  const reviewedCount = Object.keys(review.reviewed).length;
+  const status = sonicReviewStatusText();
+
+  root.innerHTML = `
+    <div class="sonicReviewShell">
+      ${sonicReviewHeaderHtml(anchor)}
+      <section class="panel sonicReviewQueueTools"><div><h3>Blind listening</h3><p class="muted">Compare prepared recommendations with model names and scores hidden.</p></div><button type="button" data-sonic-blind-open>Open listening batch</button></section>
+      ${sonicProfileEditorHtml({ prefix: "sonicReview", anchor, profileState: review })}
+      ${review.loaded ? `
+        <section class="panel sonicReviewQueueTools" aria-label="Queue sonic neighbors">
+          <div>
+            <p class="eyebrow">Roon listening queue</p>
+            <h3>${review.candidates.length ? `${review.candidates.length} neighbors ready` : "No neighbors to queue"}</h3>
+            <p class="sonicReviewQueueCopy">${escapeHtml(sonicReviewQueueStatusText())}</p>
+          </div>
+          <button type="button" class="sonicReviewQueueButton" data-sonic-review-queue ${review.queueing || !review.candidates.length || review.queueResult ? "disabled" : ""}>${review.queueing ? "Verifying & queueing…" : review.queueResult ? "Queue complete" : `Queue ${review.candidates.length} verified neighbors`}</button>
+        </section>
+      ` : ""}
+      <div class="sonicReviewLayout">
+        <aside class="panel sonicReviewAnchorPanel">
+          <p class="eyebrow">Listen from</p>
+          <h3>${escapeHtml(sonicReviewTrackLabel(anchor, review.anchorIdentityKey || "Choose an anchor"))}</h3>
+          <p class="sonicReviewAnchorMeta">${escapeHtml(sonicReviewTrackMeta(anchor) || review.anchorIdentityKey || "No track loaded yet")}</p>
+          <div class="sonicReviewRule"></div>
+          <p class="muted">${review.loaded ? `${reviewedCount} reviewed in this pack` : "The review pack will stay shadow-only until you choose an anchor."}</p>
+          ${review.diagnostics ? `<p class="sonicReviewDiagnostics"><span>Traversal</span>${escapeHtml(sonicReviewDiagnosticsText(review.diagnostics))}</p>` : ""}
+        </aside>
+
+        <section class="panel sonicReviewWorkspace" aria-live="polite" aria-busy="${review.loading ? "true" : "false"}">
+          ${review.loading ? `
+            <div class="sonicReviewState"><span class="sonicReviewPulse" aria-hidden="true"></span><strong>Finding sonic neighbors…</strong><p>Using the stored ${escapeHtml(review.anchorIdentityKey || "anchor")} profile. Nothing will be queued.</p></div>
+          ` : review.error ? `
+            <div class="sonicReviewState isError"><strong>Couldn’t load this anchor.</strong><p>${escapeHtml(review.error)}</p><button type="button" data-sonic-review-retry>Try again</button></div>
+          ` : !review.loaded ? `
+            <div class="sonicReviewState"><strong>Ready for a sonic anchor.</strong><p>Start a track in Roon, choose Use current track, or load a stored identity.</p></div>
+          ` : !candidate ? `
+            <div class="sonicReviewState isComplete"><strong>${review.candidates.length ? "Pack reviewed." : "No eligible neighbors yet."}</strong><p>${escapeHtml(status)}</p>${review.candidates.length ? `<button type="button" data-sonic-review-reload>Load another pack</button>` : ""}</div>
+          ` : `
+            <div class="sonicReviewCandidateHead">
+              <div>
+                <p class="eyebrow">Neighbor ${review.index + 1} of ${review.candidates.length}</p>
+                <p class="sonicReviewCandidateHint">Open the verified TIDAL link, listen, then record one decision.</p>
+              </div>
+              <span class="sonicReviewCandidateBadge">${escapeHtml(neighborLabel(candidate))}</span>
+            </div>
+            <article class="sonicReviewCandidate">
+              <div class="sonicReviewCandidateText">
+                <h3>${escapeHtml(sonicReviewTrackLabel(candidate))}</h3>
+                <p>${escapeHtml(sonicReviewTrackMeta(candidate) || candidate.sonicNeighbor?.selectionArea || "Metadata unavailable")}</p>
+              </div>
+              ${sonicReviewTidalUrl(candidate) ? `<a class="buttonLink sonicReviewTidalButton" href="${escapeHtml(sonicReviewTidalUrl(candidate))}" target="_blank" rel="noreferrer">Open in TIDAL</a>` : `<span class="sonicReviewNoLink">No verified TIDAL link</span>`}
+            </article>
+            <div class="sonicReviewNotes">
+              <label for="sonicReviewAreaInput">Corrected lane <span>(optional)</span></label>
+              <input id="sonicReviewAreaInput" type="text" placeholder="e.g. Progressive House" autocomplete="off">
+              <label for="sonicReviewNoteInput">Listening note <span>(optional)</span></label>
+              <textarea id="sonicReviewNoteInput" rows="2" placeholder="What did you hear?" spellcheck="true"></textarea>
+            </div>
+            <div class="sonicReviewActions" role="group" aria-label="Review this sonic neighbor">
+              <button type="button" class="sonicReviewAction sonicReviewActionKeep" data-sonic-review-rating="keep">Keep similar</button>
+              <button type="button" class="sonicReviewAction sonicReviewActionSkip" data-sonic-review-rating="skip">Skip</button>
+              <button type="button" class="sonicReviewAction sonicReviewActionGenre" data-sonic-review-rating="wrong_genre">Wrong genre</button>
+              <button type="button" class="sonicReviewAction sonicReviewActionDifferent" data-sonic-review-rating="keep">Keep, different lane</button>
+            </div>
+            <p class="sonicReviewKeyboardHint">Keyboard: K keep · S skip · G wrong genre · D keep, different lane</p>
+          `}
+          <p class="sonicReviewStatus" role="status">${escapeHtml(status)}</p>
+        </section>
+      </div>
+
+      ${remaining.length ? `<section class="panel sonicReviewUpcoming" aria-label="Upcoming sonic neighbors"><div class="sonicReviewUpcomingHead"><p class="eyebrow">Up next</p><span class="muted">${review.candidates.length - review.index - 1} remaining</span></div>${remaining.map((item, offset) => sonicReviewNeighborHtml(item, review.index + offset + 1)).join("")}</section>` : ""}
+    </div>
+  `;
+  restoreSonicReviewDraft(root, draft);
+  cleanRenderedArtifacts(root);
+}
+
+function captureSonicReviewDraft(root, anchorIdentityKey = "") {
+  if (!root || !anchorIdentityKey) return null;
+  const active = document.activeElement;
+  const fields = {};
+  root.querySelectorAll("input, textarea, select").forEach((field) => {
+    if (field.id) fields[field.id] = field.value;
   });
+  return {
+    anchorIdentityKey,
+    fields,
+    focusedId: active && root.contains(active) ? active.id : "",
+    selectionStart: active && typeof active.selectionStart === "number" ? active.selectionStart : null,
+    selectionEnd: active && typeof active.selectionEnd === "number" ? active.selectionEnd : null
+  };
+}
+
+function restoreSonicReviewDraft(root, draft = null) {
+  if (!root || !draft || draft.anchorIdentityKey !== state.sonicReview.anchorIdentityKey) return;
+  Object.entries(draft.fields || {}).forEach(([id, value]) => {
+    const field = root.querySelector(`#${id}`);
+    if (field && field.value !== value) field.value = value;
+  });
+  if (!draft.focusedId) return;
+  const focused = root.querySelector(`#${draft.focusedId}`);
+  if (!focused) return;
+  focused.focus();
+  if (draft.selectionStart !== null && typeof focused.setSelectionRange === "function") {
+    focused.setSelectionRange(draft.selectionStart, draft.selectionEnd ?? draft.selectionStart);
+  }
+}
+
+function neighborLabel(candidate = {}) {
+  const area = candidate.sonicNeighbor?.selectionArea || candidate.sonicNeighbor?.selectionEvidence?.candidateArea || "";
+  return area ? `Shadow · ${area}` : "Shadow neighbor";
+}
+
+function sonicReviewEventId(anchor = {}, candidate = {}, rating = "") {
+  const base = `${sonicReviewIdentityKey(anchor)}:${candidate.identityKey || trackKeyFor(candidate)}:${rating}`;
+  if (window.crypto?.randomUUID) return `sonic-review:${window.crypto.randomUUID()}`;
+  return `sonic-review:${Date.now()}:${normalizeKeyText(base).slice(0, 90)}`;
+}
+
+async function loadSonicReview({ anchor = null } = {}) {
+  const review = state.sonicReview;
+  const source = anchor || sonicReviewAnchorFromCurrentTrack();
+  const identityKey = typeof source === "string"
+    ? sonicReviewAnchorFromInput(source)?.identityKey || ""
+    : sonicReviewIdentityKey(source || {});
+  if (!identityKey) {
+    review.anchor = null;
+    review.anchorIdentityKey = "";
+    review.candidates = [];
+    review.diagnostics = null;
+    review.index = 0;
+    review.reviewed = {};
+    review.loaded = false;
+    review.error = "There is no stored identity for the current track. Paste a TIDAL track URL or a stored file/text identity to continue.";
+    review.status = "";
+    renderSonicReview();
+    return;
+  }
+
+  const anchorTrack = typeof source === "object" && source ? { ...source, identityKey } : { identityKey };
+  if (review.anchorIdentityKey !== identityKey) review.formDirty = false;
+  const requestId = review.requestId + 1;
+  review.requestId = requestId;
+  review.anchor = anchorTrack;
+  review.anchorIdentityKey = identityKey;
+  review.candidates = [];
+  review.diagnostics = null;
+  review.index = 0;
+  review.reviewed = {};
+  review.queueing = false;
+  review.queueResult = null;
+  review.profile = null;
+  review.profileLoading = true;
+  review.profileError = "";
+  review.profileStatus = "Loading saved profile…";
+  review.loading = true;
+  review.loaded = false;
+  review.error = "";
+  review.status = "";
+  renderSonicReview();
+  const profilePromise = loadSonicProfileState(review, anchorTrack, {
+    loadingKey: "profileLoading",
+    errorKey: "profileError",
+    statusKey: "profileStatus",
+    render: renderSonicReview
+  });
+
+  try {
+    review.status = "Preparing the sonic anchor from the saved embedding or a verified Beatport preview…";
+    renderSonicReview();
+    const preparation = await api("/api/recommendation-v2/sonic-anchor/prepare", {
+      track: trackPayload(anchorTrack),
+      model: "discogs-effnet",
+      modelVersion: "1",
+      allowVersionProxy: true
+    });
+    if (review.requestId !== requestId) return;
+    review.status = preparation.prepared
+      ? "Sonic anchor prepared from a verified Beatport preview. Finding neighbors…"
+      : "Stored sonic anchor found. Finding neighbors…";
+    const result = await api("/api/recommendation-v2/sonic-neighbor-candidates", {
+      anchors: [identityKey],
+      count: 12,
+      perAnchorCount: 12,
+      selectionPoolFactor: 4,
+      model: "discogs-effnet",
+      modelVersion: "1"
+    });
+    if (review.requestId !== requestId) return;
+    review.candidates = Array.isArray(result.candidates) ? result.candidates.filter((candidate) => candidate?.identityKey) : [];
+    review.diagnostics = result.diagnostics || null;
+    review.loaded = true;
+    review.status = review.candidates.length
+      ? `Found ${review.candidates.length} shadow neighbors. Review decisions stay isolated to this sonic lane.`
+      : "The stored profile returned no eligible neighbors for review.";
+  } catch (error) {
+    if (review.requestId !== requestId) return;
+    review.error = error.message || "The sonic-neighbor request failed.";
+    if (/Beatport returned no candidate|candidate was rejected|No stored sonic embedding/i.test(review.error)) {
+      review.error += " Sonic Review needs a safe Beatport preview or a local audio file for this track.";
+    }
+  } finally {
+    await profilePromise;
+    if (review.requestId === requestId) {
+      review.loading = false;
+      renderSonicReview();
+    }
+  }
+}
+
+async function submitSonicReview(rating = "") {
+  const review = state.sonicReview;
+  const candidate = review.candidates[review.index];
+  if (!candidate || review.saving) return;
+  const area = String($("#sonicReviewAreaInput")?.value || "").trim();
+  const note = String($("#sonicReviewNoteInput")?.value || "").trim();
+  const buttons = Array.from(document.querySelectorAll("[data-sonic-review-rating]"));
+  review.saving = true;
+  buttons.forEach((button) => {
+    button.disabled = true;
+    button.dataset.originalText = button.textContent;
+    button.textContent = button.dataset.sonicReviewRating === rating ? "Saving…" : button.textContent;
+  });
+  const anchor = review.anchor || { identityKey: review.anchorIdentityKey };
+  try {
+    await api("/api/recommendation-v2/sonic-neighbor-feedback", {
+      feedback: [{
+        anchor: trackPayload(anchor),
+        candidate: trackPayload(candidate),
+        rating,
+        candidateArea: area,
+        note,
+        sourceEventId: sonicReviewEventId(anchor, candidate, rating),
+        sourceLabel: "rabbit-hole-sonic-review",
+        model: candidate.sonicNeighbor?.model || "discogs-effnet",
+        modelVersion: candidate.sonicNeighbor?.modelVersion || "1"
+      }]
+    });
+    review.reviewed[candidate.identityKey || trackKeyFor(candidate)] = rating === "keep" ? "like" : rating;
+    review.error = "";
+    review.index += 1;
+    review.status = rating === "keep"
+      ? "Kept. Moving to the next neighbor."
+      : rating === "wrong_genre"
+        ? "Marked wrong genre. Moving to the next neighbor."
+        : rating === "reject_similar"
+          ? "Marked similar, different lane. Moving to the next neighbor."
+          : "Skipped. Moving to the next neighbor.";
+  } catch (error) {
+    review.error = error.message || "The sonic-neighbor review could not be saved.";
+  } finally {
+    review.saving = false;
+    buttons.forEach((button) => {
+      button.disabled = false;
+      if (button.dataset.originalText) button.textContent = button.dataset.originalText;
+    });
+    renderSonicReview();
+  }
+}
+
+const LEGACY_NAV_TARGETS = {
+  sonicReview: { group: "discover", item: "sonic-review" },
+  player: { group: "playback", item: "now-playing" },
+  queue: { group: "playback", item: "queue" },
+  discover: { group: "discover", item: "rabbit-hole" },
+  standby: { group: "discover", item: "standby" },
+  history: { group: "memory", item: "taste" },
+  musicMemory: { group: "memory", item: "library" },
+  beatportCharts: { group: "discover", item: "beatport" },
+  radio: { group: "discover", item: "radio" },
+  playlists: { group: "playback", item: "playlists" },
+  database: { group: "playback", item: "database" },
+  tidal: { group: "discover", item: "tidal" },
+  tidalLibrary: { group: "tidalLibrary", item: "collections" },
+  connections: { group: "system", item: "connections" },
+  ai: { group: "system", item: "ai" },
+  diagnostics: { group: "system", item: "diagnostics" },
+  settings: { group: "system", item: "settings" },
+  memory: { group: "memory", item: "synapse-memory" }
+};
+
+const DEFAULT_NAV_ITEMS = {
+  playback: "now-playing",
+  discover: "rabbit-hole",
+  tidalLibrary: "collections",
+  memory: "library",
+  system: "connections"
+};
+
+const DEFAULT_NAV_VIEWS = {
+  playback: "player",
+  discover: "discover",
+  tidalLibrary: "tidalLibrary",
+  memory: "musicMemory",
+  system: "connections"
+};
+
+let activeNavGroup = "playback";
+let activeNavItem = "now-playing";
+
+function setNavigationState(group = activeNavGroup, item = null) {
+  const nextGroup = document.querySelector(`.primaryNav [data-nav-group="${group}"]`)
+    ? group
+    : "playback";
+  activeNavGroup = nextGroup;
+  activeNavItem = item || DEFAULT_NAV_ITEMS[nextGroup] || DEFAULT_NAV_ITEMS.playback;
+
+  document.querySelectorAll(".primaryNav [data-nav-group]").forEach((button) => {
+    const active = button.dataset.navGroup === activeNavGroup;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+
+  document.querySelectorAll(".secondaryNavShell").forEach((shell) => {
+    const active = shell.dataset.navGroup === activeNavGroup;
+    shell.classList.toggle("isActive", active);
+    shell.hidden = !active;
+  });
+
+  document.querySelectorAll(".secondaryNavShell [data-nav-item]").forEach((button) => {
+    const active = button.dataset.navGroup === activeNavGroup && button.dataset.navItem === activeNavItem;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+}
+
+function setActiveView(view, navigation = null) {
+  const target = view === "memory"
+    ? "memory"
+    : (["history", "musicMemory", "database", "sonicReview", "beatportCharts", "radio", "playlists", "tidal", "tidalLibrary", "settings", "connections", "ai", "diagnostics", "queue", "discover", "standby"].includes(view) ? view : "player");
+  const navigationTarget = navigation?.group
+    ? navigation
+    : (LEGACY_NAV_TARGETS[target] || LEGACY_NAV_TARGETS.player);
+  setNavigationState(navigationTarget.group, navigationTarget.item);
+  if (view === "memory") {
+    window.location.assign("/memory.html");
+    return;
+  }
   $("#playerView").classList.toggle("isActive", target === "player");
+  $("#queueView")?.classList.toggle("isActive", target === "queue");
+  $("#discoverView")?.classList.toggle("isActive", target === "discover");
+  $("#standbyView")?.classList.toggle("isActive", target === "standby");
+  $("#connectionsView")?.classList.toggle("isActive", target === "connections");
+  $("#aiView")?.classList.toggle("isActive", target === "ai");
+  $("#diagnosticsView")?.classList.toggle("isActive", target === "diagnostics");
   $("#historyView").classList.toggle("isActive", target === "history");
   $("#musicMemoryView")?.classList.toggle("isActive", target === "musicMemory");
+  $("#databaseView")?.classList.toggle("isActive", target === "database");
+  $("#sonicReviewView")?.classList.toggle("isActive", target === "sonicReview");
+  if (target === "sonicReview") renderSonicReview();
+  else window.SonicBlindReviewUi?.pauseAudio();
   $("#beatportChartsView")?.classList.toggle("isActive", target === "beatportCharts");
   $("#radioView")?.classList.toggle("isActive", target === "radio");
   $("#playlistView")?.classList.toggle("isActive", target === "playlists");
   $("#tidalView")?.classList.toggle("isActive", target === "tidal");
+  $("#tidalLibraryView")?.classList.toggle("isActive", target === "tidalLibrary");
+  $("#settingsView")?.classList.toggle("isActive", target === "settings");
+  if (target === "settings" && !state.sonicProduction.loaded && !state.sonicProduction.loading) {
+    refreshSonicProductionSettings();
+  }
   if (target === "history" && state.historyNeedsRefresh) {
     refreshHistoryReport().catch((error) => {
       $("#tasteNarrative").textContent = error.message;
@@ -6356,6 +7626,15 @@ function setActiveView(view) {
     refreshTidalMixes().catch((error) => {
       $("#tidalMixStatus").textContent = error.message;
     });
+  }
+  if (target === "tidalLibrary" && state.tidalLibraryNeedsRefresh && !state.tidalLibraryLoading) {
+    refreshTidalLibrary({ force: false }).catch((error) => {
+      $("#tidalLibraryStatus").textContent = error.message;
+      state.tidalLibraryLoading = false;
+      renderTidalLibrary();
+    });
+  } else if (target === "tidalLibrary") {
+    renderTidalLibrary();
   }
   updateJumpTopVisibility();
 }
@@ -6528,8 +7807,97 @@ $("#nowFeedback").addEventListener("click", async (event) => {
 window.addEventListener("scroll", updateJumpTopVisibility, { passive: true });
 window.addEventListener("resize", updateJumpTopVisibility);
 
-document.querySelectorAll("[data-view]").forEach((button) => {
-  button.addEventListener("click", () => setActiveView(button.dataset.view));
+document.querySelectorAll(".primaryNav [data-nav-group]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const group = button.dataset.navGroup;
+    setActiveView(DEFAULT_NAV_VIEWS[group] || "player", {
+      group,
+      item: DEFAULT_NAV_ITEMS[group]
+    });
+  });
+});
+
+document.querySelectorAll(".secondaryNavShell [data-view]").forEach((button) => {
+  button.addEventListener("click", () => setActiveView(button.dataset.view, {
+    group: button.dataset.navGroup,
+    item: button.dataset.navItem
+  }));
+});
+
+setNavigationState();
+
+$("#sonicReviewApp")?.addEventListener("submit", (event) => {
+  if (event.target.matches("[data-sonic-profile-form='sonicReview']")) {
+    event.preventDefault();
+    saveSonicProfileState(state.sonicReview, "sonicReview", renderSonicReview).catch(() => {});
+    return;
+  }
+  if (!event.target.matches("#sonicReviewAnchorForm")) return;
+  event.preventDefault();
+  const value = new FormData(event.target).get("anchor");
+  const anchor = sonicReviewAnchorFromInput(value);
+  if (!anchor) return;
+  loadSonicReview({ anchor }).catch((error) => {
+    state.sonicReview.error = error.message || "The sonic-neighbor request failed.";
+    state.sonicReview.loading = false;
+    renderSonicReview();
+  });
+});
+
+$("#sonicReviewApp")?.addEventListener("click", (event) => {
+  const current = event.target.closest("[data-sonic-review-load-current]");
+  if (current) {
+    loadSonicReview().catch((error) => {
+      state.sonicReview.error = error.message || "The sonic-neighbor request failed.";
+      state.sonicReview.loading = false;
+      renderSonicReview();
+    });
+    return;
+  }
+
+  const retry = event.target.closest("[data-sonic-review-retry], [data-sonic-review-reload]");
+  if (retry) {
+    loadSonicReview({ anchor: state.sonicReview.anchor || state.sonicReview.anchorIdentityKey }).catch((error) => {
+      state.sonicReview.error = error.message || "The sonic-neighbor request failed.";
+      state.sonicReview.loading = false;
+      renderSonicReview();
+    });
+    return;
+  }
+
+  const ratingButton = event.target.closest("[data-sonic-review-rating]");
+  if (ratingButton) {
+    submitSonicReview(ratingButton.dataset.sonicReviewRating || "").catch((error) => {
+      state.sonicReview.error = error.message || "The sonic-neighbor review could not be saved.";
+      state.sonicReview.saving = false;
+      renderSonicReview();
+    });
+    return;
+  }
+
+  const queueButton = event.target.closest("[data-sonic-review-queue]");
+  if (queueButton) {
+    queueSonicReviewNeighbors().catch((error) => {
+      state.sonicReview.error = error.message || "The verified sonic-neighbor queue request failed.";
+      state.sonicReview.queueing = false;
+      renderSonicReview();
+    });
+  }
+});
+
+$("#sonicReviewApp")?.addEventListener("input", (event) => {
+  if (event.target.matches("input, textarea, select")) state.sonicReview.formDirty = true;
+});
+
+document.addEventListener("keydown", (event) => {
+  if (!document.querySelector("#sonicReviewView.isActive")) return;
+  if (window.SonicBlindReviewUi?.active) return;
+  if (event.target.matches("input, textarea, select, [contenteditable='true']")) return;
+  const shortcuts = { k: "keep", s: "skip", g: "wrong_genre", d: "keep" };
+  const rating = shortcuts[String(event.key || "").toLowerCase()];
+  if (!rating || state.sonicReview.saving || !state.sonicReview.candidates[state.sonicReview.index]) return;
+  event.preventDefault();
+  submitSonicReview(rating).catch(() => {});
 });
 
 document.querySelectorAll("[data-scoring-mode]").forEach((button) => {
@@ -6724,6 +8092,24 @@ $("#playlistBrowserGrid")?.addEventListener("click", (event) => {
   ).catch((error) => alert(error.message));
 });
 
+$("#refreshTidalLibrary")?.addEventListener("click", () => {
+  refreshTidalLibrary({ force: true }).catch((error) => {
+    setTidalLibraryStatus(error.message);
+  });
+});
+
+document.querySelectorAll("[data-tidal-library-filter]").forEach((button) => {
+  button.addEventListener("click", () => setTidalLibraryFilter(button.dataset.tidalLibraryFilter || "all"));
+});
+
+$("#tidalLibraryGrid")?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-tidal-library-action]");
+  if (!button) return;
+  runTidalLibraryAction(button).catch((error) => {
+    setTidalLibraryStatus(error.message);
+  });
+});
+
 $("#refreshTidalMixes")?.addEventListener("click", () => {
   refreshTidalMixes({ force: true }).catch((error) => {
     $("#tidalMixStatus").textContent = error.message;
@@ -6766,7 +8152,7 @@ $("#tidalMixesGrid")?.addEventListener("click", (event) => {
   const request = $("#request");
   request.value = button.dataset.tidalMixPrompt || "";
   setScoringMode("");
-  setActiveView("player");
+  setActiveView("discover", { group: "discover", item: "rabbit-hole" });
   request.focus();
 });
 
@@ -6780,7 +8166,7 @@ $("#tastePrompt").addEventListener("click", () => {
   mood.value = "";
   count.value = "";
   setScoringMode("");
-  setActiveView("player");
+  setActiveView("discover", { group: "discover", item: "rabbit-hole" });
   request.focus();
 });
 
@@ -6791,6 +8177,9 @@ $("#seekSlider").addEventListener("pointerdown", () => {
 $("#seekSlider").addEventListener("input", (event) => {
   state.isSeeking = true;
   $("#seekPosition").textContent = formatSeconds(event.target.value) || "0:00";
+  const maximum = Math.max(0, Number(event.target.max || 0));
+  const current = Math.max(0, Number(event.target.value || 0));
+  event.target.style.setProperty("--seek-progress", `${maximum ? Math.min(100, (current / maximum) * 100) : 0}%`);
 });
 
 $("#seekSlider").addEventListener("change", async (event) => {
@@ -6809,6 +8198,19 @@ $("#seekSlider").addEventListener("blur", () => {
   state.isSeeking = false;
 });
 
+function acknowledgeFullscreenAction(button) {
+  if (!button?.closest(".player.player--regular, .player.player--maximized, .player.player--fullscreen")) return;
+  button.classList.remove("actionAcknowledged");
+  void button.offsetWidth;
+  button.classList.add("actionAcknowledged");
+  window.setTimeout(() => button.classList.remove("actionAcknowledged"), 360);
+}
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("#addNowToTidalPlaylist, #openRabbitHole, #createNowTidalPlaylist, .controls button[data-control]");
+  if (button) acknowledgeFullscreenAction(button);
+});
+
 document.addEventListener("click", async (event) => {
   const control = event.target.dataset.control;
   const volume = event.target.dataset.volume;
@@ -6820,6 +8222,70 @@ document.addEventListener("click", async (event) => {
   } catch (error) {
     alert(error.message);
   }
+});
+
+document.addEventListener("pointerdown", (event) => {
+  const trigger = event.target.closest?.(".queueItemButton[data-queue-item-id]");
+  if (!trigger || event.button > 0 || event.pointerType === "mouse") return;
+  clearQueueLongPress();
+  queueActionState.longPressTimer = window.setTimeout(() => {
+    queueActionState.suppressClick = true;
+    openQueueActionMenu(trigger);
+  }, 520);
+});
+
+document.addEventListener("pointerup", clearQueueLongPress);
+document.addEventListener("pointercancel", clearQueueLongPress);
+
+document.addEventListener("contextmenu", (event) => {
+  const trigger = event.target.closest?.(".queueItemButton[data-queue-item-id]");
+  if (!trigger) return;
+  event.preventDefault();
+  openQueueActionMenu(trigger);
+});
+
+document.addEventListener("click", async (event) => {
+  const trigger = event.target.closest?.(".queueItemButton[data-queue-item-id]");
+  if (trigger) {
+    if (queueActionState.suppressClick) {
+      queueActionState.suppressClick = false;
+      return;
+    }
+    openQueueActionMenu(trigger);
+    return;
+  }
+
+  if (event.target.closest?.("[data-queue-action-close]")) {
+    closeQueueActionMenu();
+    return;
+  }
+
+  const actionButton = event.target.closest?.("[data-queue-action]");
+  if (actionButton) {
+    if (actionButton.disabled) return;
+    await runQueueAction(actionButton);
+    return;
+  }
+
+  if (!event.target.closest?.("#queueActionMenu")) closeQueueActionMenu({ restoreFocus: false });
+});
+
+document.addEventListener("keydown", (event) => {
+  const menu = $("#queueActionMenu");
+  if (event.key === "Escape" && menu && !menu.hidden) {
+    event.preventDefault();
+    closeQueueActionMenu();
+    return;
+  }
+  if (!menu || menu.hidden || !["ArrowDown", "ArrowUp"].includes(event.key)) return;
+  const items = [...menu.querySelectorAll("button:not([disabled])")];
+  const index = items.indexOf(document.activeElement);
+  if (index < 0 || !items.length) return;
+  event.preventDefault();
+  const next = event.key === "ArrowDown"
+    ? items[(index + 1) % items.length]
+    : items[(index - 1 + items.length) % items.length];
+  next.focus();
 });
 
 document.querySelectorAll("[data-preset]").forEach((button) => {
@@ -7053,7 +8519,8 @@ $("#standbyClear")?.addEventListener("click", async () => {
 $("#standbyQueue")?.addEventListener("click", () => {
   const tracks = standbyPayloadTracks(state.standby?.targetCount || 25);
   queueTrackList(tracks, $("#standbyQueue"), {
-    targetCount: tracks.length
+    targetCount: tracks.length,
+    source: "standby"
   });
 });
 
@@ -7061,7 +8528,8 @@ $("#standbyQueueNext")?.addEventListener("click", () => {
   const tracks = standbyPayloadTracks(state.standby?.targetCount || 25);
   queueTrackList(tracks, $("#standbyQueueNext"), {
     targetCount: tracks.length,
-    mode: "next"
+    mode: "next",
+    source: "standby"
   });
 });
 
@@ -7663,8 +9131,14 @@ if (synapseCheck) {
     updateModelMode({ refreshSynapse: true }).catch((error) => alert(error.message));
   });
 }
+const sonicProductionModeSelect = $("#sonicProductionModeSelect");
+if (sonicProductionModeSelect) {
+  sonicProductionModeSelect.addEventListener("change", () => {
+    updateSonicProductionMode();
+  });
+}
 
-const events = new EventSource("/api/events");
+const events = new EventSource("/api/events?compact=1");
 events.onopen = () => {
   if (eventSourceOfflineTimer) {
     clearTimeout(eventSourceOfflineTimer);
@@ -7678,8 +9152,7 @@ events.onmessage = (event) => {
     eventSourceOfflineTimer = null;
   }
   const payload = JSON.parse(event.data);
-  renderState(payload);
-  applyAppState(payload.app);
+  void liveStatus.receive(payload);
   state.historyNeedsRefresh = true;
 };
 events.onerror = () => {
@@ -7691,6 +9164,12 @@ events.onerror = () => {
     }
   }, 2500);
 };
+
+document.body.classList.toggle(
+  "hasTouchScreen",
+  Number(window.navigator?.maxTouchPoints || 0) > 0 || "ontouchstart" in window
+);
+
 applyPlayerMaximized();
 applyPlayerFullscreenState();
 refresh().catch(() => {});
@@ -7705,7 +9184,7 @@ setInterval(() => {
   refreshLlmStatus().catch(() => {});
   refreshModelStatus().catch(() => {});
 }, 10_000);
-refreshSession().catch(() => {});
 refreshPlaylists().catch(() => {});
 loadTidalPlaylists().catch(() => {});
 refreshHistoryReport().catch(() => {});
+refreshSonicProductionSettings().catch(() => {});

@@ -15,10 +15,12 @@ function normalizeRatingKey(value) {
 
 const RATING_ALIASES = new Map([
   ["love", "love"],
+  ["like", "like"],
   ["good", "good"],
   ["up", "good"],
   ["ok", "ok"],
   ["okay", "ok"],
+  ["dislike", "dislike"],
   ["wrong_genre", "wrong_genre"],
   ["wrong genre", "wrong_genre"],
   ["wrong", "wrong_genre"],
@@ -35,10 +37,13 @@ const RATING_ALIASES = new Map([
   ["never_again", "never"]
 ]);
 
-const POSITIVE_RATINGS = new Set(["love", "good"]);
-const NEGATIVE_RATINGS = new Set(["wrong_genre", "reject_similar", "skip", "never"]);
+// These are the current user-facing choices. Legacy values remain recognized
+// below so historical feedback and older clients continue to work.
+const USER_RATING_VALUES = Object.freeze(["love", "like", "ok", "dislike", "never"]);
+const POSITIVE_RATINGS = new Set(["love", "like", "good"]);
+const NEGATIVE_RATINGS = new Set(["dislike", "wrong_genre", "reject_similar", "skip", "never"]);
 
-function normalizeRating(value, { fallback = "good" } = {}) {
+function normalizeRating(value, { fallback = "ok" } = {}) {
   return RATING_ALIASES.get(normalizeRatingKey(value)) || fallback;
 }
 
@@ -57,5 +62,6 @@ module.exports = {
   normalizeRatingKey,
   NEGATIVE_RATINGS,
   POSITIVE_RATINGS,
-  RATING_ALIASES
+  RATING_ALIASES,
+  USER_RATING_VALUES
 };

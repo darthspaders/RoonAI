@@ -1,4 +1,5 @@
 "use strict";
+const { remixArtistOnlyPolicy } = require("./candidateReviewEvidence");
 
 function createModelCandidateReviewer({
   candidateIdentityKeys,
@@ -34,12 +35,12 @@ function createModelCandidateReviewer({
     return "Weak";
   }
 
-  function hardModelReject(score = {}) {
+  function hardModelReject(score = {}, track = {}) {
     if (!score.rejected) return false;
-    const reason = normalizeMatchText(score.rejectionReason);
-    if (!reason) return false;
-    if (Number(score.finalScore || 0) >= 65 && Number(score.scores?.genreConfidence || 0) >= 55) return false;
-    return /\b(?:playlist|compilation|seo|chart|karaoke|cover|tribute|live|remaster|reissue|anniversary|deluxe|archive|background|catalogue|filler|spam)\b/.test(reason);
+    // Named remixes are not their original artist's usual production. Only
+    // an explicitly artist-profile-only objection is advisory; unknown or
+    // independent quality/version/request objections still fail closed.
+    return !remixArtistOnlyPolicy(track, score);
   }
 
   function mergeWhy(existing = [], additions = []) {
@@ -58,6 +59,34 @@ function createModelCandidateReviewer({
 
   function applyModelReview(track = {}, score = {}) {
     if (!score || !score.trackId) return track;
+    const remixPolicy = remixArtistOnlyPolicy(track, score);
+    if (remixPolicy) {
+      const existing = track.scoreBreakdown || {};
+      const current = Number(track.score ?? existing.total);
+      // Do not let scores derived from the same invalid artist veto re-enter
+      // through genre confidence, prompt/taste percentages or the 22% blend.
+      const adjusted = Number.isFinite(current) ? clampScore(current - remixPolicy.penalty) : track.score;
+      const why = [remixPolicy.reason];
+      const llmReview = {
+        finalScore: score.finalScore,
+        genreConfidence: score.scores?.genreConfidence,
+        rejected: false,
+        rejectionReason: "",
+        rejectionBasis: score.rejectionBasis,
+        reportedRejected: true,
+        reportedRejectionReason: score.rejectionReason,
+        policyAdjustment: remixPolicy
+      };
+      return {
+        ...track,
+        score: adjusted,
+        scoreBreakdown: { ...existing, total: adjusted, llmReview, matchWhy: mergeWhy(existing.matchWhy || track.matchWhy || [], why) },
+        matchWhy: mergeWhy(existing.matchWhy || track.matchWhy || [], why),
+        why: mergeWhy(track.why || [], why),
+        reason: track.reason ? `${track.reason}; named-remix model review` : "named-remix model review",
+        llmReview
+      };
+    }
     const modelScores = score.scores || {};
     const existingBreakdown = track.scoreBreakdown || {};
     const promptPercent = clampScore(modelScores.promptMatch, 0, 100);
@@ -91,7 +120,8 @@ function createModelCandidateReviewer({
         lengthPreference: modelScores.lengthPreference,
         genreConfidence,
         rejected: score.rejected,
-        rejectionReason: score.rejectionReason
+        rejectionReason: score.rejectionReason,
+        rejectionBasis: score.rejectionBasis
       }
     };
     return {
@@ -148,43 +178,61 @@ function createModelCandidateReviewer({
       for (const key of candidateIdentityKeys(track)) seen.add(key);
     }
 
-    function keepRejectedCandidate(record = {}) {
-      const reviewedTrack = applyModelReview(record.track, record.score);
-      const afterScore = Number(reviewedTrack.score || reviewedTrack.scoreBreakdown?.total || 0) || record.beforeScore;
-      const item = modelReviewAuditItem(reviewedTrack, record.score, record.beforeScore, afterScore, "warning");
-      recordModelReviewAudit(audit, item, "warning");
-      rejectedKept += 1;
-      return {
-        ...reviewedTrack,
-        modelRejectedKept: true,
-        reason: `${reviewedTrack.reason || record.track.reason || "Model-reviewed candidate"}; model flagged candidate but it was kept because review would undershoot the requested count`,
-        statusChecks: Array.from(new Set([
-          ...(Array.isArray(reviewedTrack.statusChecks) ? reviewedTrack.statusChecks : []),
-          `Model warning: ${item.reason}`,
-          "Kept to satisfy requested count after model review"
-        ])),
-        modelReview: {
-          action: "warning",
-          before: item.before,
-          after: item.after,
-          delta: item.delta,
-          modelScore: item.modelScore,
-          genreConfidence: item.genreConfidence,
-          reason: item.reason,
-          keptAfterReject: true
-        }
-      };
-    }
-
-    function discardRejectedCandidate(record = {}) {
-      rejected += 1;
-      recordModelReviewAudit(audit, record.item, "rejected");
+  function discardRejectedCandidate(record = {}) {
+    rejected += 1;
+    recordModelReviewAudit(audit, record.item, "rejected");
       discarded.push({
         ...record.track,
         llmReview: record.score,
-        reason: `Model rejected candidate: ${record.score.rejectionReason || "low-confidence catalogue result"}`
-      });
+      reason: `Model rejected candidate: ${record.score.rejectionReason || "low-confidence catalogue result"}`
+    });
+  }
+
+  function annotatePoolDiagnosticsForModelRejects(discoveredResult = {}, records = []) {
+    const poolDiagnostics = discoveredResult.verification?.poolDiagnostics;
+    const durationCandidates = poolDiagnostics?.candidateAccumulation?.durationCandidates;
+    if (!poolDiagnostics || !Array.isArray(durationCandidates) || !durationCandidates.length || !records.length) {
+      return discoveredResult;
     }
+
+    const rejectedByKey = new Map();
+    for (const record of records) {
+      const reason = `Model rejected candidate: ${record.score.rejectionReason || "low-confidence catalogue result"}`;
+      for (const key of candidateIdentityKeys(record.track)) {
+        rejectedByKey.set(key, { reason, score: record.beforeScore });
+      }
+    }
+
+    const updatedDurationCandidates = durationCandidates.map((diagnostic) => {
+      const rejection = rejectedByKey.get(String(diagnostic.key || "").trim().toLowerCase());
+      if (!rejection) return diagnostic;
+      return {
+        ...diagnostic,
+        scoreBeforeRejection: diagnostic.scoreBeforeRejection ?? rejection.score,
+        candidateAccumulation: {
+          status: "dropped",
+          stage: "model-review",
+          reason: rejection.reason
+        },
+        droppedStage: "model-review",
+        droppedReason: rejection.reason
+      };
+    });
+
+    return {
+      ...discoveredResult,
+      verification: {
+        ...(discoveredResult.verification || {}),
+        poolDiagnostics: {
+          ...poolDiagnostics,
+          candidateAccumulation: {
+            ...(poolDiagnostics.candidateAccumulation || {}),
+            durationCandidates: updatedDurationCandidates
+          }
+        }
+      }
+    };
+  }
 
     function applyList(list = [], source = "track") {
       const next = [];
@@ -196,7 +244,7 @@ function createModelCandidateReviewer({
           continue;
         }
         const beforeScore = Number(track.score || track.scoreBreakdown?.total || 0) || Number(score.finalScore || 0) || 0;
-        if (hardModelReject(score)) {
+        if (hardModelReject(score, track)) {
           const item = modelReviewAuditItem(track, score, beforeScore, null, "rejected");
           rejectedCandidates.push({ track, score, beforeScore, item, source, index });
           continue;
@@ -204,7 +252,9 @@ function createModelCandidateReviewer({
         const reviewedTrack = applyModelReview(track, score);
         const afterScore = Number(reviewedTrack.score || reviewedTrack.scoreBreakdown?.total || 0) || beforeScore;
         const type = classifyModelReviewChange(score, beforeScore, afterScore, false);
-        const item = modelReviewAuditItem(reviewedTrack, score, beforeScore, afterScore, type);
+        const policy = reviewedTrack.llmReview?.policyAdjustment;
+        const auditScore = policy ? { ...score, rejectionReason: policy.reason } : score;
+        const item = modelReviewAuditItem(reviewedTrack, auditScore, beforeScore, afterScore, type);
         recordModelReviewAudit(audit, item, type);
         next.push({
           ...reviewedTrack,
@@ -244,24 +294,15 @@ function createModelCandidateReviewer({
       }
     }
 
-    const rescuedRejectIds = new Set();
-    for (const record of rejectedCandidates.filter((item) => item.source === "track")) {
-      if (!requestedCount || reviewedTracks.length >= requestedCount) break;
-      if (hasSeenCandidate(record.track, selectedKeys)) continue;
-      const rescued = keepRejectedCandidate(record);
-      reviewedTracks.push(rescued);
-      markSeenCandidate(rescued, selectedKeys);
-      rescuedRejectIds.add(`${record.source}:${record.index}`);
+    for (const record of rejectedCandidates) {
+      discardRejectedCandidate(record);
     }
 
-    for (const record of rejectedCandidates) {
-      const id = `${record.source}:${record.index}`;
-      if (!rescuedRejectIds.has(id)) discardRejectedCandidate(record);
-    }
+    const diagnosticResult = annotatePoolDiagnosticsForModelRejects(discovered, rejectedCandidates);
 
     return {
       result: {
-        ...discovered,
+        ...diagnosticResult,
         tracks: reviewedTracks,
         alternates: remainingAlternates,
         discarded

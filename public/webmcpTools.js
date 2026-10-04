@@ -412,7 +412,7 @@
       properties: {
         rating: {
           type: "string",
-          enum: ["love", "good", "ok", "wrong_genre", "skip", "never", "reject_similar"],
+          enum: ["love", "like", "ok", "dislike", "never"],
           description: "Taste rating to apply to the current track."
         },
         reason: {

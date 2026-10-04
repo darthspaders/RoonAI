@@ -8,6 +8,7 @@ const RoonApi = require("node-roon-api");
 const RoonApiBrowse = require("node-roon-api-browse");
 const RoonApiStatus = require("node-roon-api-status");
 const RoonApiTransport = require("node-roon-api-transport");
+const config = require("./config");
 const {
   detectGenreTerms: detectOntologyGenreTerms,
   pruneGenreTerms: pruneOntologyGenreTerms
@@ -16,6 +17,65 @@ const { extractYearSearchTerms: extractSharedYearSearchTerms } = require("./year
 
 const STATE_UPDATE_DEBOUNCE_MS = 1000;
 const SEEK_UPDATE_EMIT_MS = 2000;
+const SOCKET_READY_STATE_NAMES = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
+const DIAGNOSTIC_TEXT_LIMIT = 240;
+
+function diagnosticText(value) {
+  if (value === undefined || value === null) return "";
+  const text = Buffer.isBuffer(value) ? value.toString("utf8") : String(value);
+  return text.slice(0, DIAGNOSTIC_TEXT_LIMIT);
+}
+
+function socketReadyStateName(value) {
+  return Number.isInteger(value) && SOCKET_READY_STATE_NAMES[value]
+    ? SOCKET_READY_STATE_NAMES[value]
+    : "UNKNOWN";
+}
+
+function diagnosticError(error) {
+  if (!error) return null;
+  return {
+    name: diagnosticText(error.name),
+    message: diagnosticText(error.message || error),
+    code: diagnosticText(error.code),
+    errno: diagnosticText(error.errno)
+  };
+}
+
+function createConnectionDiagnostics() {
+  return {
+    state: "starting",
+    connectionSequence: 0,
+    pairedCount: 0,
+    unpairedCount: 0,
+    queueSubscriptionsEnabled: config.roon?.queueSubscriptionsEnabled !== false,
+    queueSubscriptionCount: 0,
+    queueSubscriptionErrors: 0,
+    queueEventCount: 0,
+    roonPingRequestCount: 0,
+    roonPingResponseCount: 0,
+    maxRoonPingResponseDelayMs: 0,
+    slowRoonPingResponseCount: 0,
+    lastRoonPingAt: null,
+    websocketPingCount: 0,
+    websocketPongCount: 0,
+    websocketIncomingPingCount: 0,
+    lastWebsocketPongAt: null,
+    lastMooCallbackError: null,
+    staleUnpairedCount: 0,
+    connectedAt: null,
+    lastUnpairedAt: null,
+    lastMooError: null,
+    lastSocketError: null,
+    lastSocketClose: null,
+    currentSocket: null
+  };
+}
+
+function ensureConnectionDiagnostics(client) {
+  if (!client.connectionDiagnostics) client.connectionDiagnostics = createConnectionDiagnostics();
+  return client.connectionDiagnostics;
+}
 
 function callRoon(fn) {
   if (roonLookupContext.getStore()) return exactRoonRpc(fn, roonLookupContext.getStore());
@@ -1312,18 +1372,164 @@ class RoonClient extends EventEmitter {
     this.queueSignatures = new Map();
     this.zoneEmitTimer = null;
     this.lastSeekEmitAt = 0;
+    this.heartbeatTimer = null;
+    this.heartbeatTransport = null;
+    this.heartbeatWs = null;
+    this.diagnosticSockets = new WeakSet();
+    this.diagnosticMooTransports = new WeakSet();
+    this.connectionDiagnostics = createConnectionDiagnostics();
+  }
+
+  logConnectionDiagnostic(event, details = {}) {
+    if (config.roon?.connectionDiagnosticsEnabled === false) return;
+    console.warn(`[roon-connection] ${JSON.stringify({
+      event,
+      pid: process.pid,
+      at: new Date().toISOString(),
+      ...details
+    })}`);
+  }
+
+  socketDetails(core, ws) {
+    const transport = core?.moo?.transport;
+    return {
+      coreId: core?.core_id || "",
+      host: transport?.host || "",
+      port: transport?.port || null,
+      readyState: Number.isInteger(ws?.readyState) ? ws.readyState : null,
+      readyStateName: socketReadyStateName(ws?.readyState),
+      bufferedAmount: Number.isFinite(ws?.bufferedAmount) ? ws.bufferedAmount : null,
+      pendingMooRequestCount: core?.moo?.requests && typeof core.moo.requests === "object"
+        ? Object.keys(core.moo.requests).length
+        : null
+    };
+  }
+
+  attachSocketDiagnostics(core) {
+    const moo = core?.moo;
+    const transport = moo?.transport;
+    const ws = transport?.ws;
+    if (!ws || typeof ws.on !== "function") {
+      this.logConnectionDiagnostic("socket-unavailable", { coreId: core?.core_id || "" });
+      return;
+    }
+    if (this.diagnosticSockets.has(ws)) return;
+    this.diagnosticSockets.add(ws);
+
+    const socketBase = () => this.socketDetails(core, ws);
+    ws.on("pong", () => {
+      this.connectionDiagnostics.websocketPongCount += 1;
+      this.connectionDiagnostics.lastWebsocketPongAt = new Date().toISOString();
+    });
+    ws.on("ping", () => {
+      this.connectionDiagnostics.websocketIncomingPingCount += 1;
+    });
+    if (typeof ws.ping === "function") {
+      const ping = ws.ping.bind(ws);
+      ws.ping = (...args) => {
+        this.connectionDiagnostics.websocketPingCount += 1;
+        return ping(...args);
+      };
+    }
+    ws.on("error", (error) => {
+      const detail = {
+        ...socketBase(),
+        error: diagnosticError(error)
+      };
+      this.connectionDiagnostics.lastSocketError = detail;
+      this.logConnectionDiagnostic("socket-error", detail);
+    });
+    ws.on("close", (code, reason) => {
+      const detail = {
+        ...socketBase(),
+        code: Number.isFinite(code) ? code : null,
+        reason: diagnosticText(reason)
+      };
+      this.connectionDiagnostics.lastSocketClose = detail;
+      this.connectionDiagnostics.currentSocket = detail;
+      this.logConnectionDiagnostic("socket-close", detail);
+    });
+    this.connectionDiagnostics.currentSocket = socketBase();
+    this.logConnectionDiagnostic("socket-attached", socketBase());
+    this.attachMooDiagnostics(core);
+  }
+
+  attachMooDiagnostics(core) {
+    const transport = core?.moo?.transport;
+    const onmessage = transport?.onmessage;
+    if (!transport || typeof onmessage !== "function" || this.diagnosticMooTransports.has(transport)) return;
+    this.diagnosticMooTransports.add(transport);
+    const pingRequests = new Map();
+    const send = typeof transport.send === "function" ? transport.send.bind(transport) : null;
+    if (send) {
+      transport.send = (buf, ...args) => {
+        const header = Buffer.isBuffer(buf) ? buf.toString("utf8", 0, Math.min(buf.length, 240)) : "";
+        const requestId = /^MOO\/1 (?:COMPLETE|CONTINUE) [^\n]+\nRequest-Id: ([^\n]+)/.exec(header)?.[1];
+        if (requestId && pingRequests.has(requestId)) {
+          const requestedAt = pingRequests.get(requestId);
+          pingRequests.delete(requestId);
+          const responseDelayMs = Math.max(0, Date.now() - requestedAt);
+          this.connectionDiagnostics.roonPingResponseCount += 1;
+          this.connectionDiagnostics.maxRoonPingResponseDelayMs = Math.max(
+            this.connectionDiagnostics.maxRoonPingResponseDelayMs || 0,
+            responseDelayMs
+          );
+          if (responseDelayMs >= 1000) {
+            this.connectionDiagnostics.slowRoonPingResponseCount += 1;
+            this.logConnectionDiagnostic("slow-roon-ping-response", { responseDelayMs, requestId });
+          }
+        }
+        return send(buf, ...args);
+      };
+    }
+    transport.onmessage = (msg) => {
+      const isPing = msg?.verb === "REQUEST" && msg.service === "com.roonlabs.ping:1" && msg.name === "ping";
+      if (isPing) {
+        this.connectionDiagnostics.roonPingRequestCount += 1;
+        this.connectionDiagnostics.lastRoonPingAt = new Date().toISOString();
+        if (msg.request_id !== undefined) pingRequests.set(String(msg.request_id), Date.now());
+      }
+      try {
+        return onmessage.call(transport, msg);
+      } catch (error) {
+        this.connectionDiagnostics.lastMooCallbackError = diagnosticError(error);
+        this.logConnectionDiagnostic("moo-callback-error", this.connectionDiagnostics.lastMooCallbackError);
+        throw error;
+      }
+    };
+  }
+
+  handleMooError(moo) {
+    const core = moo?.core || this.core;
+    const detail = {
+      ...this.socketDetails(core, moo?.transport?.ws || core?.moo?.transport?.ws),
+      mooId: Number.isInteger(moo?.mooid) ? moo.mooid : null
+    };
+    this.connectionDiagnostics.lastMooError = detail;
+    this.logConnectionDiagnostic("moo-error", detail);
   }
 
   start() {
+    ensureConnectionDiagnostics(this);
+    if (this.roon) {
+      this.logConnectionDiagnostic("discovery-start-skipped", { reason: "already-started" });
+      return;
+    }
+    this.connectionDiagnostics.state = "discovering";
+    this.logConnectionDiagnostic("discovery-start", {
+      queueSubscriptionsEnabled: this.connectionDiagnostics.queueSubscriptionsEnabled
+    });
     this.roon = new RoonApi({
       extension_id: "com.local.roon-ai",
       display_name: "The Rabbit Hole",
-      display_version: "0.1.0",
+      display_version: require("../package.json").version,
       publisher: "Local",
       email: "local@example.invalid",
       website: "http://localhost",
+      log_level: config.roon?.apiLogLevel || "none",
       core_paired: (core) => this.handlePaired(core),
-      core_unpaired: (core) => this.handleUnpaired(core)
+      core_unpaired: (core) => this.handleUnpaired(core),
+      moo_onerror: (moo) => this.handleMooError(moo)
     });
 
     this.status = new RoonApiStatus(this.roon);
@@ -1335,11 +1541,64 @@ class RoonClient extends EventEmitter {
     this.roon.start_discovery();
   }
 
+  stop() {
+    this.stopHeartbeat();
+    this.cancelZonesEmit();
+    try { this.roon?.stop_discovery?.(); } catch (error) {
+      this.logConnectionDiagnostic("discovery-stop-error", { error: diagnosticError(error) });
+    }
+    try { this.roon?.disconnect_all?.(); } catch (error) {
+      this.logConnectionDiagnostic("disconnect-error", { error: diagnosticError(error) });
+    }
+    this.connectionDiagnostics.state = "stopped";
+    this.core = null;
+    this.transport = null;
+    this.browse = null;
+    this.queueSubscriptions.clear();
+    this.queueSignatures.clear();
+  }
+
   handlePaired(core) {
+    ensureConnectionDiagnostics(this);
     this.core = core;
     this.transport = core.services.RoonApiTransport;
     this.browse = core.services.RoonApiBrowse;
+    this.connectionDiagnostics.state = "paired";
+    this.connectionDiagnostics.connectionSequence += 1;
+    this.connectionDiagnostics.pairedCount += 1;
+    this.connectionDiagnostics.connectedAt = new Date().toISOString();
+    this.connectionDiagnostics.queueSubscriptionCount = 0;
+    this.connectionDiagnostics.queueSubscriptionErrors = 0;
+    this.connectionDiagnostics.queueEventCount = 0;
+    this.connectionDiagnostics.roonPingRequestCount = 0;
+    this.connectionDiagnostics.roonPingResponseCount = 0;
+    this.connectionDiagnostics.maxRoonPingResponseDelayMs = 0;
+    this.connectionDiagnostics.slowRoonPingResponseCount = 0;
+    this.connectionDiagnostics.lastRoonPingAt = null;
+    this.connectionDiagnostics.websocketPingCount = 0;
+    this.connectionDiagnostics.websocketPongCount = 0;
+    this.connectionDiagnostics.websocketIncomingPingCount = 0;
+    this.connectionDiagnostics.lastWebsocketPongAt = null;
+    this.connectionDiagnostics.lastMooCallbackError = null;
+    this.attachSocketDiagnostics(core);
+    this.logConnectionDiagnostic("core-paired", {
+      coreId: core?.core_id || "",
+      coreName: core?.display_name || "",
+      coreVersion: core?.display_version || "",
+      connectionSequence: this.connectionDiagnostics.connectionSequence,
+      queueSubscriptionsEnabled: this.connectionDiagnostics.queueSubscriptionsEnabled
+    });
     this.status.set_status(`Connected to ${core.display_name}`, false);
+
+    // The initial zones response can be followed by large queue snapshots.
+    // Let the registration/heartbeat work yield before opening those queue
+    // subscriptions, and refuse callbacks from a superseded Roon session.
+    const scheduleQueueSubscription = (zoneId) => {
+      setImmediate(() => {
+        if (this.core !== core) return;
+        this.subscribeQueue(zoneId);
+      });
+    };
 
     this.transport.subscribe_zones((cmd, data) => {
       let contentChanged = false;
@@ -1349,14 +1608,14 @@ class RoonClient extends EventEmitter {
         this.zones.clear();
         for (const zone of data.zones || []) {
           this.zones.set(zone.zone_id, clearStoppedZoneNowPlaying(zone));
-          this.subscribeQueue(zone.zone_id);
+          scheduleQueueSubscription(zone.zone_id);
         }
         contentChanged = true;
       }
       if (cmd === "Changed") {
         for (const zone of data.zones_added || []) {
           this.zones.set(zone.zone_id, clearStoppedZoneNowPlaying(zone));
-          this.subscribeQueue(zone.zone_id);
+          scheduleQueueSubscription(zone.zone_id);
           contentChanged = true;
         }
         for (const zone of data.zones_changed || []) {
@@ -1364,7 +1623,7 @@ class RoonClient extends EventEmitter {
             ...(this.zones.get(zone.zone_id) || {}),
             ...zone
           }));
-          this.subscribeQueue(zone.zone_id);
+          scheduleQueueSubscription(zone.zone_id);
           contentChanged = true;
         }
         for (const seek of data.zones_seek_changed || []) {
@@ -1392,19 +1651,69 @@ class RoonClient extends EventEmitter {
     });
 
     this.scheduleZonesEmit({ contentChanged: true });
+    this.startHeartbeat(core);
   }
 
-  handleUnpaired() {
+  handleUnpaired(core) {
+    ensureConnectionDiagnostics(this);
+    if (core && this.core && core !== this.core) {
+      this.connectionDiagnostics.staleUnpairedCount += 1;
+      this.logConnectionDiagnostic("stale-core-unpaired-ignored", {
+        staleCoreId: core?.core_id || "",
+        activeCoreId: this.core?.core_id || "",
+        connectionSequence: this.connectionDiagnostics.connectionSequence
+      });
+      return;
+    }
+    const at = new Date().toISOString();
+    this.connectionDiagnostics.state = "unpaired";
+    this.connectionDiagnostics.unpairedCount += 1;
+    this.connectionDiagnostics.lastUnpairedAt = at;
+    this.logConnectionDiagnostic("core-unpaired", {
+      coreId: core?.core_id || this.core?.core_id || "",
+      connectedAt: this.connectionDiagnostics.connectedAt,
+      connectionSequence: this.connectionDiagnostics.connectionSequence,
+      roonPingRequestCount: this.connectionDiagnostics.roonPingRequestCount,
+      roonPingResponseCount: this.connectionDiagnostics.roonPingResponseCount,
+      maxRoonPingResponseDelayMs: this.connectionDiagnostics.maxRoonPingResponseDelayMs,
+      slowRoonPingResponseCount: this.connectionDiagnostics.slowRoonPingResponseCount,
+      websocketPingCount: this.connectionDiagnostics.websocketPingCount,
+      websocketPongCount: this.connectionDiagnostics.websocketPongCount,
+      lastRoonPingAt: this.connectionDiagnostics.lastRoonPingAt,
+      lastWebsocketPongAt: this.connectionDiagnostics.lastWebsocketPongAt,
+      pendingMooRequestCount: core?.moo?.requests && typeof core.moo.requests === "object"
+        ? Object.keys(core.moo.requests).length
+        : null
+    });
+    this.stopHeartbeat();
     this.core = null;
     this.transport = null;
     this.browse = null;
-    this.zones.clear();
-    this.queues.clear();
     this.queueSubscriptions.clear();
     this.queueSignatures.clear();
     this.cancelZonesEmit();
     this.status?.set_status("Disconnected from Roon", true);
     this.emitZonesNow();
+  }
+
+  startHeartbeat(core) {
+    // node-roon-api owns the transport heartbeat. Keep references for
+    // diagnostics/lifecycle bookkeeping, but do not replace or clear its
+    // interval: Roon's transport uses that timer together with is_alive to
+    // detect a genuinely dead socket.
+    const transport = core?.moo?.transport;
+    const ws = transport?.ws;
+    if (!transport || !ws || typeof ws.ping !== "function") return;
+    this.heartbeatTransport = transport;
+    this.heartbeatWs = ws;
+    this.heartbeatTimer = null;
+  }
+
+  stopHeartbeat() {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
+    this.heartbeatTransport = null;
+    this.heartbeatWs = null;
   }
 
   cancelZonesEmit() {
@@ -1446,6 +1755,7 @@ class RoonClient extends EventEmitter {
   }
 
   getState() {
+    ensureConnectionDiagnostics(this);
     return {
       resolverDiagnostics: this.resolverDiagnostics || { roonAlbumFallbackAttempted: 0, roonAlbumFallbackResolved: 0, roonAlbumFallbackFailed: 0 },
       connected: Boolean(this.core),
@@ -1454,6 +1764,7 @@ class RoonClient extends EventEmitter {
         name: this.core.display_name,
         version: this.core.display_version
       } : null,
+      connectionDiagnostics: this.connectionDiagnostics,
       zones: [...this.zones.values()].map((zone) => ({
         ...clearStoppedZoneNowPlaying(zone),
         queue: this.queues.get(zone.zone_id) || null
@@ -1463,10 +1774,16 @@ class RoonClient extends EventEmitter {
 
   subscribeQueue(zoneId) {
     if (!this.transport || !zoneId || this.queueSubscriptions.has(zoneId)) return;
+    ensureConnectionDiagnostics(this);
+    if (config.roon?.queueSubscriptionsEnabled === false) {
+      this.logConnectionDiagnostic("queue-subscription-skipped", { zoneId });
+      return;
+    }
     this.queueSubscriptions.add(zoneId);
 
     try {
       this.transport.subscribe_queue(zoneId, 50, (cmd, msg = {}) => {
+        this.connectionDiagnostics.queueEventCount += 1;
         if (cmd === "Unsubscribed") {
           this.queues.delete(zoneId);
           this.queueSubscriptions.delete(zoneId);
@@ -1486,12 +1803,19 @@ class RoonClient extends EventEmitter {
         const signature = queueSignature(items);
         if (signature === this.queueSignatures.get(zoneId)) return;
         this.queueSignatures.set(zoneId, signature);
-        const oldQueueIds = new Set((previous.items || []).map(item => item.id));
-        for (const item of items) {
-          if (!oldQueueIds.has(item.id)) {
-            const suffix=" - "+item.subtitle;
-            const title=item.subtitle && item.title.endsWith(suffix) ? item.title.slice(0,-suffix.length) : item.title;
-            this.emit?.("trackQueued", {artist:item.subtitle||"",title:title||""});
+        // The initial subscription is a baseline, not a new queue action.
+        // Emitting every existing item here makes startup perform a burst of
+        // synchronous activity/file writes and can starve Roon's connection
+        // while the first queue snapshot is being installed. Only Changed
+        // messages represent additions made after the baseline.
+        if (cmd !== "Subscribed") {
+          const oldQueueIds = new Set((previous.items || []).map(item => item.id));
+          for (const item of items) {
+            if (!oldQueueIds.has(item.id)) {
+              const suffix=" - "+item.subtitle;
+              const title=item.subtitle && item.title.endsWith(suffix) ? item.title.slice(0,-suffix.length) : item.title;
+              this.emit?.("trackQueued", {artist:item.subtitle||"",title:title||""});
+            }
           }
         }
         this.queues.set(zoneId, {
@@ -1503,7 +1827,9 @@ class RoonClient extends EventEmitter {
         });
         this.scheduleZonesEmit({ contentChanged: true });
       });
+      this.connectionDiagnostics.queueSubscriptionCount += 1;
     } catch (error) {
+      this.connectionDiagnostics.queueSubscriptionErrors += 1;
       this.queues.set(zoneId, {
         updatedAt: Date.now(),
         response: "Error",
@@ -1543,6 +1869,33 @@ class RoonClient extends EventEmitter {
     if (!allowed.has(control)) throw new Error(`Unsupported control: ${control}`);
     const zone = this.getZone(zoneId);
     return callRoon((cb) => this.transport.control(this.controlTargetFor(zone), control, cb));
+  }
+
+  async playFromHere(zoneId, queueItemId) {
+    const requestedId = String(queueItemId ?? "").trim();
+    if (!requestedId) throw new Error("Missing Roon queue item ID.");
+
+    const zone = this.getZone(zoneId);
+    const queue = this.queues.get(zoneId);
+    const item = (queue?.items || []).find((candidate) => String(candidate.id ?? "").trim() === requestedId);
+    if (!item) throw new Error("That queue item is no longer in the live Roon queue. Refresh the queue and try again.");
+    if (typeof this.transport.play_from_here !== "function") {
+      throw new Error("This Roon transport does not expose Play from here.");
+    }
+
+    return new Promise((resolve, reject) => {
+      try {
+        this.transport.play_from_here(this.controlTargetFor(zone), item.id ?? requestedId, (msg, body) => {
+          if (msg?.name === "Success" || msg === false) {
+            resolve(body || null);
+            return;
+          }
+          reject(new Error(msg?.name || msg || "Roon did not accept Play from here."));
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
   }
 
   async seek(zoneId, seconds) {

@@ -1,7 +1,7 @@
 {
   "name": "roon-local-ai",
-  "version": "0.1.0",
-  "description": "Local AI playlist and control assistant for Roon",
+  "version": "0.2.0",
+  "description": "Local music discovery and playback assistant for Roon and Lyrion",
   "main": "src/server.js",
   "scripts": {
     "start": "node scripts/start-all.js",
@@ -11,6 +11,35 @@
     "beatport:token": "node scripts/save-beatport-token.js",
     "backfill:music-memory": "node scripts/backfill-music-memory.js",
     "backfill:beatport-enrichment": "node scripts/beatport-enrichment-backfill.js",
+    "metadata:library": "node scripts/enrich-local-library.js",
+    "library:scan": "node scripts/scan-local-media.js",
+    "library:metadata": "node scripts/enrich-local-media.js",
+    "library:write-tags": "node scripts/write-local-library-tags.js --preview data/local-media-metadata-preview.json",
+    "metadata:external": "node scripts/enrich-local-library-external.js",
+    "metadata:write-preview": "node scripts/preview-local-library-writeback.js",
+    "metadata:backup-tags": "node scripts/backup-local-library-tags.js",
+    "metadata:write-tags": "node scripts/write-local-library-tags.js",
+    "metadata:restore-tags": "node scripts/restore-local-library-tags.js",
+    "metadata:enrich-rated": "node scripts/enrich-rated-local.js",
+    "beatport:refresh-negative": "node scripts/refresh-explicit-negative-beatport.js",
+    "beatport:refresh-feedback": "node scripts/refresh-explicit-negative-beatport.js --feedback positive",
+  "metadata:scan-negative": "node scripts/scan-negative-local-files.js",
+  "sonic:audit:local": "node scripts/audit-sonic-training-candidates.js",
+  "sonic:analyze:negative-beatport": "node scripts/sonic-analyze-negative-beatport.js",
+  "sonic:analyze:positive-beatport": "node scripts/sonic-analyze-negative-beatport.js --feedback positive",
+    "taste:clusters": "node scripts/bootstrap-taste-clusters.js",
+    "taste:profiles": "node scripts/build-taste-cluster-profiles.js",
+    "taste:score-candidate": "node scripts/taste-score-candidate.js",
+    "taste:evaluate": "node scripts/evaluate-taste-cluster-scoring.js",
+    "sonic:evaluate:neighbors": "node scripts/evaluate-sonic-neighbor-selection.js",
+    "sonic:analyze": "node scripts/sonic-analyze.js",
+    "sonic:analyze:linked-local": "node scripts/sonic-analyze-linked-local.js",
+    "sonic:analyze:local-file": "node scripts/sonic-analyze-linked-local.js --source local-file",
+    "sonic:benchmark:local": "node scripts/sonic-benchmark-linked-local.js",
+    "sonic:benchmark:beatport": "node scripts/sonic-beatport-benchmark.js",
+    "sonic:benchmark:warm": "node scripts/sonic-beatport-warm-benchmark.js",
+    "sonic:evaluate:models": "node scripts/sonic-evaluate-models.js",
+    "sonic:prepare:blind": "node scripts/sonic-prepare-blind-review.js",
     "check": "node scripts/check-syntax.js",
     "test": "node --test"
   },
@@ -26,9 +55,10 @@
     "node-roon-api": "https://github.com/RoonLabs/node-roon-api/archive/refs/heads/master.tar.gz",
     "node-roon-api-browse": "https://github.com/RoonLabs/node-roon-api-browse/archive/refs/heads/master.tar.gz",
     "node-roon-api-status": "https://github.com/RoonLabs/node-roon-api-status/archive/refs/heads/master.tar.gz",
-    "node-roon-api-transport": "https://github.com/RoonLabs/node-roon-api-transport/archive/refs/heads/master.tar.gz"
+    "node-roon-api-transport": "https://github.com/RoonLabs/node-roon-api-transport/archive/refs/heads/master.tar.gz",
+    "ws": "7.5.11"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13.0"
   }
 }

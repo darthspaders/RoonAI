@@ -7,6 +7,7 @@ const {
   isPositiveRating,
   normalizeRating
 } = require("./feedbackRatings");
+const { detectGenreTerms } = require("./musicOntology");
 
 function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -34,7 +35,17 @@ const PARENT_GENRE_TERMS = [
   "garage",
   "disco",
   "electro",
-  "psytrance"
+  "psytrance",
+  "rock",
+  "alternative",
+  "indie",
+  "pop",
+  "metal",
+  "soul",
+  "jazz",
+  "classical",
+  "country",
+  "folk"
 ];
 
 function parentGenreTermsFor(value = "") {
@@ -50,7 +61,17 @@ function explicitGenreKey(options = {}) {
   if (!raw) return "";
   const first = normalize(raw.split(/[,;|]/)[0]);
   if (!first || first.split(/\s+/).length > 5) return "";
-  return parentGenreTermsFor(first).length ? first : "";
+  const detected = detectGenreTerms(first, { includeAliases: true, limit: 12 });
+  const exact = (detected.matches || []).find((match) => {
+    return normalize(match.canonical) === first ||
+      (match.aliases || []).some((alias) => normalize(alias) === first);
+  });
+  if (exact) return first;
+  // Keep support for a single unknown child genre (for example "swamp
+  // house"), but never create a learned profile for a composite lane whose
+  // ontology detection contains several unrelated genres.
+  const detectedTerms = new Set((detected.terms || []).map(normalize).filter(Boolean));
+  return parentGenreTermsFor(first).length && detectedTerms.size <= 1 ? first : "";
 }
 
 function splitArtists(value = "") {
@@ -86,8 +107,8 @@ function bump(map = {}, name = "", amount = 1) {
 }
 
 function applyFeedback(profile = {}, detail = {}, direction = 1) {
-  const positive = ["love", "good"].includes(detail.rating);
-  const negative = ["wrong_genre", "reject_similar", "skip", "never"].includes(detail.rating);
+  const positive = ["love", "like", "good"].includes(detail.rating);
+  const negative = ["dislike", "wrong_genre", "reject_similar", "skip", "never"].includes(detail.rating);
   if (positive) {
     profile.positiveCount = Math.max(0, Number(profile.positiveCount || 0) + direction);
     for (const artist of splitArtists(detail.artist)) bump(profile.artists, artist, direction);

@@ -1,0 +1,26 @@
+# Only public runtime source is needed in the build context.
+**
+!package.json
+!package-lock.json
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!src/
+!src/**
+!public/
+!public/**
+!scripts/
+!scripts/**
+!integrations/
+!integrations/**
+!config/
+!config/sonic-analyzers.json
+!config/sonic-model-code-sha256.json
+
+# These remain excluded even inside a permitted source directory.
+**/node_modules/**
+**/data/**
+**/.env*
+**/config.json
+**/*.log
+**/*.pyc
+**/__pycache__/**

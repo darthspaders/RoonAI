@@ -4,16 +4,19 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>The Rabbit Hole</title>
-    <link rel="stylesheet" href="/styles.css?v=20260907-beatport-progressive-page">
+    <link rel="stylesheet" href="/styles.css?v=20260915-ui-01">
+    <link rel="stylesheet" href="/database.css?v=20260919-local-metadata-1">
+    <link rel="stylesheet" href="/sonicBlindReview.css?v=20260925-1">
+    <link rel="stylesheet" href="/lyrion.css?v=11">
+    <link rel="stylesheet" href="/lyrionVisualizer.css?v=11">
+    <link rel="stylesheet" href="/roonVisualizer.css?v=6">
   </head>
   <body>
     <main class="shell">
-      <section class="topChrome">
-        <p id="systemTag" class="systemTag">LOCAL MODEL - TIDAL - ROON MATCHING: STRICT</p>
-        <div class="brandMark">
-          <span></span>
-          <img class="brandBanner" src="/assets/rabbit-hole-banner.jpg" alt="The Rabbit Hole">
-          <span></span>
+      <section class="appHeader">
+        <div class="appIdentity">
+          <span class="appIdentityName">Rabbit Hole</span>
+          <p id="systemTag" class="systemTag">LOCAL MODEL - TIDAL - ROON MATCHING: STRICT</p>
         </div>
         <div class="statusStack">
           <p id="connection" class="statusPill">Waiting for Roon...</p>
@@ -26,60 +29,240 @@
       </section>
 
       <section class="topbar">
-        <nav class="viewTabs" aria-label="App views">
-          <a href="/memory.html">Synapse Memory</a>
-          <button type="button" class="active" data-view="player">Now Playing</button>
-          <button type="button" data-view="history">History Report</button>
-          <button type="button" data-view="musicMemory">Music Memory</button>
-          <button type="button" data-view="beatportCharts">Beatport Charts</button>
-          <button type="button" data-view="radio">Radio</button>
-          <button type="button" data-view="playlists">Playlists</button>
-          <button type="button" data-view="tidal">TIDAL Mixes</button>
+        <nav class="viewTabs primaryNav" aria-label="Primary navigation">
+          <button type="button" class="active" data-nav-group="playback" aria-controls="secondaryPlayback" aria-pressed="true">Playback</button>
+          <button type="button" data-nav-group="discover" aria-controls="secondaryDiscover" aria-pressed="false">Discover</button>
+          <button type="button" data-nav-group="tidalLibrary" aria-controls="secondaryTidalLibrary" aria-pressed="false">TIDAL Library</button>
+          <button type="button" data-nav-group="memory" aria-controls="secondaryMemory" aria-pressed="false">Memory</button>
+          <button type="button" data-nav-group="system" aria-controls="secondarySystem" aria-pressed="false">System</button>
         </nav>
-        <div class="topControls">
-          <p id="phoneAccess" class="phoneAccess"></p>
-          <div class="aiModeControls" aria-label="AI provider controls">
-            <label>
-              <span>AI Mode</span>
-              <select id="aiModeSelect" aria-label="AI mode">
-                <option value="auto">AUTO</option>
-                <option value="local">LOCAL</option>
-                <option value="synapse">SYNAPSE</option>
-                <option value="luna">LUNA</option>
-                <option value="terra">TERRA</option>
-                <option value="sol">SOL</option>
+      </section>
+
+      <nav class="secondaryNav" aria-label="Secondary navigation">
+        <div id="secondaryPlayback" class="secondaryNavShell isActive" data-nav-group="playback">
+          <span class="secondaryNavLabel">Playback</span>
+          <div class="secondaryNavItems">
+            <button type="button" class="active" data-nav-group="playback" data-nav-item="now-playing" data-view="player" aria-current="page">Now Playing</button>
+            <button type="button" data-nav-group="playback" data-nav-item="queue" data-view="queue">Queue</button>
+            <button type="button" data-nav-group="playback" data-nav-item="playlists" data-view="playlists">Playlists</button>
+            <button type="button" data-nav-group="playback" data-nav-item="database" data-view="database">Database</button>
+          </div>
+        </div>
+
+        <div id="secondaryDiscover" class="secondaryNavShell" data-nav-group="discover" hidden>
+          <span class="secondaryNavLabel">Discover</span>
+          <div class="secondaryNavItems">
+            <button type="button" class="active" data-nav-group="discover" data-nav-item="rabbit-hole" data-view="discover" aria-current="page">Rabbit Hole</button>
+            <button type="button" data-nav-group="discover" data-nav-item="standby" data-view="standby">Standby</button>
+            <button type="button" data-nav-group="discover" data-nav-item="sonic-review" data-view="sonicReview">Sonic Review</button>
+            <button type="button" data-nav-group="discover" data-nav-item="beatport" data-view="beatportCharts">Beatport</button>
+            <button type="button" data-nav-group="discover" data-nav-item="radio" data-view="radio">Radio</button>
+            <button type="button" data-nav-group="discover" data-nav-item="tidal" data-view="tidal">TIDAL</button>
+          </div>
+        </div>
+
+        <div id="secondaryTidalLibrary" class="secondaryNavShell" data-nav-group="tidalLibrary" hidden>
+          <span class="secondaryNavLabel">TIDAL</span>
+          <div class="secondaryNavItems">
+            <button type="button" class="active" data-nav-group="tidalLibrary" data-nav-item="collections" data-view="tidalLibrary" aria-current="page">Playlists &amp; mixes</button>
+          </div>
+        </div>
+
+        <div id="secondaryMemory" class="secondaryNavShell" data-nav-group="memory" hidden>
+          <span class="secondaryNavLabel">Memory</span>
+          <div class="secondaryNavItems">
+            <button type="button" class="active" data-nav-group="memory" data-nav-item="library" data-view="musicMemory" aria-current="page">Library</button>
+            <button type="button" data-nav-group="memory" data-nav-item="taste" data-view="history">Taste</button>
+            <button type="button" data-nav-group="memory" data-nav-item="synapse-memory" data-view="memory">Synapse Memory</button>
+          </div>
+        </div>
+
+        <div id="secondarySystem" class="secondaryNavShell" data-nav-group="system" hidden>
+          <span class="secondaryNavLabel">System</span>
+          <div class="secondaryNavItems">
+            <button type="button" class="active" data-nav-group="system" data-nav-item="connections" data-view="connections" aria-current="page">Connections</button>
+            <button type="button" data-nav-group="system" data-nav-item="ai" data-view="ai">AI</button>
+            <button type="button" data-nav-group="system" data-nav-item="diagnostics" data-view="diagnostics">Diagnostics</button>
+            <button type="button" data-nav-group="system" data-nav-item="settings" data-view="settings">Settings</button>
+          </div>
+        </div>
+      </nav>
+
+      <section id="sonicReviewView" class="view sonicReviewView" aria-label="Sonic Review">
+        <div id="sonicReviewApp"></div>
+      </section>
+
+      <section id="connectionsView" class="view systemView connectionsView" aria-labelledby="connectionsHeading">
+        <section class="panel systemPanel">
+          <div class="systemViewHeader">
+            <p class="eyebrow">System</p>
+            <h2 id="connectionsHeading">Connections</h2>
+            <p class="muted">Integration state stays visible in the compact header while this view keeps the connected services in one place.</p>
+          </div>
+          <div class="systemScopeList" aria-label="Rabbit Hole integrations">
+            <div class="systemScopeItem"><strong>Roon</strong><span>Playback, zones, queue, and playlists</span></div>
+            <div class="systemScopeItem"><strong>TIDAL</strong><span>Catalog, profile mixes, and playlist actions</span></div>
+            <div class="systemScopeItem"><strong>Last.fm</strong><span>Listening history and taste signals</span></div>
+            <div class="systemScopeItem"><strong>MCP</strong><span>Browser and assistant tool surface</span></div>
+            <div class="systemScopeItem"><strong>LM Studio</strong><span>Local discovery and planning model</span></div>
+            <div class="systemScopeItem"><strong>Synapse</strong><span>Optional provider and shared memory context</span></div>
+            <div class="systemScopeItem"><strong>Beatport</strong><span>Charts and metadata enrichment</span></div>
+          </div>
+        </section>
+      </section>
+
+      <section id="aiView" class="view systemView aiView" aria-labelledby="aiHeading">
+        <section class="panel systemPanel">
+          <div class="systemViewHeader">
+            <p class="eyebrow">System</p>
+            <h2 id="aiHeading">AI</h2>
+            <p class="muted">Provider state and usage remain visible globally. AI mode and Synapse model controls remain in Settings to preserve the approved control placement.</p>
+          </div>
+          <div class="systemScopeList" aria-label="AI services">
+            <div class="systemScopeItem"><strong>Local model</strong><span>LM Studio discovery and fallback generation</span></div>
+            <div class="systemScopeItem"><strong>Synapse</strong><span>Provider routing, model tiers, and usage</span></div>
+            <div class="systemScopeItem"><strong>MCP</strong><span>Assistant-facing tools and orchestration</span></div>
+          </div>
+        </section>
+      </section>
+
+      <section id="diagnosticsView" class="view systemView diagnosticsView" aria-labelledby="diagnosticsHeading">
+        <section class="panel diagnosticsPanel">
+          <div class="systemViewHeader">
+            <p class="eyebrow">System</p>
+            <h2 id="diagnosticsHeading">Diagnostics</h2>
+            <p class="muted">Health, discovery diagnostics, recovery details, and rejected output live here when needed.</p>
+          </div>
+          <section id="systemHealth" class="systemHealth" aria-live="polite"></section>
+          <div class="diagnosticSurfaces">
+            <div id="poolDiagnostics" class="poolDiagnostics" hidden></div>
+            <div id="intentDebug" class="intentDebug" hidden></div>
+            <div id="sourceReport" class="sourceReport" hidden></div>
+            <div id="rejectedDebug" class="rejectedDebug" hidden></div>
+          </div>
+        </section>
+      </section>
+
+      <section id="settingsView" class="view settingsView">
+        <section class="panel settingsPanel">
+          <div class="settingsHeader">
+            <p class="eyebrow">System</p>
+            <h2>Settings</h2>
+            <p class="muted">Configure AI routing, Sonic Review influence, and the active Roon output zone.</p>
+          </div>
+          <div class="topControls">
+            <div class="aiModeControls" aria-label="AI provider controls">
+              <label>
+                <span>AI Mode</span>
+                <select id="aiModeSelect" aria-label="AI mode">
+                  <option value="auto">AUTO</option>
+                  <option value="local">LOCAL</option>
+                  <option value="synapse">SYNAPSE</option>
+                  <option value="luna">LUNA</option>
+                  <option value="terra">TERRA</option>
+                  <option value="sol">SOL</option>
+                </select>
+              </label>
+              <label class="synapseModelField">
+                <span>Synapse Model</span>
+                <input id="synapseModelInput" type="text" autocomplete="off" spellcheck="false" aria-label="Synapse model">
+              </label>
+              <button type="button" id="synapseCheck">Check</button>
+            </div>
+            <label class="zonePicker">
+              <span>Roon Output Zone</span>
+              <select id="zoneSelect" aria-label="Roon output zone"></select>
+            </label>
+          </div>
+          <section class="settingsSection sonicProductionSettings" aria-labelledby="sonicProductionHeading">
+            <div class="settingsSectionHeader">
+              <div>
+                <p class="eyebrow">Recommendations</p>
+                <h3 id="sonicProductionHeading">Sonic Review in recommendations</h3>
+                <p class="muted">Use reviewed sonic-neighbor evidence as a ranking signal. Identity, version, resolver, TIDAL, Roon, and queue checks stay unchanged.</p>
+              </div>
+              <span id="sonicProductionStatus" class="sonicProductionStatus" role="status" aria-live="polite">Loading…</span>
+            </div>
+            <label class="sonicProductionField" for="sonicProductionModeSelect">
+              <span>Sonic production mode</span>
+              <select id="sonicProductionModeSelect" aria-describedby="sonicProductionHelp">
+                <option value="off">Off — current ordering</option>
+                <option value="observe">Observe — log only</option>
+                <option value="blend">Blend — capped score adjustment</option>
               </select>
             </label>
-            <label class="synapseModelField">
-              <span>Synapse Model</span>
-              <input id="synapseModelInput" type="text" autocomplete="off" spellcheck="false" aria-label="Synapse model">
-            </label>
-            <button type="button" id="synapseCheck">Check</button>
+            <p id="sonicProductionHelp" class="muted">Blend is capped at the configured maximum (8 points by default) and applies immediately to new discovery requests until restart.</p>
+          </section>
+          <section id="sonicCoveragePanel" class="settingsSection sonicCoverageSettings" aria-labelledby="sonicCoverageHeading">
+            <div class="settingsSectionHeader">
+              <div>
+                <h3 id="sonicCoverageHeading">Sonic audio coverage</h3>
+                <p class="muted">Prepare audio fingerprints for known tracks. Discovery requests get priority. Musical reviews and ratings stay separate.</p>
+              </div>
+              <button type="button" data-coverage-action="refresh">Refresh</button>
+            </div>
+            <p id="sonicCoverageStatus" role="status" aria-live="polite">Loading coverage…</p>
+            <progress id="sonicCoverageProgress" aria-label="Backfill progress" hidden></progress>
+            <dl id="sonicCoverageCounts" class="sonicCoverageCounts" hidden></dl>
+            <p id="sonicCoverageQueue" class="muted"></p>
+            <div class="sonicCoverageActions">
+              <button type="button" data-coverage-action="start" disabled>Start backfill</button>
+              <button type="button" data-coverage-action="pause" disabled>Pause all</button>
+              <button type="button" data-coverage-action="resume" disabled>Resume</button>
+              <button type="button" data-coverage-action="cancel" disabled>Cancel backfill</button>
+              <button type="button" data-coverage-action="retry" disabled>Retry failed</button>
+            </div>
+            <p class="muted">Pausing lets active tracks finish. Cancel stops future backfill work and keeps completed fingerprints.</p>
+            <details>
+              <summary>Preparation limits</summary>
+              <form id="sonicCoverageLimits" class="sonicCoverageLimits">
+                <label>Tracks per batch <input name="batchSize" type="number" min="1" max="50" step="1" value="5" required></label>
+                <label>Parallel preparations <input name="concurrency" type="number" min="1" max="3" step="1" value="1" required></label>
+                <label>Seconds between starts <input name="intervalSeconds" type="number" min="0.25" max="60" step="0.25" value="2" required></label>
+                <label>Seconds between batches <input name="batchPauseSeconds" type="number" min="1" max="300" step="1" value="5" required></label>
+                <label class="sonicCoverageToggle"><input name="lazyEnabled" type="checkbox" checked> Fill missing discovery fingerprints in the background</label>
+                <button type="submit">Apply limits</button>
+              </form>
+            </details>
+            <details id="sonicCoverageFailures" hidden><summary>Recent preparation failures</summary><ul></ul></details>
+          </section>
+        </section>
+      </section>
+
+      <section id="queueView" class="view queueView">
+        <section class="panel queuePanel">
+          <div class="queueViewHeader">
+            <div>
+              <p class="eyebrow">Playback</p>
+              <h2>Queue</h2>
+              <p class="muted">Live Roon queue for the active output zone.</p>
+            </div>
           </div>
-          <label class="zonePicker">
-            <span>Roon Output Zone</span>
-            <select id="zoneSelect" aria-label="Roon output zone"></select>
-          </label>
-        </div>
+          <p class="queueGestureHint">Tap or hold a track for queue actions.</p>
+          <div id="queueActionStatus" class="queueActionStatus" aria-live="polite"></div>
+          <div id="liveQueue" class="liveQueue" hidden></div>
+          <div id="queueActionMenu" class="queueActionMenu" hidden role="menu" aria-labelledby="queueActionTitle">
+            <div class="queueActionMenuHead">
+              <div>
+                <span class="eyebrow">Queue action</span>
+                <strong id="queueActionTitle">Selected track</strong>
+              </div>
+              <button type="button" class="queueActionClose" data-queue-action-close aria-label="Close queue actions">×</button>
+            </div>
+            <button type="button" role="menuitem" data-queue-action="play-from-here">Play from here</button>
+            <button type="button" role="menuitem" data-queue-action="remove" disabled aria-describedby="queueRemoveHelp">Remove from queue</button>
+            <p id="queueRemoveHelp" class="queueActionHelp">Roon’s extension API does not expose item removal yet.</p>
+            <button type="button" class="queueActionCancel" data-queue-action-close>Cancel</button>
+          </div>
+        </section>
       </section>
 
       <section id="playerView" class="view isActive">
         <section class="layout">
-          <div class="panel player">
+          <div class="panel player player--regular">
             <div class="playerViewControls">
               <button type="button" id="togglePlayerMax" class="playerMaxToggle" aria-pressed="false">Maximize Player</button>
               <button type="button" id="togglePlayerFull" class="playerFullToggle" aria-pressed="false">Full Window</button>
-            </div>
-            <div id="pcTempOverlay" class="pcTempOverlay" hidden aria-live="polite">
-              <span class="pcTempChip pcTempChipCpu">
-                <span>CPU</span>
-                <strong id="pcTempCpu">--</strong>
-              </span>
-              <span class="pcTempChip pcTempChipGpu">
-                <span>GPU</span>
-                <strong id="pcTempGpu">--</strong>
-              </span>
-              <div id="fullscreenConnectionStatus" class="fullscreenConnectionStatus" aria-label="Connections and AI routing"></div>
             </div>
             <div id="bridgeSyncPopup" class="bridgeSyncPopup" hidden role="status" aria-live="polite">
               <div>
@@ -92,19 +275,30 @@
               </div>
             </div>
             <div class="now">
-              <div class="artStack">
-                <div class="cover" id="cover"></div>
-              </div>
               <div class="nowInfo">
                 <p class="eyebrow">Now Playing</p>
                 <h2 id="nowTitle">No active zone</h2>
                 <p id="nowSubtitle"></p>
                 <p id="nowSourceFormat" class="nowSourceFormat" hidden></p>
+                <div id="pcTempOverlay" class="pcTempOverlay" hidden aria-live="polite">
+                  <span class="pcTempChip pcTempChipCpu">
+                    <span>CPU</span>
+                    <strong id="pcTempCpu">--</strong>
+                  </span>
+                  <span class="pcTempChip pcTempChipGpu">
+                    <span>GPU</span>
+                    <strong id="pcTempGpu">--</strong>
+                  </span>
+                  <div id="fullscreenConnectionStatus" class="fullscreenConnectionStatus" aria-label="Connections and AI routing"></div>
+                </div>
               </div>
             </div>
+            <div class="artStack">
+              <div class="cover" id="cover"></div>
+            </div>
+            <div id="nowDiscoveryBadge" class="nowDiscoveryBadge"></div>
             <div id="nowDiscoveryTools" class="nowDiscoveryTools" hidden>
               <div id="nowFeedback" class="feedbackButtons nowFeedback" aria-label="Now playing feedback"></div>
-              <div id="nowDiscoveryBadge" class="nowDiscoveryBadge"></div>
               <div class="nowDiscoveryActions">
                 <button type="button" id="addNowToTidalPlaylist" disabled>Add to TIDAL</button>
                 <button type="button" id="openRabbitHole">Open Rabbit Hole</button>
@@ -157,10 +351,13 @@
                 <span id="seekLength">0:00</span>
               </div>
             </div>
-            <div id="liveQueue" class="liveQueue" hidden></div>
             <div id="outputs" class="outputs"></div>
           </div>
 
+        </section>
+      </section>
+
+      <section id="discoverView" class="view discoverView">
           <form id="playlistForm" class="panel composer">
             <div class="formHead">
               <div>
@@ -271,28 +468,8 @@
                   </select>
                 </label>
               </div>
-              <section id="systemHealth" class="systemHealth" aria-live="polite"></section>
             </details>
           </form>
-        </section>
-
-        <section class="panel standbyPanel">
-          <div class="formHead standbyHead">
-            <div>
-              <p class="eyebrow">Standby Discovery</p>
-              <h2 id="standbyTitle">0/25 standby tracks</h2>
-              <p id="standbyStatus" class="muted">Waiting for background search.</p>
-            </div>
-            <div class="resultActions standbyActions">
-              <button type="button" id="standbyRefresh">Refresh</button>
-              <button type="button" id="standbyQueue" disabled>Queue</button>
-              <button type="button" id="standbyQueueNext" disabled>Queue next</button>
-              <button type="button" id="standbySendTidal" disabled>Send to TIDAL</button>
-              <button type="button" id="standbyClear" disabled>Clear</button>
-            </div>
-          </div>
-          <div id="standbyTracks" class="standbyTracks"></div>
-        </section>
 
         <section class="panel results">
           <div class="formHead">
@@ -315,24 +492,40 @@
             </div>
           </div>
           <div id="queueReport" class="queueReport" hidden></div>
-          <div id="poolDiagnostics" class="poolDiagnostics" hidden></div>
           <div id="tracks" class="tracks"></div>
-          <div id="intentDebug" class="intentDebug" hidden></div>
-          <div id="sourceReport" class="sourceReport" hidden></div>
-          <div id="rejectedDebug" class="rejectedDebug" hidden></div>
         </section>
 
       </section>
 
-      <section id="historyView" class="view">
-        <section class="panel reportHero">
+      <section id="standbyView" class="view standbyView">
+        <section class="panel standbyPanel">
+          <div class="formHead standbyHead">
+            <div>
+              <p class="eyebrow">Standby Discovery</p>
+              <h2 id="standbyTitle">0/25 standby tracks</h2>
+              <p id="standbyStatus" class="muted">Waiting for background search.</p>
+            </div>
+            <div class="resultActions standbyActions">
+              <button type="button" id="standbyRefresh">Refresh</button>
+              <button type="button" id="standbyQueue" disabled>Queue</button>
+              <button type="button" id="standbyQueueNext" disabled>Queue next</button>
+              <button type="button" id="standbySendTidal" disabled>Send to TIDAL</button>
+              <button type="button" id="standbyClear" disabled>Clear</button>
+            </div>
+          </div>
+          <div id="standbyTracks" class="standbyTracks"></div>
+        </section>
+      </section>
+
+      <section id="historyView" class="view memorySurface" data-memory-item="taste" aria-labelledby="tasteProfileHeading">
+        <section class="panel reportHero pageHero">
           <div>
-            <p class="eyebrow">History Report</p>
-            <h2>Current music taste</h2>
+            <p class="eyebrow">Taste Profile</p>
+            <h2 id="tasteProfileHeading">Current music taste</h2>
             <p id="tasteNarrative" class="tasteNarrative">Listening history will appear after Roon starts playing.</p>
           </div>
           <div class="resultActions">
-            <button type="button" id="refreshHistory">Refresh report</button>
+            <button type="button" id="refreshHistory">Refresh taste profile</button>
             <button type="button" id="tastePrompt">Use taste as prompt</button>
           </div>
         </section>
@@ -359,11 +552,74 @@
         </section>
       </section>
 
-      <section id="musicMemoryView" class="view">
-        <section class="panel musicMemoryHero">
+      <section id="databaseView" class="view databaseView" aria-labelledby="databaseHeading">
+        <header class="dbHeader">
+          <div><p class="eyebrow">Your music, explored</p><h2 id="databaseHeading">Database</h2><p id="dbCatalogStatus" class="dbMuted">Browse Rabbit Hole's stored catalog.</p></div>
+          <button id="dbRefresh" type="button">Refresh database</button>
+        </header>
+        <div class="dbToolbar">
+          <div class="dbViewSwitch" role="group" aria-label="Database view">
+            <button type="button" data-db-local aria-pressed="false">Local Library</button>
+            <button type="button" data-db-view="tags" aria-pressed="true">Tags</button>
+            <button type="button" data-db-view="albums" aria-pressed="false">Albums</button>
+            <button type="button" data-db-view="recordings" aria-pressed="false">Recordings</button>
+            <button type="button" data-db-view="tracks" aria-pressed="false">Source records</button>
+          </div>
+          <label class="dbSearch">Search your database<input id="dbSearch" type="search" placeholder="Artist, track, album, tag, label or ID" autocomplete="off"></label>
+          <div class="dbSaved"><label for="dbSavedViews">Saved views</label><div><select id="dbSavedViews"><option value="">Choose a saved view</option></select><button id="dbSaveView" type="button">Save view</button></div></div>
+        </div>
+        <div class="dbLayout">
+          <aside class="dbSidebar" aria-label="Database filters">
+            <details class="dbFilterPanel" open>
+              <summary>Filters <span id="dbFilterCount"></span></summary>
+              <form id="dbFilters" class="dbFilters">
+                <label>Collection<select name="media"><option value="">Rabbit Hole catalogue</option><option value="local">Local files only</option></select></label>
+                <label id="dbAvailabilityLabel" hidden>File availability<select name="availability"><option value="">All scanned files</option><option value="available">Available at last scan</option><option value="missing">Missing at last scan</option><option value="unreadable">Needs attention</option></select></label>
+                <div class="dbQuickFilters" role="group" aria-label="Quick filters"><button type="button" data-db-quick="loved">Loved &amp; liked</button><button type="button" data-db-quick="missing">Missing Sonic</button></div>
+                <label>Genre<select name="genre" data-db-facet="genre"><option value="">All genres</option></select></label>
+                <label>Artist<input name="artist" type="search" list="dbArtistOptions" placeholder="Choose or type an artist" autocomplete="off"><datalist id="dbArtistOptions"></datalist></label>
+                <label>Label<input name="label" type="search" list="dbLabelOptions" placeholder="Choose or type a label" autocomplete="off"><datalist id="dbLabelOptions"></datalist></label>
+                <label>Latest rating<select name="rating" data-db-facet="rating"><option value="">All ratings</option></select></label>
+                <label>Sonic<select name="sonic"><option value="">All Sonic states</option><option value="embedded">Embedding stored</option><option value="missing">Missing embedding</option><option value="anchor">Has anchor profile</option><option value="reviewed">Has neighbor review</option></select></label>
+                <details class="dbMoreFilters"><summary>More filters</summary><div>
+                  <label>Metadata tag<select name="tag" data-db-facet="tag"><option value="">All metadata tags</option></select></label>
+                  <label>Sonic tag<select name="sonicTag" data-db-facet="sonicTag"><option value="">All Sonic tags</option></select></label>
+                  <label>Metadata provider<select name="provider" data-db-facet="provider"><option value="">All providers</option></select></label>
+                  <label>Seen in<select name="source" data-db-facet="source"><option value="">All sources</option></select></label>
+                  <fieldset><legend>Release year</legend><div class="dbRange"><input name="yearMin" type="number" min="1900" max="2100" placeholder="From" aria-label="Earliest release year"><span>to</span><input name="yearMax" type="number" min="1900" max="2100" placeholder="To" aria-label="Latest release year"></div></fieldset>
+                  <fieldset><legend>BPM</legend><div class="dbRange"><input name="bpmMin" type="number" min="1" max="999" placeholder="Min" aria-label="Minimum BPM"><span>to</span><input name="bpmMax" type="number" min="1" max="999" placeholder="Max" aria-label="Maximum BPM"></div></fieldset>
+                  <fieldset><legend>Duration (minutes)</legend><div class="dbRange"><input name="durationMin" type="number" min="0" max="999" step="0.1" placeholder="Min" aria-label="Minimum duration in minutes"><span>to</span><input name="durationMax" type="number" min="0" max="999" step="0.1" placeholder="Max" aria-label="Maximum duration in minutes"></div></fieldset>
+                  <label>Album artwork<select name="artwork"><option value="">Any artwork state</option><option value="has">Artwork available</option><option value="missing">Missing artwork</option></select></label>
+                </div></details>
+                <button id="dbClearFilters" type="button">Clear all filters</button>
+              </form>
+            </details>
+            <p class="dbScopeNote">Tags come from stored metadata and Sonic profiles. Roon's personal tags are not imported here.</p>
+          </aside>
+          <div class="dbMain">
+            <div id="dbActiveFilters" class="dbActiveFilters" role="group" aria-label="Active filters"></div>
+            <div class="dbResultsToolbar">
+              <div><h3 id="dbResultsHeading" tabindex="-1">Genre tags</h3><p id="dbResultStatus" role="status" aria-live="polite">Open the database to load your music.</p></div>
+              <div class="dbResultControls">
+                <label id="dbGroupLabel">Group by<select id="dbGroup"><option value="genre">Genres</option><option value="tag">Metadata tags</option><option value="sonicTag">Sonic tags</option><option value="artist">Artists</option><option value="label">Labels</option></select></label>
+                <label>Sort by<select id="dbSort"><option value="name">Name</option><option value="count">Track count</option><option value="recent">Recently seen</option></select></label>
+                <button id="dbDirection" type="button" aria-label="Sort descending" title="Reverse sort order">Ascending</button>
+              </div>
+            </div>
+            <p id="dbViewNote" class="dbMuted dbViewNote">Select a collection to explore its tracks.</p>
+            <div id="dbResults" class="dbResults" aria-labelledby="dbResultsHeading" aria-busy="false"></div>
+            <nav id="dbPagination" class="dbPagination" aria-label="Database result pages" hidden><button id="dbPrevious" type="button">Previous</button><span id="dbPageLabel"></span><button id="dbNext" type="button">Next</button></nav>
+          </div>
+        </div>
+        <dialog id="dbTrackDialog" class="databaseDialog" aria-labelledby="dbTrackTitle"><button type="button" class="dbDialogClose" data-db-close="dbTrackDialog">Close details</button><div id="dbTrackDetail"></div></dialog>
+        <dialog id="dbSaveDialog" class="databaseDialog dbSaveDialog" aria-labelledby="dbSaveTitle"><form id="dbSaveForm"><h3 id="dbSaveTitle">Save this view</h3><p class="dbMuted">Keep these filters, sorting and display together. Saved on this browser.</p><label>View name<input id="dbViewName" maxlength="60" required autocomplete="off"></label><div class="dbDialogActions"><button type="button" data-db-close="dbSaveDialog">Cancel</button><button type="submit">Save view</button></div></form></dialog>
+      </section>
+
+      <section id="musicMemoryView" class="view memorySurface" data-memory-item="library" aria-labelledby="musicMemoryHeading">
+        <section class="panel musicMemoryHero pageHero">
           <div>
-            <p class="eyebrow">Rabbit Hole Database</p>
-            <h2>Music Memory</h2>
+            <p class="eyebrow">Library</p>
+            <h2 id="musicMemoryHeading">Music Memory</h2>
             <p id="musicMemoryStatus" class="tasteNarrative">Search Rabbit Hole's local track memory.</p>
           </div>
           <form id="musicMemorySearchForm" class="musicMemorySearch">
@@ -378,10 +634,9 @@
               <option value="">All feedback</option>
               <option value="any">Has feedback</option>
               <option value="love">Love</option>
-              <option value="good">Good</option>
-              <option value="ok">OK</option>
-              <option value="wrong_genre">Wrong Genre</option>
-              <option value="skip">Skip</option>
+              <option value="like">Like</option>
+              <option value="ok">Okay</option>
+              <option value="dislike">Dislike</option>
               <option value="never">Never Again</option>
             </select>
             <button type="submit">Search</button>
@@ -392,7 +647,7 @@
       </section>
 
       <section id="beatportChartsView" class="view">
-        <section class="panel beatportChartHero">
+        <section class="panel beatportChartHero pageHero">
           <div>
             <p class="eyebrow">Beatport Charts</p>
             <h2>Progressive House Charts</h2>
@@ -443,7 +698,7 @@
       </section>
 
       <section id="radioView" class="view">
-        <section class="panel radioHero">
+        <section class="panel radioHero pageHero">
           <div>
             <p class="eyebrow">Roon Radio</p>
             <h2>Radio Stations</h2>
@@ -460,7 +715,7 @@
       </section>
 
       <section id="playlistView" class="view">
-        <section class="panel playlistHero">
+        <section class="panel playlistHero pageHero">
           <div>
             <p class="eyebrow">Playlist Playback</p>
             <h2>Playlists</h2>
@@ -476,7 +731,7 @@
       </section>
 
       <section id="tidalView" class="view">
-        <section class="panel tidalMixHero">
+        <section class="panel tidalMixHero pageHero">
           <div>
             <p class="eyebrow">TIDAL Profile</p>
             <h2>Mixes & Radio</h2>
@@ -498,9 +753,45 @@
 
         <section id="tidalMixesGrid" class="tidalMixGrid"></section>
       </section>
+
+      <section id="tidalLibraryView" class="view tidalLibraryView" aria-labelledby="tidalLibraryHeading">
+        <section class="panel tidalLibraryHero pageHero">
+          <div>
+            <p class="eyebrow">TIDAL Library</p>
+            <h2 id="tidalLibraryHeading">Playlists &amp; mixes</h2>
+            <p id="tidalLibraryStatus" class="tasteNarrative">Open this view to load your TIDAL collections.</p>
+          </div>
+          <div class="resultActions">
+            <a class="buttonLink" id="tidalLibraryAuthorize" href="/api/tidal/oauth/start">Connect TIDAL</a>
+            <button type="button" id="refreshTidalLibrary">Refresh library</button>
+          </div>
+        </section>
+
+        <section class="panel tidalLibraryToolbar" aria-label="TIDAL library filters">
+          <div class="tidalLibraryFilters" role="group" aria-label="Show TIDAL collections">
+            <button type="button" class="active" data-tidal-library-filter="all" aria-pressed="true">All</button>
+            <button type="button" data-tidal-library-filter="playlists" aria-pressed="false">Playlists</button>
+            <button type="button" data-tidal-library-filter="mixes" aria-pressed="false">Mixes &amp; radio</button>
+          </div>
+          <p id="tidalLibraryExportHint" class="muted">Create .m3u files for players or .csv files for ChatGPT recommendations.</p>
+        </section>
+
+        <section id="tidalLibraryGrid" class="tidalLibraryGrid" aria-live="polite"></section>
+      </section>
     </main>
     <button type="button" id="jumpTop" class="jumpTop" hidden>Now Playing</button>
-    <script src="/app.js?v=20260907-beatport-progressive-page"></script>
+    <script src="/statusLive.js?v=1"></script>
+    <script src="/app.js?v=20261004-roon-visualizer-1"></script>
+    <script src="/sonicBlindReview.js?v=20260925-1"></script>
     <script src="/webmcpTools.js"></script>
+    <script src="/sonicCoverage.js?v=20260917-1"></script>
+    <script src="/database.js?v=20260919-local-metadata-1"></script>
+    <script src="/lyrion.js?v=15"></script>
+    <script src="/soundSpectrumVideo.js?v=1"></script>
+  <script src="/soundSpectrumStage.js?v=5"></script>
+    <script src="/lyrionVisualizer.js?v=11"></script>
+  <script src="/roonVisualizer.js?v=3"></script>
+    <script src="/lyrionDiscoveryRail.js?v=6"></script>
+    <script src="/lyrionSoundCloudPlaylists.js?v=1"></script>
   </body>
 </html>

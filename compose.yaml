@@ -1,0 +1,16 @@
+services:
+  rabbit-hole:
+    build: .
+    image: rabbit-hole:local
+    restart: unless-stopped
+    init: true
+    # Linux host networking preserves Roon multicast discovery and lets LMS
+    # reach the loopback-only SiriusXM relay. Do not add a ports section.
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - rabbit-hole-data:/app/data
+
+volumes:
+  rabbit-hole-data:

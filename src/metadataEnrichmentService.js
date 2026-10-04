@@ -1,4 +1,5 @@
 "use strict";
+const { captureProviderEvidence, combineSourceEvidence } = require("./providerSourceEvidence");
 
 const fs = require("fs");
 const path = require("path");
@@ -288,9 +289,15 @@ function providerResultToEntry(track, result, provider, confidenceInfo) {
     imageUrl: sourceImageUrl,
     tidalUrl: provider.startsWith("tidal") ? tidyUrl(result.tidalUrl || result.url) : "",
     beatportUrl: tidyUrl(result.beatportUrl),
+    discogsUrl: tidyUrl(result.discogsUrl),
+    catalogNumber: firstText(result.catalogNumber, result.catalog_number),
+    discogsId: cleanText(result.discogsId || result.discogs_id),
+    musicBrainzId: cleanText(result.musicBrainzId || result.musicbrainzId),
+    masterId: cleanText(result.masterId || result.master_id),
     isrc: cleanIsrc(result.isrc),
     confidence: Number(confidenceInfo.confidence || 0),
     confidenceReason: confidenceInfo.reason || "",
+    sourceEvidence: captureProviderEvidence(provider, result),
     source: provider,
     updatedAt: new Date().toISOString()
   };
@@ -345,8 +352,35 @@ function mergeBeatportEntry(primary = null, beatport = null) {
     confidence: Math.max(Number(primary.confidence || 0), Number(beatport.confidence || 0)),
     confidenceReason: [primary.confidenceReason, beatport.confidenceReason].filter(Boolean).join("; "),
     beatportCheckedAt: beatport.updatedAt || new Date().toISOString(),
-    beatportNextRetryAt: ""
+    beatportNextRetryAt: "",
+    sourceEvidence: combineSourceEvidence(primary, beatport)
   };
+}
+
+function mergeFallbackEntries(primary = null, ...fallbacks) {
+  if (!primary) return fallbacks.find(Boolean) || null;
+  const merged = { ...primary };
+  const fillFields = [
+    "album", "label", "genre", "releaseDate", "releaseYear", "year", "durationMs",
+    "isrc", "imageUrl", "sourceImageUrl", "id", "beatportUrl", "discogsUrl"
+  ];
+  for (const fallback of fallbacks.filter(Boolean)) {
+    for (const field of fillFields) {
+      if (!merged[field] && fallback[field]) merged[field] = fallback[field];
+    }
+    for (const field of ["musicBrainzTags", "beatportTags"]) {
+      if ((!Array.isArray(merged[field]) || !merged[field].length) && Array.isArray(fallback[field]) && fallback[field].length) {
+        merged[field] = fallback[field];
+      }
+    }
+    merged.source = merged.source && fallback.source && merged.source !== fallback.source
+      ? `${merged.source}+${fallback.source}`
+      : (merged.source || fallback.source);
+    merged.confidence = Math.max(Number(merged.confidence || 0), Number(fallback.confidence || 0));
+    merged.confidenceReason = [merged.confidenceReason, fallback.confidenceReason].filter(Boolean).join("; ");
+    merged.sourceEvidence = combineSourceEvidence(merged, fallback);
+  }
+  return merged;
 }
 
 function musicBrainzArtistText(recording = {}) {
@@ -383,6 +417,7 @@ class MetadataEnrichmentService {
   constructor({
     tidal,
     beatport,
+    discogs = null,
     musicMemory,
     metadataResolver,
     cacheFile = path.join(__dirname, "..", "data", "metadata-enrichment-cache.json"),
@@ -398,6 +433,7 @@ class MetadataEnrichmentService {
   } = {}) {
     this.tidal = tidal;
     this.beatport = beatport;
+    this.discogs = discogs;
     this.musicMemory = musicMemory;
     this.metadataResolver = metadataResolver;
     this.cacheFile = cacheFile;
@@ -417,6 +453,7 @@ class MetadataEnrichmentService {
     this.cache = new Map();
     this.pending = new Map();
     this.artBridgePending = new Set();
+    this.lastBeatportIdentityReuseDiagnostics = null;
     this.load();
   }
 
@@ -621,12 +658,16 @@ class MetadataEnrichmentService {
 
   async lookup(track = {}) {
     const tidal = await this.lookupTidal(track);
+    const beatport = await this.lookupBeatport(track);
     if (tidal) {
-      const beatport = await this.lookupBeatport(track);
-      return beatport ? mergeBeatportEntry(tidal, beatport) : markBeatportChecked(tidal, this.clock, this.missRetryMs);
+      if (beatport) return mergeBeatportEntry(tidal, beatport);
+      const [musicBrainz, discogs] = await Promise.all([
+        this.lookupMusicBrainz(track),
+        this.lookupDiscogs(track)
+      ]);
+      return markBeatportChecked(mergeFallbackEntries(tidal, musicBrainz, discogs), this.clock, this.missRetryMs);
     }
 
-    const beatport = await this.lookupBeatport(track);
     if (beatport) return beatport;
 
     const musicBrainz = await this.lookupMusicBrainz(track);
@@ -672,12 +713,68 @@ class MetadataEnrichmentService {
     return candidates.sort((left, right) => Number(right.confidence || 0) - Number(left.confidence || 0))[0] || null;
   }
 
-  async lookupBeatport(track = {}) {
+  async lookupBeatport(track = {}, { retryMissingAfterMs = 0 } = {}) {
     if (!this.beatport?.isConfigured?.()) return null;
     try {
-      const cached = this.musicMemory?.findBeatportEnrichment?.(track);
-      if (cached) return this.beatportResultToEntry(track, cached);
-      if (this.musicMemory?.beatportLookupBlocked?.(track)) return null;
+      const cachedCandidate = this.musicMemory?.findBeatportEnrichmentCandidate?.(track) || null;
+      const cached = cachedCandidate?.result || (!cachedCandidate
+        ? this.musicMemory?.findBeatportEnrichment?.(track)
+        : null);
+      if (cached) {
+        const identityReuse = cachedCandidate?.identityReuse;
+        if (!identityReuse?.reused) return this.beatportResultToEntry(track, cached);
+
+        const storedBeatportId = cleanText(cached.id || cached.beatportTrackId);
+        const validationTrack = identityReuse.validationTrack || track;
+        const validated = storedBeatportId && this.beatport.findTrack
+          ? await this.beatport.findTrack(validationTrack, { beatportTrackId: storedBeatportId })
+          : null;
+        const validatedId = cleanText(validated?.id || validated?.beatportTrackId);
+        const confidence = validated
+          ? confidenceForMatch(validationTrack, {
+            ...validated,
+            title: validated.mixName ? `${validated.title} (${validated.mixName})` : validated.title
+          })
+          : { confidence: 0, reason: "stored Beatport identity could not be revalidated" };
+        this.lastBeatportIdentityReuseDiagnostics = {
+          attempted: true,
+          ...identityReuse,
+          storedBeatportId,
+          validatedBeatportId: validatedId,
+          accepted: Boolean(validated && validatedId === storedBeatportId && confidence.confidence >= this.minConfidence),
+          validationConfidence: confidence.confidence,
+          validationReason: confidence.reason,
+          providerDiagnostics: this.beatport.lastIdentityDiagnostics || null
+        };
+        if (validated && validatedId === storedBeatportId && confidence.confidence >= this.minConfidence) {
+          try {
+            this.musicMemory?.saveBeatportEnrichment?.(track, validated, { confidence: confidence.confidence });
+            this.musicMemory?.saveProviderEnrichment?.(track, "beatport", {
+              ...validated,
+              providerTrackId: validated.id,
+              confidence: confidence.confidence,
+              fetchedAt: new Date(Number(this.clock())).toISOString()
+            });
+            this.musicMemory?.saveEnrichmentAttempt?.(track, "beatport", {
+              status: "found",
+              confidence: confidence.confidence,
+              fetchedAt: new Date(Number(this.clock())).toISOString(),
+              rawJson: { reusedFrom: identityReuse.canonicalIdentityKey, beatportTrackId: storedBeatportId }
+            });
+          } catch (error) {
+            this.logger?.debug?.("Rabbit Hole reused Beatport identity save failed", { error: error.message });
+          }
+          return this.beatportResultToEntry(track, validated, confidence);
+        }
+      }
+      if (this.musicMemory?.beatportLookupBlocked?.(track)) {
+        const attempt = retryMissingAfterMs > 0 ? this.musicMemory?.latestEnrichmentAttempt?.(track, "beatport") : null;
+        const age = Number(this.clock()) - Date.parse(attempt?.fetched_at || "");
+        // Lyrion live metadata may arrive in stages. Default callers retain the
+        // normal cooldown; rate-limited attempts always retain their cooldown.
+        if (!attempt || !["missing", "failed"].includes(attempt.status) ||
+            !Number.isFinite(age) || age < Math.max(60000, retryMissingAfterMs)) return null;
+      }
       const result = await this.beatport.findTrack(track);
       if (!result) {
         this.rememberBeatportAttempt(track, "missing");
@@ -785,6 +882,10 @@ class MetadataEnrichmentService {
       const releaseDate = releaseDateFromMusicBrainz(release);
       const entry = providerResultToEntry(track, {
         ...candidate,
+        recordingId: recording.id,
+        releaseId: release.id,
+        providerRelease: release,
+        rawJson: { recording, selectedRelease: release },
         album: cleanText(release.title || recording.title),
         genre: musicBrainzGenreText(recording, release, release["release-group"]),
         musicBrainzTags: musicBrainzGenreList(recording, release, release["release-group"]),
@@ -794,6 +895,17 @@ class MetadataEnrichmentService {
       }, "musicbrainz", confidence);
       entry.sourceImageUrl = await this.lookupMusicBrainzCover(release).catch(() => "");
       entry.imageUrl = await this.bridgeImageUrl(entry.sourceImageUrl, track);
+      try {
+        this.musicMemory?.saveProviderEnrichment?.(track, "musicbrainz", {
+          ...entry,
+          providerTrackId: recording.id,
+          releaseId: release.id,
+          confidence: confidence.confidence,
+          fetchedAt: new Date(Number(this.clock())).toISOString()
+        });
+      } catch (error) {
+        this.logger?.debug?.("Rabbit Hole music memory MusicBrainz save failed", { error: error.message });
+      }
       return entry;
     }
 
@@ -823,9 +935,13 @@ class MetadataEnrichmentService {
   }
 
   async lookupDiscogs(track = {}) {
-    if (!this.metadataResolver?.lookupDiscogs) return null;
+    if (!this.discogs?.findTrack && !this.metadataResolver?.lookupDiscogs) return null;
     try {
-      const result = await this.metadataResolver.lookupDiscogs(track, this.keyFor(track));
+      const result = this.discogs?.isConfigured?.() && this.discogs?.findTrack
+        ? await this.discogs.findTrack(track)
+        : this.metadataResolver?.lookupDiscogs
+          ? await this.metadataResolver.lookupDiscogs(track, this.keyFor(track))
+          : null;
       if (!result) return null;
       const confidence = confidenceForMatch(track, {
         title: result.title || track.title,
@@ -834,9 +950,21 @@ class MetadataEnrichmentService {
       if (confidence.confidence < this.minConfidence) return null;
       const entry = providerResultToEntry(track, {
         ...result,
-        imageUrl: result.albumArtUrl
+        imageUrl: result.albumArtUrl,
+        discogsId: result.discogsId || result.releaseId
       }, "discogs", confidence);
       entry.imageUrl = await this.bridgeImageUrl(entry.sourceImageUrl || entry.imageUrl, track);
+      try {
+        this.musicMemory?.saveProviderEnrichment?.(track, "discogs", {
+          ...result,
+          providerTrackId: result.id || result.discogsId || result.releaseId,
+          releaseId: result.releaseId,
+          confidence: confidence.confidence,
+          fetchedAt: new Date(Number(this.clock())).toISOString()
+        });
+      } catch (error) {
+        this.logger?.debug?.("Rabbit Hole music memory Discogs save failed", { error: error.message });
+      }
       return entry;
     } catch (error) {
       this.logger?.debug?.("Discogs metadata enrichment failed", { error: error.message });
@@ -844,15 +972,17 @@ class MetadataEnrichmentService {
     }
   }
 
-  status() {
+  status(options = {}) {
     return {
       enabled: true,
       cacheSize: this.cache.size,
       pending: this.pending.size,
       minConfidence: this.minConfidence,
       missRetryMs: this.missRetryMs,
-      musicMemory: this.musicMemory?.status?.() || null,
-      beatport: this.beatport?.status?.() || null
+      musicMemory: Object.prototype.hasOwnProperty.call(options, "musicMemoryStatus")
+        ? options.musicMemoryStatus : (this.musicMemory?.status?.() || null),
+      beatport: this.beatport?.status?.() || null,
+      discogs: this.discogs?.status?.() || null
     };
   }
 }

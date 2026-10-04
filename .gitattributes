@@ -6,3 +6,9 @@
 *.css text eol=lf
 *.html text eol=lf
 *.example text eol=lf
+*.cjs text eol=lf
+*.mjs text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.pm text eol=lf
+*.pl text eol=lf

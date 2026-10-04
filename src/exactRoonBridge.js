@@ -84,7 +84,24 @@ class ExactRoonBridge {
       if (delayMs) await require("node:timers/promises").setTimeout(delayMs);
       for (const item of state) {
         if (item.result?.success) continue;
-        item.last = await this.roon.resolveExactPlaylistAction(item.row.track, input.zoneId || item.row.roon?.zoneId, title, { timeoutMs, mode: input.mode || "queue" });
+        const browseReady = await this.waitForBrowse(boundMs(input.bridgeBrowseWaitTimeoutMs, 5000, 0, 15000));
+        if (!browseReady) {
+          item.last = {
+            success: false,
+            reason: "Roon browse service is disconnected; waiting for Roon to reconnect before verifying the playlist refresh.",
+            failureType: "roon_disconnected"
+          };
+        } else {
+          try {
+            item.last = await this.roon.resolveExactPlaylistAction(item.row.track, input.zoneId || item.row.roon?.zoneId, title, { timeoutMs, mode: input.mode || "queue" });
+          } catch (error) {
+            item.last = {
+              success: false,
+              reason: error?.message || "Roon playlist verification failed.",
+              failureType: this.roon?.browse ? "bridge_resolution_failed" : "roon_disconnected"
+            };
+          }
+        }
         item.sync.attempts.push({
           attempt: attempt + 1,
           delayMs,
@@ -110,7 +127,7 @@ class ExactRoonBridge {
           success: false,
           playlistId: saved.playlistId,
           title,
-          reason: `Exact TIDAL ID added to designated bridge ${saved.playlistId}, but Roon has not exposed its exact track/action after ${delays.length} bounded refreshed playlist checks. ${internalSync?.success ? "Rabbit Hole triggered Roon's internal TIDAL library sync automatically; retry shortly." : "Refresh TIDAL playlists in Roon, then retry queueing this track."} ${item.last?.reason || "not visible"}`,
+          reason: `Exact TIDAL ID added to designated bridge ${saved.playlistId}, but Roon has not exposed its exact track/action after ${delays.length} bounded refreshed playlist checks. ${(internalSync?.dispatched || internalSync?.success) ? "Rabbit Hole dispatched Roon's internal TIDAL playlist refresh automatically; retry shortly." : "Refresh TIDAL playlists in Roon, then retry queueing this track."} ${item.last?.reason || "not visible"}`,
           failureType: "bridge_resolution_failed",
           diagnostics: item.last?.diagnostics || null,
           sync: item.sync
@@ -120,12 +137,26 @@ class ExactRoonBridge {
   }
 
   async triggerInternalTidalSync(context) {
-    if (!this.internalTidalSync?.syncLibrary) return { attempted: false, success: false, skipped: true, reason: "No internal sync helper configured." };
+    const sync = this.internalTidalSync?.syncPlaylists || this.internalTidalSync?.syncLibrary;
+    if (!sync) return { attempted: false, dispatched: false, confirmed: false, success: false, skipped: true, reason: "No internal TIDAL playlist sync helper configured." };
     try {
-      return await this.internalTidalSync.syncLibrary(context);
+      return await sync.call(this.internalTidalSync, context);
     } catch (error) {
-      return { attempted: true, success: false, reason: error.message };
+      return { attempted: true, dispatched: false, confirmed: false, success: false, reason: error.message };
     }
+  }
+
+  async waitForBrowse(timeoutMs = 5000) {
+    // Test doubles and older integrations may not expose the live browse
+    // handle. Keep their existing contract; the real RoonClient owns `browse`
+    // and clears it while the extension is unpaired.
+    if (!Object.prototype.hasOwnProperty.call(this.roon || {}, "browse")) return true;
+    if (this.roon?.browse) return true;
+    const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+    while (!this.roon?.browse && Date.now() < deadline) {
+      await require("node:timers/promises").setTimeout(Math.min(100, Math.max(1, deadline - Date.now())));
+    }
+    return Boolean(this.roon?.browse);
   }
 
   listPending() {

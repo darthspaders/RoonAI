@@ -46,7 +46,8 @@ class RoonInternalTidalSync {
       port: Number(options.port || 9332),
       brokerId: options.brokerId || "",
       connectTimeoutMs: Number(options.connectTimeoutMs || 10000),
-      settleMs: Number(options.settleMs || 2000)
+      settleMs: Number(options.settleMs || 2000),
+      dispatchSettleMs: Number(options.dispatchSettleMs || 500)
     };
     this.logger = logger;
     this.tail = Promise.resolve();
@@ -57,15 +58,23 @@ class RoonInternalTidalSync {
   }
 
   syncLibrary(context = {}) {
-    const work = this.tail.catch(() => {}).then(() => this.syncLibraryNow(context));
+    return this.syncPlaylists(context);
+  }
+
+  syncPlaylists(context = {}) {
+    const work = this.tail.catch(() => {}).then(() => this.syncPlaylistsNow(context));
     this.tail = work.catch(() => {});
     return work;
   }
 
   async syncLibraryNow(context = {}) {
+    return this.syncPlaylistsNow(context);
+  }
+
+  async syncPlaylistsNow(context = {}) {
     const startedAt = Date.now();
     if (!this.isConfigured()) {
-      return { attempted: false, success: false, skipped: true, reason: "Roon internal TIDAL sync is not configured." };
+      return { attempted: false, dispatched: false, confirmed: false, success: false, skipped: true, operation: "SyncPlaylists", reason: "Roon internal TIDAL playlist sync is not configured." };
     }
 
     let roon;
@@ -81,10 +90,18 @@ class RoonInternalTidalSync {
 
       await withTimeout("Roon internal connect", this.options.connectTimeoutMs, roon.connect(), () => roon.close());
       const tidalOid = roon.serviceOid("Tidal").toString();
-      makeApi(roon).tidal.syncLibrary();
+      makeApi(roon).tidal.syncPlaylists();
+      // SyncPlaylists is a no-reply protocol method. Give the socket a short
+      // drain window before closing it, but do not present this as completion.
+      if (this.options.dispatchSettleMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, this.options.dispatchSettleMs));
+      }
       const result = {
         attempted: true,
+        dispatched: true,
+        confirmed: false,
         success: true,
+        operation: "SyncPlaylists",
         host: this.options.host,
         port: this.options.port,
         tidalOid,
@@ -96,7 +113,10 @@ class RoonInternalTidalSync {
     } catch (error) {
       const result = {
         attempted: true,
+        dispatched: false,
+        confirmed: false,
         success: false,
+        operation: "SyncPlaylists",
         reason: error.message,
         durationMs: Date.now() - startedAt,
         context

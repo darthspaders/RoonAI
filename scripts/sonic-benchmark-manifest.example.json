@@ -1,0 +1,20 @@
+{
+  "tracks": [
+    {
+      "id": "artist-track-loved-progressive-1",
+      "file": "C:/music/Artist - Track.flac",
+      "artist": "Artist",
+      "title": "Track",
+      "group": "progressive-loved",
+      "feedback": "love"
+    },
+    {
+      "id": "artist-track-wubs-1",
+      "file": "C:/music/Artist - Track.wav",
+      "artist": "Artist",
+      "title": "Track",
+      "group": "wubs-dubs",
+      "feedback": "love"
+    }
+  ]
+}

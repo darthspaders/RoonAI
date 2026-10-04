@@ -60,6 +60,20 @@ test("novelty policy keeps previous tracks when request allows repeats", () => {
   assert.equal(policy.suppressPreviouslySuggestedResultTracks(input, { request: "include repeats" }), input);
 });
 
+test("novelty policy preserves an explicitly promoted starvation fallback", () => {
+  const policy = createDiscoveryNoveltyPolicy({
+    discoveryHistory: {
+      entryFor: () => ({ shownCount: 2 })
+    }
+  });
+  const fallback = { artist: "A", title: "Fallback", previousFallbackRelaxed: true };
+
+  const result = policy.suppressPreviouslySuggestedResultTracks({ tracks: [fallback] }, {});
+
+  assert.deepEqual(result.tracks, [fallback]);
+  assert.equal(result.discarded?.length || 0, 0);
+});
+
 test("fresh unseen tracks dedupes by candidate identities and removes previous suggestions", () => {
   const policy = createDiscoveryNoveltyPolicy({
     discoveryHistory: {

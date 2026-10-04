@@ -1,0 +1,55 @@
+{
+  "m-a-p/MERT-v1-330M": {
+    "revision": "5240c2708a5acaee1007f43fb9735c7dcd0b78c9",
+    "files": {
+      "configuration_MERT.py": "ae0ec2bab8f59c724ba9878a7c20b67210189536ea62d34a56775968e9decb03",
+      "modeling_MERT.py": "6c3ee73cef6f0c30ef494f88d96f891fa6925ffe663fa391b512f4b57abecc6c"
+    }
+  },
+  "huyleit/mert-v1-95m-music-emotion-int8": {
+    "revision": "080701a30fa9021ccacd2a7bddb9d61f58c48ead",
+    "files": {}
+  },
+  "m-a-p/MERT-v2-30s": {
+    "revision": "5d9a407112c28ff8821fc17a9858406f4a7f85ad",
+    "files": {
+      "configuration_mert2.py": "77b53ec9d7ee31a599d744fb006e812c7eeaf7390deb46e2f460cf8c17b00bd6",
+      "modeling_mert2.py": "b1a3174e5649c4b26b0c90d8626f0adacfbbba111a58ed3bb72ad651945a2f5c"
+    }
+  },
+  "m-a-p/MERT-v2-FullSong": {
+    "revision": "d8ba1c745e733b3908ce6ad16ebeb17ac7600a42",
+    "files": {
+      "configuration_mert2.py": "77b53ec9d7ee31a599d744fb006e812c7eeaf7390deb46e2f460cf8c17b00bd6",
+      "modeling_mert2.py": "b1a3174e5649c4b26b0c90d8626f0adacfbbba111a58ed3bb72ad651945a2f5c"
+    }
+  },
+  "m-a-p/SheetSage2": {
+    "revision": "55bfe14e32d8b663629b3a86b0f3285c2ca5da0b",
+    "files": {
+      "audio_sheetsage2.py": "ecce56e7bb8a08cbca9eb27a74d9aeff17f55e80efcc7c48f7436440f610ccc1",
+      "chord_spelling_sheetsage2.py": "5a673e3c8caa6d0a4cda19227ce5587c611a2bf85343f6bc623e3d66d99ed8b1",
+      "configuration_mert2.py": "77b53ec9d7ee31a599d744fb006e812c7eeaf7390deb46e2f460cf8c17b00bd6",
+      "configuration_sheetsage2.py": "36d174331b3721d984608252830179bf3516d77b7225f413acc85bdf5efb3bec",
+      "durations_sheetsage2.py": "abbc297b70b63a86f8509b1db74d0e85d7b46dcb83867cf33741c43f9d49db83",
+      "exports_sheetsage2.py": "11782cff50f96dac1bf1eedefed86b3cd60222e31b8456bee366eeb373b6a7e5",
+      "generation_sheetsage2.py": "b58dbbfaebfba2a441a79b8c36183f0e4956acdd3aaf7c655c559933b4c20afd",
+      "infer.py": "20e6b23c910bfdecf012a8ee8d45efcb31cb6cb21351da5921d95fb877e70de6",
+      "io_sheetsage2.py": "afb5b4d4a52b513b11cfdad40e7b9d2286dd4ff6585b89688dbb31b3d5376da6",
+      "labels_sheetsage2.py": "4a80870695dd91da6070e7d8d0ce6b50f3bf71c3f629417a86cf12f4ef4f97e0",
+      "midi_sheetsage2.py": "32f80d13592c669e56683ebb4c415f13bf8278c8ad1fe43afa500347bed35099",
+      "modeling_mert2.py": "b1a3174e5649c4b26b0c90d8626f0adacfbbba111a58ed3bb72ad651945a2f5c",
+      "modeling_sheetsage2.py": "df36bec866e4bd1f0a08e79369405c9a1bd86214a1c48559e75e3e567f43bbc4",
+      "notation_sheetsage2.py": "f75f0e8b268cd9e9c622d791d3fd77d2e68ad355a4e67018c7e15aeb2bc05af7",
+      "pipeline_sheetsage2.py": "0ae572554ca375323e2aa4ea1fb25ba27e7f4d520c0ba5b101d74930c0a66c33",
+      "processing_sheetsage2.py": "b8dfa9f344ea7efab3ac9ec61f4c3bd0345f7a65d39a5c2c8b8a803689fdc393",
+      "render.py": "446b18e0ba7250c8584c14bda241f8d063083cd10b1432de82c3cf56736af9de",
+      "rendering_sheetsage2.py": "ddbcaf314139d67727cb5df6840d7d60d671d5c67f6b185a26b840df1e2d9288",
+      "schema_sheetsage2.py": "3ee069f0d4dcfb8080f730c43676318d471ab6b3cfef86c6c225aa63a9db182f",
+      "setup_render.py": "8ee1004067f8e50443005a761d86435337f6ee71eeabf447d543eb5f3ad5561d",
+      "tensors_sheetsage2.py": "51f72b51ed5a22c751d5adf915198490b1a95ec8959fcf9a38ee71b4444fc8b3",
+      "tokenization_sheetsage2.py": "2ad9f7734e3d9f750fe575f22fd9ec03a9a4ab52497a6314e76f53ed9024fa75",
+      "__init__.py": "19539a965cabf22d08231688efc15547d005e6345745f48684c2f02d010f82fd"
+    }
+  }
+}

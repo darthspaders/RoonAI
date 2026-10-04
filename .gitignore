@@ -2,6 +2,10 @@
 node_modules/
 .npm-cache/
 
+# Python analysis bytecode
+__pycache__/
+*.py[cod]
+
 # Local secrets and machine-specific runtime state
 .env
 .env.*
@@ -30,3 +34,10 @@ manifests/
 Thumbs.db
 .vscode/
 .idea/
+
+# Local diagnostics, browser profiles and release artifacts
+.codex-verify/
+artifacts/
+chrome-profile*/
+release/
+CODEX_CONTEXT.md

@@ -8,6 +8,21 @@ const { isStandbySeoSludge, standbyArtistKeys, diverseStandbyCandidates } = requ
 const DAY = 86400000;
 const {identityKeys}=require("./standbyTrackIdentity");
 const timestamp = value => typeof value === "number" ? value : Date.parse(value || "");
+// The normal standby floor is 50. Historical recovery uses the same floor,
+// but remains tightly bounded by activity checks, sludge filtering, and a
+// small artist/album-diverse shortlist after fresh search is exhausted.
+const HISTORY_FALLBACK_MIN_SCORE = 50;
+const BLOCK_REASON_PRIORITY = {
+  recentlyPlayedExcluded: 50,
+  recentlyRatedExcluded: 45,
+  recentlyQueuedExcluded: 40,
+  recentStandbyExcluded: 30,
+  recentlySuggestedExcluded: 20
+};
+
+function blockReasonPriority(reason = "") {
+  return Number(BLOCK_REASON_PRIORITY[reason] || 0);
+}
 
 function settings(env = process.env) {
   const number = (key, fallback, min, max) => {
@@ -18,6 +33,10 @@ function settings(env = process.env) {
     standbyRefreshes: Math.floor(number("STANDBY_COOLDOWN_REFRESHES", 10, 1, 100)),
     activityDays: number("STANDBY_ACTIVITY_COOLDOWN_DAYS", 30, 1, 3650),
     suggestedDays: number("STANDBY_SUGGESTED_COOLDOWN_DAYS", 30, 1, 3650),
+    // Normal discovery suggestions should not starve the standby pool for a
+    // full month. Standby suggestions and user activity retain their longer
+    // safety windows; this is only the cooldown for ordinary discovery output.
+    discoveryDays: number("STANDBY_DISCOVERY_COOLDOWN_DAYS", 7, 1, 3650),
     rawMultiplier: number("STANDBY_RAW_POOL_MULTIPLIER", 4, 2.4, 8),
     searchBudgetMs: number("STANDBY_SEARCH_BUDGET_MS", 120000, 10000, 600000)
   };
@@ -53,22 +72,37 @@ class FreshPool {
     this.seen = new Set();
     this.observed = new Set();
     this.excluded = new Set();
-    this.diagnostics = Object.fromEntries(["rawCandidatesGenerated", "recentStandbyExcluded", "recentlyPlayedExcluded", "recentlyQueuedExcluded", "recentlyRatedExcluded", "recentlySuggestedExcluded", "duplicateIdsExcluded", "artistCapExcluded", "freshCandidatesRemaining", "replacementSearchPasses", "newTracksIntroduced", "carriedOver", "finalCount"].map(key => [key, 0]));
-    const block = (track, reason) => { for (const key of [...identityKeys(track), ...(track.keys || [])]) if (!this.blocked.has(key)) this.blocked.set(key, reason); };
+    this.diagnostics = Object.fromEntries(["rawCandidatesGenerated", "recentStandbyExcluded", "recentlyPlayedExcluded", "recentlyQueuedExcluded", "recentlyRatedExcluded", "recentlySuggestedExcluded", "duplicateIdsExcluded", "artistCapExcluded", "freshCandidatesRemaining", "replacementSearchPasses", "newTracksIntroduced", "carriedOver", "finalCount", "historyFallbackConsidered", "historyFallbackReviewed", "historyFallbackKept"].map(key => [key, 0]));
+    const block = (track, reason) => {
+      for (const key of [...identityKeys(track), ...(track.keys || [])]) {
+        const previous = this.blocked.get(key);
+        if (!previous || blockReasonPriority(reason) > blockReasonPriority(previous)) this.blocked.set(key, reason);
+      }
+    };
+    // Activity must outrank suggestion history. A track that was recently
+    // played, queued, or rated is not a harmless historical suggestion and
+    // must never be admitted through the historical fallback reservoir.
+    for (const event of events) {
+      const days = event.kind === "discovery"
+        ? config.discoveryDays
+        : (event.kind === "suggested" || event.kind === "playlist" ? config.suggestedDays : config.activityDays);
+      if (!(now - timestamp(event.at) < days * DAY)) continue;
+      const reason = { played: "recentlyPlayedExcluded", queued: "recentlyQueuedExcluded", rated: "recentlyRatedExcluded", discovery: "recentlySuggestedExcluded", suggested: "recentlySuggestedExcluded", playlist: "recentlySuggestedExcluded" }[event.kind];
+      if (reason) block(event, reason);
+    }
     for (const run of history.slice(-config.standbyRefreshes)) for (const track of run.tracks || []) block(track, "recentStandbyExcluded");
     // A legacy visible pool may not have a recorded refresh yet.
     for (const track of current) block(track, "recentStandbyExcluded");
     for (const run of history) if (now - timestamp(run.timestamp) < config.suggestedDays * DAY) for (const track of run.tracks || []) block(track, "recentlySuggestedExcluded");
-    for (const event of events) {
-      const days = event.kind === "suggested" || event.kind === "playlist" ? config.suggestedDays : config.activityDays;
-      if (!(now - timestamp(event.at) < days * DAY)) continue;
-      const reason = { played: "recentlyPlayedExcluded", queued: "recentlyQueuedExcluded", rated: "recentlyRatedExcluded", suggested: "recentlySuggestedExcluded", playlist: "recentlySuggestedExcluded" }[event.kind];
-      if (reason) block(event, reason);
-    }
+    this.deferred = [];
+    this.deferredSeen = new Set();
   }
   blockEvents(events) {
     const extra=new FreshPool({events,config:this.config,now:this.now,target:this.target});
-    for(const [key,reason] of extra.blocked) if(!this.blocked.has(key)) this.blocked.set(key,reason);
+    for(const [key,reason] of extra.blocked) {
+      const previous = this.blocked.get(key);
+      if (!previous || blockReasonPriority(reason) > blockReasonPriority(previous)) this.blocked.set(key, reason);
+    }
   }
   observe(track) {
     const keys = identityKeys(track);
@@ -87,8 +121,32 @@ class FreshPool {
   }
   add(tracks) {
     for (const track of tracks) {
-      if (!this.observe(track)) continue;
       const keys = identityKeys(track);
+      const blockedReason = keys.map(key => this.blocked.get(key)).find(Boolean) || "";
+      if (!this.observe(track)) {
+        // A prior suggestion is not automatically bad forever. Keep a small,
+        // reviewable reservoir for the end of a refresh, but never defer
+        // recent playback/rating/queue activity or candidates already marked
+        // as standby repeats. Quality and sludge checks happen before the
+        // reservoir is allowed to reach model review.
+        const score = Number(track.score ?? track.scoreBreakdown?.total ?? 0);
+        const key = keys[0] || "";
+        if (
+          blockedReason === "recentlySuggestedExcluded" &&
+          score >= HISTORY_FALLBACK_MIN_SCORE &&
+          !isStandbySeoSludge(track) &&
+          key &&
+          !this.deferredSeen.has(key)
+        ) {
+          this.deferredSeen.add(key);
+          this.deferred.push({
+            ...track,
+            standbyFallbackReason: "Previously surfaced, but not recently played, queued, or rated."
+          });
+          this.diagnostics.historyFallbackConsidered++;
+        }
+        continue;
+      }
       if (keys.some(key => this.seen.has(key))) { this.diagnostics.duplicateIdsExcluded++; continue; }
       if (Number(track.score ?? track.scoreBreakdown?.total ?? 0) < 50 || isStandbySeoSludge(track)) continue;
       for (const key of keys) this.seen.add(key);
@@ -98,10 +156,26 @@ class FreshPool {
     }
     this.pool.sort((a, b) => Number(b.score) - Number(a.score));
   }
-  select(allowSecond = false) {
+  select(allowSecond = false, allowThird = false) {
     const first = diverseStandbyCandidates(this.pool, this.target, 1);
     if (!allowSecond || first.length >= this.target) return first;
-    return diverseStandbyCandidates([...first, ...this.pool.filter(t => !first.includes(t))], this.target, 2);
+    // Album variety is preferred, but a short clean reservoir should not
+    // discard excellent tracks merely because the same release supplied two
+    // candidates. The caller only reaches this stage after the strict pass
+    // undershoots, and the third pass remains capped at two per artist.
+    const second = diverseStandbyCandidates([...first, ...this.pool.filter(t => !first.includes(t))], this.target, 2, 2);
+    if (!allowThird || second.length >= this.target) return second;
+    // Artist variety is preferred, not absolute. If the clean pool is still
+    // short, let a third strong track from an artist through before asking
+    // history or lower-confidence candidates to fill the gap.
+    return diverseStandbyCandidates([...second, ...this.pool.filter(t => !second.includes(t))], this.target, 3, 2);
+  }
+  fallbackCandidates(limit = this.target) {
+    const primaryKeys = new Set(this.pool.flatMap(identityKeys));
+    const candidates = this.deferred
+      .filter(track => !identityKeys(track).some(key => primaryKeys.has(key)))
+      .sort((left, right) => Number(right.score ?? right.scoreBreakdown?.total ?? 0) - Number(left.score ?? left.scoreBreakdown?.total ?? 0));
+    return diverseStandbyCandidates(candidates, Math.max(0, Number(limit || 0)), 2, 2);
   }
   finish(tracks, reason = "") {
     const runId = randomUUID();
@@ -110,6 +184,7 @@ class FreshPool {
     const counts = new Map();
     for (const track of tracks) for (const key of standbyArtistKeys(track)) counts.set(key, (counts.get(key) || 0) + 1);
     this.diagnostics.artistCapExcluded = this.pool.filter(t => !identityKeys(t).some(k=>selectedKeys.has(k)) && standbyArtistKeys(t).some(k => (counts.get(k) || 0) >= cap)).length;
+    this.diagnostics.historyFallbackKept = tracks.filter(track => track.standbyFallbackReason).length;
     Object.assign(this.diagnostics, { freshCandidatesRemaining: this.pool.length, newTracksIntroduced: tracks.length, carriedOver: 0, finalCount: tracks.length, targetCount: this.target, rawCandidateTarget: this.rawTarget, shortfallReason: tracks.length < this.target ? reason || "Fresh search inventory exhausted." : "", cooldown: this.config });
     return tracks.map((track, rank) => ({ ...track, standbyFinalRank: { runId, rank } }));
   }
@@ -132,7 +207,12 @@ async function searchFreshPool({ pool, passes, search, review, budgetMs = pool.c
     if (pool.select().length >= pool.target) break;
   }
   voiceExecution.check();
-  const shortlist = pool.select(true);
+  const primaryShortlist = pool.select(true, true);
+  const fallbackShortlist = primaryShortlist.length < pool.target
+    ? pool.fallbackCandidates(pool.target - primaryShortlist.length)
+    : [];
+  pool.diagnostics.historyFallbackReviewed = fallbackShortlist.length;
+  const shortlist = [...primaryShortlist, ...fallbackShortlist];
   const reviewed = await review(shortlist);
   voiceExecution.check();
   const tracks = pool.finish(reviewed.tracks, clock() >= deadline ? "Fresh search time budget exhausted." : "Fresh search passes exhausted.");

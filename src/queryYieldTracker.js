@@ -32,6 +32,64 @@ function queryTemplate(query) {
     .trim();
 }
 
+function normalizedContextTerms(values = []) {
+  const source = Array.isArray(values) ? values : [values];
+  return [...new Set(source.map(normalize).filter(Boolean))].sort();
+}
+
+function queryContextKey(context = {}) {
+  const explicitValue = cleanText(context.contextKey || context.queryContextKey);
+  // Generated keys use field separators. Preserve that canonical shape so a
+  // key attached to a run record resolves to the same key during ranking.
+  const explicitKey = explicitValue.includes("|")
+    ? explicitValue.toLowerCase().replace(/\s+/g, " ").trim()
+    : normalize(explicitValue);
+  if (explicitKey) return explicitKey;
+
+  const genres = normalizedContextTerms(context.genres || context.targetGenres);
+  const parents = normalizedContextTerms(context.parentGenres || context.parentGenre);
+  const activities = normalizedContextTerms(context.activityTerms || context.activities || context.activity);
+  const vibes = normalizedContextTerms(context.vibes || context.vibeTerms || context.mood);
+  const tasteCluster = normalize(context.tasteCluster || context.tasteProfile || "");
+  if (!genres.length && !parents.length && !activities.length && !vibes.length && !tasteCluster) return "";
+
+  return [
+    `genre:${genres.join(",") || "none"}`,
+    `parent:${parents.join(",") || "none"}`,
+    `activity:${activities.join(",") || "none"}`,
+    `vibe:${vibes.join(",") || "none"}`,
+    `taste:${tasteCluster || "none"}`
+  ].join("|");
+}
+
+function contextEntryKey(contextKey, template) {
+  return contextKey ? `${contextKey}::${template}` : template;
+}
+
+function queryHasContextEvidence(query = "", context = {}) {
+  const normalizedQuery = normalize(query);
+  if (!normalizedQuery) return false;
+  const terms = [
+    ...(Array.isArray(context.genres) ? context.genres : []),
+    ...(Array.isArray(context.targetGenres) ? context.targetGenres : []),
+    ...(Array.isArray(context.parentGenres) ? context.parentGenres : []),
+    ...(Array.isArray(context.activityTerms) ? context.activityTerms : []),
+    ...(Array.isArray(context.vibes) ? context.vibes : []),
+    ...(Array.isArray(context.vibeTerms) ? context.vibeTerms : []),
+    ...(Array.isArray(context.compatibleSeeds) ? context.compatibleSeeds : [])
+  ].map(normalize).filter(Boolean);
+  return terms.some((term) => normalizedQuery === term || normalizedQuery.includes(term));
+}
+
+function contextIsExplicit(context = {}) {
+  return Boolean(
+    normalize(context.contextKey || context.queryContextKey) ||
+    (Array.isArray(context.genres) && context.genres.length) ||
+    (Array.isArray(context.targetGenres) && context.targetGenres.length) ||
+    (Array.isArray(context.parentGenres) && context.parentGenres.length)
+  );
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -85,6 +143,7 @@ function entryQuality(entry = {}) {
 
 function displayEntry(entry = {}) {
   return {
+    contextKey: entry.contextKey || "",
     template: entry.template || "",
     attempts: Number(entry.attempts || 0),
     returned: Number(entry.returned || 0),
@@ -202,19 +261,31 @@ class QueryYieldTracker {
 
   rankQueries(queries = [], context = {}) {
     const snapshot = this.read();
+    const contextKey = queryContextKey(context);
+    const explicitContext = contextIsExplicit(context);
     const ranked = queries
       .map((query, index) => {
         const template = queryTemplate(query);
-        const entry = snapshot.entries[template] || null;
+        const contextualEntry = contextKey
+          ? snapshot.entries[contextEntryKey(contextKey, template)] || null
+          : null;
+        const legacyEntry = snapshot.entries[template] || null;
+        // Legacy global history is only usable when the query itself carries
+        // current-intent evidence. This keeps old data useful for matching
+        // genre queries without letting a globally successful artist query
+        // bleed into an unrelated genre run.
+        const entry = contextualEntry || (!explicitContext || queryHasContextEvidence(query, context) ? legacyEntry : null);
         const quality = entry ? entryQuality(entry) : 0;
         const laneBonus = context.lane && entry?.lanes?.[context.lane] ? 1 : 0;
         return {
           query,
           index,
           template,
+          contextKey,
           quality,
           score: quality + laneBonus,
-          entry
+          entry,
+          entryScope: contextualEntry ? "context" : (entry ? "legacy-compatible" : "none")
         };
       })
       .sort((left, right) => right.score - left.score || left.index - right.index);
@@ -224,6 +295,8 @@ class QueryYieldTracker {
       .map((item) => ({
         query: item.query,
         template: item.template,
+        contextKey: item.contextKey,
+        entryScope: item.entryScope,
         quality: item.quality,
         attempts: Number(item.entry.attempts || 0),
         accepted: Number(item.entry.accepted || 0),
@@ -251,6 +324,18 @@ class QueryYieldTracker {
 
     return {
       queries: usable.map((item) => item.query),
+      contextKey,
+      ranked: usable.map((item) => ({
+        query: item.query,
+        template: item.template,
+        contextKey: item.contextKey,
+        entryScope: item.entryScope,
+        quality: item.quality,
+        score: item.score,
+        attempts: Number(item.entry?.attempts || 0),
+        accepted: Number(item.entry?.accepted || 0),
+        rejected: Number(item.entry?.rejected || 0)
+      })),
       adjustments,
       pruned
     };
@@ -268,7 +353,10 @@ class QueryYieldTracker {
     for (const record of cleanRecords) {
       const template = record.template || queryTemplate(record.query);
       if (!template) continue;
-      const entry = snapshot.entries[template] || {
+      const contextKey = queryContextKey(record);
+      const storageKey = contextEntryKey(contextKey, template);
+      const entry = snapshot.entries[storageKey] || {
+        contextKey,
         template,
         attempts: 0,
         returned: 0,
@@ -299,7 +387,7 @@ class QueryYieldTracker {
         entry.examples.unshift(example);
       }
 
-      snapshot.entries[template] = entry;
+      snapshot.entries[storageKey] = entry;
     }
 
     snapshot.updatedAt = updatedAt;
@@ -314,7 +402,10 @@ class QueryYieldTracker {
     }
     snapshot.maxEntries = this.maxEntries || null;
     snapshot.unlimited = !this.maxEntries;
-    snapshot.entries = Object.fromEntries(entries.map((entry) => [entry.template, entry]));
+    snapshot.entries = Object.fromEntries(entries.map((entry) => [
+      contextEntryKey(entry.contextKey || "", entry.template),
+      entry
+    ]));
     this.write(snapshot);
 
     return summarizeRecords(cleanRecords, adjustments);
@@ -335,6 +426,7 @@ class QueryYieldTracker {
 
 module.exports = {
   QueryYieldTracker,
+  queryContextKey,
   queryTemplate,
   rejectionBucketForReason,
   entryQuality,

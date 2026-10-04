@@ -2,7 +2,14 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { belowMinimumSoftRejectReason, discoverTracks, rejectReason, scoreBreakdownFor } = require("../src/discoveryEngine");
+const {
+  belowMinimumSoftRejectReason,
+  discoverTracks,
+  durationConstraintReason,
+  hardDurationConstraintFor,
+  rejectReason,
+  scoreBreakdownFor
+} = require("../src/discoveryEngine");
 
 test("extended mix preference boosts extended versions over short base cuts", () => {
   const options = {
@@ -35,6 +42,286 @@ test("extended mix preference boosts extended versions over short base cuts", ()
   assert.ok(base.versionPreferenceAdjustment < 0);
   assert.ok(extended.versionPreferenceAdjustment > 0);
   assert.ok(extended.total > base.total);
+});
+
+test("explicit duration minimums remain hard through discovery admission and rescue", () => {
+  const options = {
+    request: "Find progressive trance tracks at least 8 minutes long",
+    genres: "progressive trance",
+    scoringMode: "taste-guided"
+  };
+  const track = {
+    artist: "Valid Trance Artist",
+    title: "Long Build",
+    album: "Long Build",
+    label: "Independent Label",
+    genre: ["Progressive Trance"],
+    durationMs: 7 * 60 * 1000,
+    query: "progressive trance"
+  };
+
+  assert.deepEqual(hardDurationConstraintFor(options), {
+    minimumMs: 8 * 60 * 1000,
+    source: "hard duration language"
+  });
+  assert.match(durationConstraintReason(track, options), /below the hard minimum/i);
+  assert.match(rejectReason(track, options), /hard minimum/i);
+  assert.match(
+    belowMinimumSoftRejectReason({ ...track, belowMinimum: true, score: 58, minimumScore: 60 }, {
+      targetGenres: ["progressive trance"]
+    },
+    options),
+    /hard minimum/i
+  );
+});
+
+test("post-search hard rejections carry stage, score, and separated evidence diagnostics", async () => {
+  const fakeTidal = {
+    isConfigured() {
+      return true;
+    },
+    async searchTracks(query) {
+      if (query !== "progressive trance") return [];
+      return [{
+        artist: "Fresh Trance Artist",
+        title: "Short Build",
+        album: "Short Build",
+        label: "Independent Label",
+        genre: ["Trance"],
+        durationMs: 6 * 60 * 1000,
+        tidalUrl: "https://tidal.com/browse/track/diagnostic-short",
+        query
+      }];
+    }
+  };
+
+  const result = await discoverTracks({
+    tidal: fakeTidal,
+    options: {
+      request: "Find progressive trance tracks at least 7 minutes",
+      genres: "progressive trance",
+      count: 1,
+      minDurationMinutes: 7,
+      scoringMode: "taste-guided"
+    },
+    history: null,
+    tasteProfile: null
+  });
+  const rejected = result.discarded.find((candidate) => candidate.artist === "Fresh Trance Artist");
+
+  assert.ok(rejected);
+  assert.equal(rejected.admissionDiagnostics.rejectionStage, "duration-constraints");
+  assert.equal(rejected.admissionDiagnostics.hardFail, true);
+  assert.ok(rejected.admissionDiagnostics.scoreBeforeRejection > 0);
+  assert.equal(rejected.admissionDiagnostics.candidate.artist, "Fresh Trance Artist");
+  assert.equal(rejected.admissionDiagnostics.durationResult.status, "failed");
+  assert.equal(rejected.admissionDiagnostics.vibeMoodCompatibility.hard, false);
+});
+
+test("catalog acceptance and query-yield acceptance remain distinct while valid candidates are promoted", async () => {
+  const fakeTidal = {
+    isConfigured() {
+      return true;
+    },
+    async searchTracks(query, searchOptions = {}) {
+      searchOptions.onPagination?.({
+        source: "searchTracks",
+        anchor: query,
+        query,
+        returnedCount: 8,
+        acceptedCount: 8,
+        rejectedCount: 0,
+        exhausted: true
+      });
+      return [{
+        artist: "Unknown Artist",
+        title: "Firebird (Gai Barone Remix)",
+        album: "Firebird",
+        label: "Independent Label",
+        genre: ["Trance"],
+        durationMs: 8 * 60 * 1000,
+        tidalUrl: "https://tidal.com/browse/track/catalog-yield-trace"
+      }];
+    }
+  };
+
+  const result = await discoverTracks({
+    tidal: fakeTidal,
+    options: {
+      request: "Find progressive trance tracks at least 7 minutes",
+      genres: "progressive trance",
+      count: 1,
+      minDurationMinutes: 7,
+      scoringMode: "taste-guided"
+    },
+    history: null,
+    tasteProfile: null
+  });
+
+  assert.equal(result.tracks.length, 1);
+  assert.equal(result.verification.queryYield.accepted, 1);
+  assert.equal(result.verification.poolDiagnostics.candidateAccumulation.validDurationCandidatesBeforeSelection, 1);
+  assert.equal(result.verification.poolDiagnostics.candidateAccumulation.uniqueCandidatesBeforeSelection, 1);
+
+  const trackQuery = result.tracks[0].tidal.query;
+  const page = result.verification.catalogPagination.find((item) => item.query === trackQuery);
+  assert.ok(page);
+  assert.equal(page.catalogAcceptedCount, 8);
+  assert.equal(page.qualityAcceptedCount, 1);
+  assert.equal(page.queryYieldAcceptedCount, 1);
+  assert.equal(page.candidateAccumulationAcceptedCount, 1);
+
+  const trace = result.verification.poolDiagnostics.candidateAccumulation.durationCandidates[0];
+  assert.equal(trace.catalogAccepted, true);
+  assert.equal(trace.durationAccepted, true);
+  assert.equal(trace.queryYieldAccepted, true);
+  assert.equal(trace.candidateAccumulationAccepted, true);
+  assert.equal(trace.childGenreEvidence.exact, false);
+  assert.equal(trace.childGenreEvidence.sceneRemixer, "Gai Barone");
+  assert.equal(trace.parentGenreEvidence.officialMatches[0], "trance");
+  assert.equal(trace.exactGenreConflictDetected, false);
+  assert.equal(trace.droppedStage, "");
+});
+
+test("previous-discovery backfill preserves artist and label diversity before repeating", async () => {
+  const fallbackTracks = [
+    ["Anchor Artist", "Anchor One", "Anchor Label", 500000],
+    ["Anchor Artist", "Anchor Two", "Anchor Label", 490000],
+    ["Branch Artist", "Branch One", "Anchor Label", 480000],
+    ["Other Artist", "Other One", "Other Label", 470000]
+  ].map(([artist, title, label, durationMs]) => ({
+    artist,
+    title,
+    album: title,
+    label,
+    genre: ["Progressive House"],
+    year: 2026,
+    releaseDate: "2026-04-01",
+    releaseEvidence: { albumYear: 2026, albumDate: "2026-04-01" },
+    durationMs
+  }));
+  const fakeTidal = {
+    isConfigured() {
+      return true;
+    },
+    async searchTracks() {
+      return [];
+    },
+    async verify(candidate) {
+      return fallbackTracks.find((track) => track.artist === candidate.artist && track.title === candidate.title) || null;
+    }
+  };
+  const history = {
+    entryFor() {
+      return null;
+    },
+    isRecent() {
+      return false;
+    },
+    fallbackCandidates() {
+      return fallbackTracks;
+    }
+  };
+
+  const result = await discoverTracks({
+    tidal: fakeTidal,
+    options: {
+      request: "Find 4 progressive house tracks; use previous discovery fallback",
+      genres: "progressive house",
+      count: 4,
+      scoringMode: "taste-guided"
+    },
+    history,
+    tasteProfile: null
+  });
+
+  assert.equal(result.tracks.length, 4);
+  assert.ok(new Set(result.tracks.map((track) => track.artist)).size >= 3);
+  assert.ok(result.tracks.filter((track) => track.label === "Anchor Label").length <= 2);
+});
+
+test("starved genre discovery promotes valid previous candidates only as a fallback", async () => {
+  const candidates = [
+    {
+      artist: "JOOF Anchor",
+      title: "Long Form One",
+      album: "Long Form One",
+      label: "JOOF Recordings",
+      genre: ["Progressive Trance"],
+      year: 2025,
+      durationMs: 8 * 60 * 1000,
+      tidalUrl: "https://tidal.com/browse/track/previous-fallback-1"
+    },
+    {
+      artist: "Pure Trance Anchor",
+      title: "Long Form Two",
+      album: "Long Form Two",
+      label: "Pure Trance Recordings",
+      genre: ["Progressive Trance"],
+      year: 2025,
+      durationMs: 7 * 60 * 1000,
+      tidalUrl: "https://tidal.com/browse/track/previous-fallback-2"
+    }
+  ];
+  const fakeTidal = {
+    isConfigured() {
+      return true;
+    },
+    async searchTracks(query) {
+      return candidates.map((track) => ({ ...track, query }));
+    }
+  };
+  const history = {
+    entryFor() {
+      return { shownCount: 1, lastShownAt: Date.now() - 86_400_000 };
+    },
+    isRecent() {
+      return false;
+    }
+  };
+
+  const result = await discoverTracks({
+    tidal: fakeTidal,
+    options: {
+      request: "Find 2 progressive trance tracks at least 7 minutes",
+      genres: "progressive trance",
+      count: 2,
+      minDurationMinutes: 7,
+      scoringMode: "taste-guided"
+    },
+    history,
+    tasteProfile: null
+  });
+
+  assert.equal(result.tracks.length, 2);
+  assert.equal(result.verification.previousFallbackKept, 2);
+  assert.equal(result.verification.queryYield.accepted, 2);
+  assert.equal(result.verification.poolDiagnostics.candidateAccumulation.validDurationCandidatesBeforeSelection, 2);
+  assert.equal(result.verification.poolDiagnostics.candidateAccumulation.uniqueCandidatesBeforeSelection, 2);
+  assert.ok(result.tracks.every((track) => track.durationMs >= 7 * 60 * 1000));
+  assert.ok(result.tracks.every((track) => track.previousFallbackRelaxed));
+  assert.equal(result.verification.poolDiagnostics.candidateAccumulation.durationCandidates.length, 2);
+  assert.ok(result.verification.poolDiagnostics.candidateAccumulation.durationCandidates.every((item) => (
+    item.noveltyResult.status === "held-back" &&
+    item.queryYieldAccepted === true &&
+    item.candidateAccumulationAccepted === false &&
+    item.candidateAccumulation.status === "selected"
+  )));
+
+  const noRepeatResult = await discoverTracks({
+    tidal: fakeTidal,
+    options: {
+      request: "Find 2 progressive trance tracks at least 7 minutes; do not repeat previously suggested tracks",
+      genres: "progressive trance",
+      count: 2,
+      minDurationMinutes: 7,
+      scoringMode: "taste-guided"
+    },
+    history,
+    tasteProfile: null
+  });
+  assert.equal(noRepeatResult.tracks.length, 0);
+  assert.equal(noRepeatResult.verification.previousFallbackKept, 0);
 });
 
 test("minimum match is a soft floor when candidates are otherwise valid", async () => {
@@ -76,6 +363,43 @@ test("minimum match is a soft floor when candidates are otherwise valid", async 
   assert.equal(result.verification.aboveMinimumKept, 0);
   assert.equal(result.verification.minScoreSoftFallback, true);
   assert.equal(result.discarded.some((track) => /below minimum/i.test(track.reason || "")), false);
+});
+
+test("standby minimum match is a hard quality floor", async () => {
+  const fakeTidal = {
+    isConfigured() {
+      return true;
+    },
+    async searchTracks(query) {
+      return [{
+        artist: "Standby Near Miss",
+        title: "Quiet Signal",
+        album: "Signals",
+        label: "",
+        year: 2026,
+        releaseDate: "2026-01-01",
+        durationMs: 180000,
+        tidalUrl: "https://tidal.com/browse/track/1002",
+        query
+      }];
+    }
+  };
+
+  const result = await discoverTracks({
+    tidal: fakeTidal,
+    options: {
+      request: "Find 1 standby discovery",
+      count: "1",
+      minScore: "experimental",
+      standbyPool: "true"
+    },
+    history: null,
+    tasteProfile: null
+  });
+
+  assert.equal(result.tracks.length, 0);
+  assert.equal(result.verification.belowMinimumKept, 0);
+  assert.ok(result.discarded.some((track) => /below minimum/i.test(track.reason || "")));
 });
 
 test("minimum match does not keep explicit-genre wrong results", async () => {

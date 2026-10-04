@@ -1,0 +1,40 @@
+.sonicBlind {
+  --blind-gap: 16px;
+  --blind-pad: 24px;
+  --blind-touch: 44px;
+  --blind-title: 24px;
+  --blind-small: 13px;
+  --blind-body: 15px;
+  font-size: var(--blind-body);
+  gap: var(--blind-gap);
+}
+.sonicBlind .panel { padding: var(--blind-pad); min-width: 0; }
+.sonicBlind h2, .sonicBlind h3 { letter-spacing: -.02em; overflow-wrap: anywhere; }
+.sonicBlind h3 { font-size: var(--blind-title); }
+.sonicBlind p { line-height: 1.5; }
+.sonicBlind button, .sonicBlind select, .sonicBlind .buttonLink { min-height: var(--blind-touch); }
+.sonicBlind :is(button,input,select,textarea,a,audio):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.sonicBlind progress { width: 100%; accent-color: var(--accent); }
+.sonicBlindStatus, .sonicBlindFooter { font-variant-numeric: tabular-nums; }
+.sonicBlindPair { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: var(--blind-gap); }
+.sonicBlindTrack { display: flex; flex-direction: column; gap: 8px; }
+.sonicBlindTrack audio { width: 100%; margin-top: auto; }
+.sonicBlindSpan { color: var(--muted); font-size: var(--blind-small); font-variant-numeric: tabular-nums; }
+.sonicBlindToolbar, .sonicBlindFooter, .sonicBlindActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--blind-gap); }
+.sonicBlindToolbar select { flex: 1; min-width: 0; max-width: 100%; }
+.sonicBlindFooter { justify-content: space-between; }
+.sonicBlindDecision { display: grid; gap: var(--blind-gap); }
+.sonicBlindDecision textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.sonicBlindConfirm { display: flex; align-items: center; gap: 8px; min-height: var(--blind-touch); cursor: pointer; }
+.sonicBlindConfirm input { width: 20px; height: 20px; accent-color: var(--accent); }
+.sonicBlindActions button { flex: 1; min-width: 120px; }
+.sonicBlindActions button[data-blind-decision="KEEP"] { border-color: var(--accent); }
+.sonicBlind button:disabled { opacity: .5; cursor: not-allowed; }
+.sonicBlindTrack [hidden] { display: none; }
+@media (max-width: 700px) {
+  .sonicBlind { --blind-pad: 16px; --blind-title: 20px; }
+  .sonicBlindPair { grid-template-columns: minmax(0,1fr); }
+  .sonicBlindToolbar { align-items: stretch; }
+  .sonicBlindToolbar select { flex-basis: 100%; }
+  .sonicBlind .sonicReviewHeader { flex-direction: column; }
+}

@@ -3,6 +3,7 @@
 const config = require("../src/config");
 const { BeatportClient } = require("../src/beatportClient");
 const { MusicMemoryStore } = require("../src/musicMemoryStore");
+const { acquireProcessLock } = require("../src/processLock");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
@@ -102,11 +103,24 @@ async function runBeatportEnrichmentBackfill({
 }
 
 if (require.main === module) {
-  runBeatportEnrichmentBackfill(parseArgs(process.argv.slice(2)))
-    .catch((error) => {
-      console.error(error.stack || error.message);
-      process.exitCode = 1;
-    });
+  let workerLock = null;
+  try {
+    workerLock = acquireProcessLock(
+      require("node:path").join(__dirname, "..", "data", "beatport-backfill.lock"),
+      "Beatport enrichment backfill"
+    );
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = error.code === "EINSTANCE" ? 75 : 1;
+  }
+  if (workerLock) {
+    runBeatportEnrichmentBackfill(parseArgs(process.argv.slice(2)))
+      .catch((error) => {
+        console.error(error.stack || error.message);
+        process.exitCode = 1;
+      })
+      .finally(() => workerLock.release());
+  }
 }
 
 module.exports = {

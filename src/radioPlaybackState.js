@@ -5,12 +5,18 @@ const { parseRadioTrack } = require("./radioMetadataResolver");
 function summarizeZoneTrack(zone = {}) {
   const now = zone.now_playing;
   if (!now) return null;
-  return {
+  const metadata = now.metadata || now.item || {};
+  const summary = {
     title: now.two_line?.line1 || now.three_line?.line1 || now.one_line?.line1 || "",
     artist: now.two_line?.line2 || now.three_line?.line2 || now.one_line?.line2 || "",
     album: now.three_line?.line3 || "",
     durationMs: now.length ? Number(now.length) * 1000 : null
   };
+  const tidalId = now.tidal_id || now.tidalId || metadata.tidal_id || metadata.tidalId || "";
+  const roonIdentity = now.item_key || now.itemKey || metadata.item_key || metadata.itemKey || "";
+  if (tidalId) summary.tidalId = tidalId;
+  if (roonIdentity) summary.roonIdentity = roonIdentity;
+  return summary;
 }
 
 function cleanRadioText(value) {

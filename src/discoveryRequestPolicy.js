@@ -4,6 +4,7 @@ function createDiscoveryRequestPolicy({
   buildDiscoveryProfile,
   config,
   minimumScoreFor,
+  hardDurationConstraintFor,
   normalizeMatchText,
   openAiCompatibleProviders,
   yearRangeUtil
@@ -61,7 +62,12 @@ function createDiscoveryRequestPolicy({
   function strictSearchBudgets(options = {}, requestedCount = 8) {
     const yearRange = yearRangeUtil.parseYearRange(options);
     const minScore = minimumScoreFor(options);
-    const strict = Boolean(yearRange || minScore);
+    const profile = buildDiscoveryProfile(options);
+    const hardDuration = typeof hardDurationConstraintFor === "function"
+      ? hardDurationConstraintFor(options)
+      : null;
+    const durationConstrainedGenreSearch = Boolean(hardDuration && profile.targetGenres?.length);
+    const strict = Boolean(yearRange || minScore || durationConstrainedGenreSearch);
     if (!strict) {
       return {
         roonFirstTimeoutMs: 10_000,
@@ -73,14 +79,17 @@ function createDiscoveryRequestPolicy({
 
     const catalogMode = shouldSkipModelForCatalogSearch(options);
     const strictRoonMode = isStrictRoonQueueMode(options);
-    return {
-      roonFirstTimeoutMs: Math.min(35_000, Math.max(16_000, requestedCount * 1_600)),
-      modelTimeoutMs: modelPlanningTimeoutBudget(Math.min(45_000, Math.max(catalogMode ? 30_000 : 25_000, requestedCount * 1_500))),
-      discoveryTimeoutMs: catalogMode
+    const discoveryTimeoutMs = durationConstrainedGenreSearch && !strictRoonMode
+      ? Math.min(60_000, Math.max(50_000, requestedCount * 5_500))
+      : (catalogMode
         ? (strictRoonMode
           ? Math.min(180_000, Math.max(90_000, requestedCount * 9_000))
           : Math.min(105_000, Math.max(55_000, requestedCount * 5_000)))
-        : Math.min(120_000, Math.max(60_000, requestedCount * 5_000)),
+        : Math.min(120_000, Math.max(60_000, requestedCount * 5_000)));
+    return {
+      roonFirstTimeoutMs: Math.min(35_000, Math.max(16_000, requestedCount * 1_600)),
+      modelTimeoutMs: modelPlanningTimeoutBudget(Math.min(45_000, Math.max(catalogMode ? 30_000 : 25_000, requestedCount * 1_500))),
+      discoveryTimeoutMs,
       roonQueueTimeoutMs: Math.min(75_000, Math.max(24_000, requestedCount * 2_400))
     };
   }
