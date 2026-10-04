@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>The Rabbit Hole</title>
-    <link rel="stylesheet" href="/styles.css?v=20260915-ui-01">
+    <link rel="stylesheet" href="/styles.css?v=20261004-rabbit-hole-panel-1">
     <link rel="stylesheet" href="/database.css?v=20260919-local-metadata-1">
     <link rel="stylesheet" href="/sonicBlindReview.css?v=20260925-1">
     <link rel="stylesheet" href="/lyrion.css?v=11">
@@ -301,7 +301,7 @@
               <div id="nowFeedback" class="feedbackButtons nowFeedback" aria-label="Now playing feedback"></div>
               <div class="nowDiscoveryActions">
                 <button type="button" id="addNowToTidalPlaylist" disabled>Add to TIDAL</button>
-                <button type="button" id="openRabbitHole">Open Rabbit Hole</button>
+                <button type="button" id="openRabbitHole" aria-controls="rabbitHolePanel" aria-expanded="false">Open Rabbit Hole</button>
               </div>
               <div class="nowTidalPlaylistGroup">
                 <div class="nowTidalPlaylistTargets">
@@ -331,7 +331,11 @@
                 <span id="nowTidalPlaylistStatus" class="nowTidalPlaylistStatus" aria-live="polite"></span>
               </div>
             </div>
-            <div id="rabbitHolePanel" class="rabbitHolePanel" hidden>
+            <div id="rabbitHolePanel" class="rabbitHolePanel" role="region" aria-labelledby="rabbitHolePanelTitle" tabindex="-1" hidden>
+              <div class="rabbitHolePanelHeader">
+                <h3 id="rabbitHolePanelTitle">Rabbit Hole</h3>
+                <button type="button" id="closeRabbitHole">Close Rabbit Hole</button>
+              </div>
               <div id="rabbitHoleContent" class="rabbitHoleContent"></div>
             </div>
             <div class="controls">
@@ -781,7 +785,7 @@
     </main>
     <button type="button" id="jumpTop" class="jumpTop" hidden>Now Playing</button>
     <script src="/statusLive.js?v=1"></script>
-    <script src="/app.js?v=20261004-roon-visualizer-1"></script>
+    <script src="/app.js?v=20261004-rabbit-hole-panel-1"></script>
     <script src="/sonicBlindReview.js?v=20260925-1"></script>
     <script src="/webmcpTools.js"></script>
     <script src="/sonicCoverage.js?v=20260917-1"></script>

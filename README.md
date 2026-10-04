@@ -70,7 +70,9 @@ loopback audio relays, and a persistent volume for private data and Roon pairing
 See [Linux, Docker and Unraid setup](docs/linux-docker.md) for LMS authentication,
 network topology, data migration and an existing `node:22-slim` installation.
 
-Version **0.2.1** recovers known stale startup locks after Docker crashes or
+Version **0.2.2** restores **Open Rabbit Hole** in regular, maximized and fullscreen
+Now Playing layouts, with a scrollable graph, Close control and Escape support.
+It also includes the 0.2.1 recovery of known stale startup locks after Docker crashes or
 container replacement. Update with `git pull` and `docker compose up -d --build`,
 retaining the existing private data volume. Run one Rabbit Hole instance per
 data volume; the [Docker guide](docs/linux-docker.md#update-and-recover-after-a-crash)
@@ -160,6 +162,13 @@ npm ci
 npm run check
 npm test
 ```
+
+CI also runs `npm run test:browser` against real player HTML/CSS in an isolated
+Chromium fixture with synthetic graph data, including native fullscreen and
+touch layouts. For a local run, install Playwright 1.62.1 in a separate tools
+directory, set `RH_BROWSER_PLAYWRIGHT_MODULE` to its `playwright` module path,
+and install its Chromium browser. `RH_BROWSER_EXECUTABLE` can instead point to
+an installed Chrome executable. `RH_BROWSER_OUTPUT_DIR` saves QA screenshots.
 
 Playback identities remain exact: Roon/TIDAL verification authorizes the Roon
 queue, and Lyrion preserves its original plugin IDs, URLs and server-issued

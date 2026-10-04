@@ -26,6 +26,23 @@ jobs:
       - run: npm run check
       - run: npm test
 
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install isolated browser test tools
+        run: |
+          npm install --prefix "$RUNNER_TEMP/rh-playwright" --no-save --package-lock=false playwright@1.62.1
+          node "$RUNNER_TEMP/rh-playwright/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Check Rabbit Hole panel in real responsive player layouts
+        env:
+          RH_BROWSER_PLAYWRIGHT_MODULE: ${{ runner.temp }}/rh-playwright/node_modules/playwright
+        run: npm run test:browser
+
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 10

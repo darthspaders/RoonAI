@@ -2374,6 +2374,35 @@ function jumpToTrackIdentity(track = {}) {
   return false;
 }
 
+function setRabbitHolePanelOpen(open, { restoreFocus = false } = {}) {
+  const panel = $("#rabbitHolePanel");
+  const button = $("#openRabbitHole");
+  if (!panel || !button) return;
+  panel.hidden = !open;
+  button.setAttribute("aria-expanded", String(Boolean(open)));
+  if (open) {
+    panel.focus({ preventScroll: true });
+    const player = panel.closest(".player");
+    if (player?.classList.contains("player--regular")) {
+      panel.scrollIntoView({ block: "nearest", behavior: "instant" });
+    } else if (player && (player.scrollTop || player.scrollLeft)) {
+      // The phone's expanded player may have scrolled to its Actions section.
+      player.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    }
+  } else if (restoreFocus && !button.disabled && !button.closest("[hidden]")) {
+    button.focus();
+  }
+}
+
+async function leaveRabbitHolePlayer() {
+  setRabbitHolePanelOpen(false);
+  // Discovery lives outside the fullscreen element and the maximized player.
+  if (playerFullscreenElement() === document.querySelector(".player")) {
+    await setPlayerFullWindow(false);
+  }
+  if (state.playerMaximized) setPlayerMaximized(false);
+}
+
 async function loadRabbitHole(track, { force = false } = {}) {
   const panel = $("#rabbitHolePanel");
   const content = $("#rabbitHoleContent");
@@ -2847,7 +2876,7 @@ function updateNowDiscoveryTools(zone = activeZone()) {
     badge.innerHTML = "";
     renderNowTidalPlaylistControl(null);
     openRabbitHole.disabled = true;
-    rabbitHolePanel.hidden = true;
+    setRabbitHolePanelOpen(false);
     return;
   }
 
@@ -7650,15 +7679,33 @@ $("#zoneSelect").addEventListener("change", (event) => {
   renderState({ connected: true, core: { name: $("#connection").textContent.replace("Connected to ", "") }, zones: state.zones });
 });
 
-$("#openRabbitHole").addEventListener("click", () => {
-  const panel = $("#rabbitHolePanel");
-  const track = state.nowTrack;
-  if (!panel || !track) return;
-  panel.hidden = !panel.hidden;
-  if (!panel.hidden) loadRabbitHole(track).catch(() => {});
-});
+function bindRabbitHolePanel() {
+  $("#openRabbitHole").addEventListener("click", () => {
+    const panel = $("#rabbitHolePanel");
+    const track = state.nowTrack;
+    if (!panel || !track) return;
+    setRabbitHolePanelOpen(panel.hidden);
+    if (!panel.hidden) {
+      loadRabbitHole(track).then(() => {
+        // Loading can grow the inline graph after its header was revealed.
+        if (!panel.hidden && document.activeElement === panel) setRabbitHolePanelOpen(true);
+      }).catch(() => {});
+    }
+  });
+  $("#closeRabbitHole").addEventListener("click", () => {
+    setRabbitHolePanelOpen(false, { restoreFocus: true });
+  });
+  $("#rabbitHolePanel").addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    setRabbitHolePanelOpen(false, { restoreFocus: true });
+  });
+}
 
-$("#rabbitHolePanel").addEventListener("click", (event) => {
+bindRabbitHolePanel();
+
+$("#rabbitHolePanel").addEventListener("click", async (event) => {
   const more = event.target.closest("[data-rabbit-more]");
   if (more) {
     const section = more.closest(".rabbitDepth");
@@ -7675,13 +7722,17 @@ $("#rabbitHolePanel").addEventListener("click", (event) => {
 
   const run = event.target.closest("[data-rabbit-run]");
   if (run) {
+    await leaveRabbitHolePlayer();
     runRabbitPrompt(run.dataset.rabbitRun);
+    $("#request")?.focus({ preventScroll: true });
     return;
   }
 
   const prompt = event.target.closest("[data-rabbit-prompt]");
   if (prompt) {
+    await leaveRabbitHolePlayer();
     setRabbitPrompt(prompt.dataset.rabbitPrompt);
+    $("#request")?.focus({ preventScroll: true });
     return;
   }
 
@@ -7693,8 +7744,25 @@ $("#rabbitHolePanel").addEventListener("click", (event) => {
   } catch {
     node = {};
   }
-  if (node.type === "track" && node.track && jumpToTrackIdentity(node.track)) return;
+  const currentIndex = node.type === "track" && node.track
+    ? state.lastTracks.findIndex((candidate) => trackKeyFor(candidate) === trackKeyFor(node.track))
+    : -1;
+  // Keep external links in the original click gesture for popup permission.
+  if (currentIndex < 0 && node.type === "track" && node.track && (node.track.tidalUrl || node.track.tidal?.tidalUrl)) {
+    jumpToTrackIdentity(node.track);
+    return;
+  }
+  await leaveRabbitHolePlayer();
+  if (currentIndex >= 0 && jumpToTrackIdentity(node.track)) {
+    const target = document.getElementById(`track-${currentIndex}`);
+    if (target) {
+      target.setAttribute("tabindex", "-1");
+      target.focus({ preventScroll: true });
+    }
+    return;
+  }
   setRabbitPrompt(node.prompt || rabbitHoleTextFor({ artist: node.name, title: "" }));
+  $("#request")?.focus({ preventScroll: true });
 });
 
 $("#bridgeSyncDismiss")?.addEventListener("click", hideBridgeSyncPopup);
