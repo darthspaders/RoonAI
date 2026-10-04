@@ -77,9 +77,17 @@ function readCatalog(db, sonicDb = db) {
   const sonicAvailable = hasTable(sonicDb, "track_sonic_profile");
   const embedded = new Set();
   if (sonicAvailable) {
-    // Validate the same stored vector contract as coverage; vectors never leave this worker.
-    for (const row of sonicDb.prepare("SELECT identity_key, embedding_base64 FROM track_sonic_profile WHERE model = ? AND model_version = ? AND dimensions = ?").iterate(MODEL, MODEL_VERSION, DIMENSIONS)) {
-      if (validCoverageEmbedding({ model: MODEL, modelVersion: MODEL_VERSION, dimensions: DIMENSIONS, vector: decodeVector(row.embedding_base64) })) embedded.add(row.identity_key);
+    // Bound vector reads without relying on Node 22's SQLite iterator lifetime.
+    // Validate the same stored vector contract as coverage; vectors stay in this worker.
+    const profiles = sonicDb.prepare("SELECT id, identity_key, embedding_base64 FROM track_sonic_profile WHERE model = ? AND model_version = ? AND dimensions = ? AND id > ? ORDER BY id LIMIT 128");
+    let afterId = 0;
+    while (true) {
+      const rows = profiles.all(MODEL, MODEL_VERSION, DIMENSIONS, afterId);
+      for (const row of rows) {
+        if (validCoverageEmbedding({ model: MODEL, modelVersion: MODEL_VERSION, dimensions: DIMENSIONS, vector: decodeVector(row.embedding_base64) })) embedded.add(row.identity_key);
+      }
+      if (rows.length < 128) break;
+      afterId = rows[rows.length - 1].id;
     }
   }
   const anchors = new Map(readRows(sonicDb, "sonic_anchor_profile", "SELECT anchor_identity_key, genre, subgenre, mood, tags_json, note FROM sonic_anchor_profile").map(row => [row.anchor_identity_key, row]));

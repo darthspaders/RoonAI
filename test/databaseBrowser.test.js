@@ -93,6 +93,32 @@ test("Sonic presence requires valid matching embeddings and remains distinct fro
   assert.equal(browseCatalog(snapshot(), { view: "tracks", sonic: "missing" }).total, 4);
 });
 
+test("Sonic coverage reads later pages without admitting incompatible vectors or writing data", t => {
+  const { memory, sonic, tracks } = fixture(t);
+  // More than one bounded read page precedes the real catalogue identity.
+  for (let index = 0; index < 130; index++) {
+    sonic.upsertEmbedding({ identityKey: `test:page-filler:${index}`, model: "discogs-effnet", modelVersion: "1", vector: Array(1280).fill(.25) });
+  }
+  sonic.upsertEmbedding({ track: tracks[3], model: "discogs-effnet", modelVersion: "1", vector: Array(1280).fill(.25) });
+  sonic.upsertEmbedding({ track: tracks[4], model: "discogs-effnet", modelVersion: "1", vector: Array(64).fill(.25) });
+  sonic.upsertEmbedding({ track: tracks[4], model: "discogs-effnet", modelVersion: "2", vector: Array(1280).fill(.25) });
+  const changeCount = db => db.prepare("SELECT total_changes() AS n").get().n;
+  const before = { memory: changeCount(memory.db), sonic: changeCount(sonic.db) };
+  const profileCount = sonic.db.prepare("SELECT COUNT(*) AS n FROM track_sonic_profile").get().n;
+  assert.ok(sonic.db.prepare("SELECT id FROM track_sonic_profile WHERE identity_key = 'tidal:104'").get().id > 128);
+
+  const data = readCatalog(memory.db, sonic.db);
+  const covered = browseCatalog(data, { view: "tracks", sonic: "embedded" });
+  assert.deepEqual(covered.items.map(track => track.tidalId).sort(), ["101", "104"]);
+  assert.equal(covered.items.find(track => track.tidalId === "104").sonicIdentityKey, "tidal:104");
+  // The fixture also includes another model and a zero-norm matching vector.
+  assert.deepEqual(browseCatalog(data, { view: "tracks", sonic: "missing" }).items.map(track => track.tidalId).sort(), ["102", "103", "105"]);
+  assert.equal(changeCount(memory.db), before.memory);
+  assert.equal(changeCount(sonic.db), before.sonic);
+  assert.equal(sonic.db.prepare("SELECT COUNT(*) AS n FROM track_sonic_profile").get().n, profileCount);
+  assert.ok(!JSON.stringify(covered).includes("embedding_base64"));
+});
+
 test("album grouping uses explicit release identity without merging unrelated album names", t => {
   const { snapshot } = fixture(t);
   const data = snapshot();

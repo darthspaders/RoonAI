@@ -114,8 +114,17 @@ function readLocalMedia(db, sonicDb) {
   const { MODEL, MODEL_VERSION, DIMENSIONS, validCoverageEmbedding } = require("./sonicCoverageIdentity");
   const sonicAvailable = hasTable(sonicDb, "track_sonic_profile");
   const hashes = new Set();
-  if (sonicAvailable) for (const row of sonicDb.prepare("SELECT source_sha256,embedding_base64 FROM track_sonic_profile WHERE model=? AND model_version=? AND dimensions=? AND source_sha256 IS NOT NULL").iterate(MODEL, MODEL_VERSION, DIMENSIONS)) {
-    if (validCoverageEmbedding({ model: MODEL, modelVersion: MODEL_VERSION, dimensions: DIMENSIONS, vector: decodeVector(row.embedding_base64) })) hashes.add(row.source_sha256);
+  if (sonicAvailable) {
+    const profiles = sonicDb.prepare("SELECT rowid AS id, source_sha256, embedding_base64 FROM track_sonic_profile WHERE model=? AND model_version=? AND dimensions=? AND source_sha256 IS NOT NULL AND rowid > ? ORDER BY rowid LIMIT 128");
+    let afterId = 0;
+    while (true) {
+      const rows = profiles.all(MODEL, MODEL_VERSION, DIMENSIONS, afterId);
+      for (const row of rows) {
+        if (validCoverageEmbedding({ model: MODEL, modelVersion: MODEL_VERSION, dimensions: DIMENSIONS, vector: decodeVector(row.embedding_base64) })) hashes.add(row.source_sha256);
+      }
+      if (rows.length < 128) break;
+      afterId = rows[rows.length - 1].id;
+    }
   }
   const metadataResults = hasTable(db, 'local_media_metadata') ? new Map(db.prepare("SELECT local_media_id,file_hash,json_extract(result_json,'$.candidateCount') candidate_count,json_extract(result_json,'$.changes') changes_json,updated_at FROM local_media_metadata").all().map(row => [row.local_media_id, row])) : new Map();
   const records = db.prepare("SELECT * FROM local_media_file ORDER BY id").all().map(row => {
