@@ -1,6 +1,6 @@
 {
   "name": "roon-local-ai",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Local music discovery and playback assistant for Roon and Lyrion",
   "main": "src/server.js",
   "scripts": {
@@ -23,10 +23,10 @@
     "metadata:enrich-rated": "node scripts/enrich-rated-local.js",
     "beatport:refresh-negative": "node scripts/refresh-explicit-negative-beatport.js",
     "beatport:refresh-feedback": "node scripts/refresh-explicit-negative-beatport.js --feedback positive",
-  "metadata:scan-negative": "node scripts/scan-negative-local-files.js",
-  "sonic:audit:local": "node scripts/audit-sonic-training-candidates.js",
-  "sonic:analyze:negative-beatport": "node scripts/sonic-analyze-negative-beatport.js",
-  "sonic:analyze:positive-beatport": "node scripts/sonic-analyze-negative-beatport.js --feedback positive",
+    "metadata:scan-negative": "node scripts/scan-negative-local-files.js",
+    "sonic:audit:local": "node scripts/audit-sonic-training-candidates.js",
+    "sonic:analyze:negative-beatport": "node scripts/sonic-analyze-negative-beatport.js",
+    "sonic:analyze:positive-beatport": "node scripts/sonic-analyze-negative-beatport.js --feedback positive",
     "taste:clusters": "node scripts/bootstrap-taste-clusters.js",
     "taste:profiles": "node scripts/build-taste-cluster-profiles.js",
     "taste:score-candidate": "node scripts/taste-score-candidate.js",
@@ -41,7 +41,8 @@
     "sonic:evaluate:models": "node scripts/sonic-evaluate-models.js",
     "sonic:prepare:blind": "node scripts/sonic-prepare-blind-review.js",
     "check": "node scripts/check-syntax.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:browser": "node scripts/check-rabbit-hole-browser.cjs"
   },
   "keywords": [
     "roon",
