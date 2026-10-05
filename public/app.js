@@ -148,6 +148,7 @@ const state = {
   bridgeSyncAlertId: "",
   rejectedDebugOpen: false,
   resultArtistConfirmedOnly: false,
+  openTrackDetails: new Set(),
   sonicProduction: {
     enabled: false,
     productionMode: "off",
@@ -4045,6 +4046,26 @@ function emptyResultHtml(reason, verification = {}) {
   `;
 }
 
+function trackDetailsSummaryHtml(track) {
+  const breakdown = track.scoreBreakdown || {};
+  const prompt = (breakdown.promptMatch || track.promptMatch || {}).percent;
+  const taste = (breakdown.tasteMatch || track.tasteMatch || {}).percent;
+  const parts = [
+    prompt !== undefined && prompt !== null && prompt !== "" ? `Prompt ${escapeHtml(prompt)}%` : "",
+    taste !== undefined && taste !== null && taste !== "" ? `Taste ${escapeHtml(taste)}%` : ""
+  ].filter(Boolean);
+  return `${compactScoreBadgeHtml(track)}${parts.length ? `<span class="trackDetailsStats">${parts.join(" · ")}</span>` : ""}<span class="trackDetailsHint">Details</span>`;
+}
+
+function rememberTrackDetailsToggle(event) {
+  const details = event.target;
+  if (!details?.matches?.(".trackDetails")) return;
+  const key = details.dataset.trackKey;
+  if (!key) return;
+  if (details.open) state.openTrackDetails.add(key);
+  else state.openTrackDetails.delete(key);
+}
+
 function trackCardHtml(track, index) {
   const label = track.label || track.tidal?.label || "";
   const tidalUrl = tidalTrackUrl(track);
@@ -4066,6 +4087,8 @@ function trackCardHtml(track, index) {
           ${track.roon?.queueActionPresumed ? "<span class=\"artistCreditBadge queue\">Queue presumed</span>" : ""}
         </div>
         <p class="trackLabel">${label ? escapeHtml(label) : "Label unavailable"}</p>
+        <details class="trackDetails" data-track-key="${escapeHtml(trackKeyFor(track))}"${state.openTrackDetails.has(trackKeyFor(track)) ? " open" : ""}>
+        <summary>${trackDetailsSummaryHtml(track)}</summary>
         ${matchSplitHtml(track)}
         ${scoreBreakdownHtml(track)}
         ${whyMatchedHtml(track)}
@@ -4075,6 +4098,7 @@ function trackCardHtml(track, index) {
         ${track.tidal ? `<p class="muted">TIDAL: ${tidalUrl ? `<a href="${escapeHtml(tidalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(track.tidal.title || track.title)}</a>` : escapeHtml(track.tidal.title || track.title)}${track.tidal.artist ? ` - ${escapeHtml(track.tidal.artist)}` : ""}</p>` : ""}
         ${track.roon?.match ? `<p class="muted">Roon: ${escapeHtml(track.roon.match.title)}${track.roon.match.subtitle ? ` - ${escapeHtml(track.roon.match.subtitle)}` : ""}</p>` : ""}
         ${resultDiagnosticsHtml(track, index)}
+        </details>
         <div class="feedbackButtons" aria-label="Track feedback">${feedbackButtonsHtml(track, index)}</div>
       </div>
       <div class="trackActions">
@@ -8662,6 +8686,8 @@ $("#sendTidalQueue").addEventListener("click", () => {
     description: `Rabbit Hole generated queue with ${tracks.length} displayed track${tracks.length === 1 ? "" : "s"}.`
   });
 });
+
+$("#tracks").addEventListener("toggle", rememberTrackDetailsToggle, true);
 
 $("#tracks").addEventListener("click", async (event) => {
   const tidalButton = event.target.closest("[data-tidal-open]");
