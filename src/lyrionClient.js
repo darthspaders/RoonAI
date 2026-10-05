@@ -19,6 +19,12 @@ function resolveAction(item, base, name) {
   if (action.itemsParams && !itemParams) return null;
   return { cmd: action.cmd, params: { ...action.params, ...itemParams } };
 }
+const LIBRARY_SOURCES = [
+  { id: "local", title: "Local Library / NAS" },
+  { id: "local-albums", title: "Local Library: Albums", mode: "albums" },
+  { id: "local-artists", title: "Local Library: Artists", mode: "artists" }
+];
+const LIBRARY_IDS = new Set(LIBRARY_SOURCES.map(s => s.id));
 class LyrionClient {
   constructor({ baseUrl = process.env.LYRION_URL || "http://127.0.0.1:9000", fetchImpl = fetch, itemsFile } = {}) {
     this.baseUrl = new URL(baseUrl).origin;
@@ -106,16 +112,17 @@ class LyrionClient {
         const duration=Number(item.duration)|| (durationText?Number(durationText[1]||0)*3600+Number(durationText[2])*60+Number(durationText[3]):0);
         return this.items.remember({ title: item.text || item.name || "Untitled", source, input: !!item.input, favoriteId: channel?.url || "", url, sourceId:urn || String(item.id || ""), soundcloudUrn:urn, duration,
           sourcePayload:{params:item.params || {},presetParams:preset || {}},
-          artwork: this.artwork({ artwork_url: item["icon-id"] || item.icon }), actions });
+          artwork: this.artwork(/^[0-9a-f]{6,}$/i.test(String(item["icon-id"] || "")) ? { coverid: item["icon-id"] } : { artwork_url: item["icon-id"] || item.icon }), actions });
       }) };
   }
   async sources(player) {
     const apps = await this.rpc(player, ["apps", 0, 100, "menu:1"]);
     const radios = await this.rpc(player, ["radios", 0, 100, "menu:1"]);
     const items = [...(apps.item_loop || []), ...(radios.item_loop || [])];
-    return [{ id: "local", title: "Local Library / NAS", actions: {} }, ...items.map(item => {
+    return [...LIBRARY_SOURCES.map(({ id, title }) => ({ id, title, actions: {} })), ...items.map(item => {
       const action = resolveAction(item, {}, "go");
-      return action ? { id: action.cmd[0], title: item.text, actions: { browse: this.remember({ ...action, kind: "browse" }, player, item.text) }, input: !!item.input } : null;
+      const id = action && (LIBRARY_IDS.has(action.cmd[0]) ? `app:${action.cmd[0]}` : action.cmd[0]);
+      return action ? { id, title: item.text, actions: { browse: this.remember({ ...action, kind: "browse" }, player, item.text) }, input: !!item.input } : null;
     }).filter(Boolean)];
   }
   async browse(player, { token, query = "", offset = 0, limit = 50, source = "local" } = {}) {
@@ -125,7 +132,9 @@ class LyrionClient {
       const command = this.command(entry.action, query, offset, limit);
       return this.menu(await this.rpc(player, command), player, entry.source);
     }
-    if (source !== "local") throw new Error("Select a source to browse.");
+    const library = LIBRARY_SOURCES.find(s => s.id === source);
+    if (!library) throw new Error("Select a source to browse.");
+    if (library.mode) return this.menu(await this.rpc(player, ["browselibrary", "items", offset, limit, `mode:${library.mode}`, ...(query ? [`search:${query}`] : []), "menu:1"]), player, "Local");
     const result = await this.rpc(player, ["titles", offset, limit, "tags:aljJuxd", ...(query ? [`search:${query}`] : [])]);
     return { count: Number(result.count) || 0, offset, items: (result.titles_loop || []).map(t => this.items.remember({ ...this.track(t), source: "Local", actions:
       Object.fromEntries([["play", "load"], ["add", "add"], ["next", "insert"]].map(([kind, cmd]) => [kind,
@@ -170,7 +179,7 @@ class LyrionClient {
     for (const source of sources) {
       try {
         let result, request;
-        if (source.id === "local") { request = { source: "local", query }; result = await this.browse(player, request); }
+        if (LIBRARY_IDS.has(source.id)) { request = { source: source.id, query }; result = await this.browse(player, request); }
         else {
           const root = await this.browse(player, { token: source.actions.browse, query });
           const search = root.items.find(i => i.input && /search/i.test(i.title));

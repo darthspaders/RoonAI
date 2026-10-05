@@ -20,7 +20,7 @@
   },
   {
     "name": "lyrion_browse",
-    "description": "Browse a Lyrion source token or local NAS. Without token/source lists sources. Preserve returned actions and exact referenceId; never title-rematch.",
+    "description": "Browse a Lyrion source token or the local NAS library (source local = songs, local-albums, local-artists; albums and artists drill down via returned browse tokens). Without token/source lists sources. Preserve returned actions and exact referenceId; never title-rematch.",
     "path": "/api/lyrion/browse",
     "method": "POST",
     "inputSchema": {
@@ -37,7 +37,9 @@
         "source": {
           "type": "string",
           "enum": [
-            "local"
+            "local",
+            "local-albums",
+            "local-artists"
           ]
         },
         "query": {

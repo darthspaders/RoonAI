@@ -414,7 +414,7 @@
     browseRequest=request; renderItems(result.items,append); $("lyrionMore").hidden=(request.offset||0)+result.items.length>=result.count;
     $("lyrionBack").disabled=!history.length; $("lyrionBrowseTitle").textContent=result.message || `${result.count} items`;
   }
-  async function home() { history=[]; const source=sources.find(s=>s.id===$("lyrionSource").value); await browse(source?.id==="local"?{source:"local"}:{token:source?.actions.browse,query:$("lyrionQuery").value}); }
+  async function home() { history=[]; const source=sources.find(s=>s.id===$("lyrionSource").value); await browse(["local","local-albums","local-artists"].includes(source?.id)?{source:source.id}:{token:source?.actions.browse,query:$("lyrionQuery").value}); }
   async function search(all) {
     const version=epoch; const result=await api("search",{query:$("lyrionQuery").value,sources:all?[]:[$("lyrionSource").value]}); if(version!==epoch)return;
     renderItems(result.results.flatMap(r=>r.items)); $("lyrionMore").hidden=true;
