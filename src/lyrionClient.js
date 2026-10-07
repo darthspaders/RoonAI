@@ -1,6 +1,6 @@
 "use strict";
 const crypto = require("node:crypto");
-const {LyrionItems,soundcloudUrn}=require("./lyrionItems");
+const {LyrionItems,soundcloudUrn,ambiguousLibraryUrl}=require("./lyrionItems");
 
 function sourceFor(url = "") {
   if (/^(file:|\/)/i.test(url)) return "Local";
@@ -25,6 +25,20 @@ const LIBRARY_SOURCES = [
   { id: "local-artists", title: "Local Library: Artists", mode: "artists" }
 ];
 const LIBRARY_IDS = new Set(LIBRARY_SOURCES.map(s => s.id));
+function libraryParams(params) {
+  return Object.fromEntries(Object.entries(params || {}).filter(([key])=>!["cmd","_index","_quantity"].includes(key))
+    .sort(([a],[b])=>a.localeCompare(b)).map(([key,value])=>[key,String(value)]));
+}
+function libraryReference(actions, server, player, source) {
+  if (source !== "Local") return {};
+  const native = Object.values(actions).find(action=>action.cmd.length===1 && action.cmd[0]==="playlistcontrol");
+  if (native?.params?.track_id != null) return {};
+  const type = native?.params?.album_id != null ? "album" : native?.params?.artist_id != null ? "artist" : null;
+  const id = type && String(native.params[`${type}_id`]);
+  if (!type || !/^\d+$/.test(id)) return {};
+  return { libraryIdentity: { type, id, server, playerId: player, params: libraryParams(native.params) },
+    libraryActions: Object.fromEntries(Object.entries(actions).filter(([,action])=>action.cmd.length===1 && action.cmd[0]==="playlistcontrol")) };
+}
 class LyrionClient {
   constructor({ baseUrl = process.env.LYRION_URL || "http://127.0.0.1:9000", fetchImpl = fetch, itemsFile } = {}) {
     this.baseUrl = new URL(baseUrl).origin;
@@ -96,6 +110,7 @@ class LyrionClient {
     return { count: Number(result.count) || 0, offset: Number(result.offset) || 0,
       message: result.window?.textarea || "", items: (result.item_loop || []).map(item => {
         const actions = {};
+        const playbackActions = {};
         const preset = item.presetParams || item.actions?.presetParams;
         const channel = /^sxm:[\w-]+$/.test(preset?.favorites_url || "") ? {
           url: preset.favorites_url, title: preset.favorites_title || item.text,
@@ -104,14 +119,18 @@ class LyrionClient {
         if (channel) actions.favorite = this.remember({ kind: "favorite", channel }, player, source);
         for (const [name, key] of [["go", "browse"], ["play", "play"], ["add", "add"], ["add-hold", "next"]]) {
           const action = resolveAction(item, result.base, name);
-          if (action && (key !== "browse" || !action.cmd.includes("playlist"))) actions[key] = this.remember({ ...action, kind: key }, player, source);
+          if (action && (key !== "browse" || !action.cmd.includes("playlist"))) {
+            actions[key] = this.remember({ ...action, kind: key }, player, source);
+            if (key !== "browse") playbackActions[key] = action;
+          }
         }
+        const library = libraryReference(playbackActions, this.baseUrl, player, source);
         const url=preset?.favorites_type==="audio" || actions.play ? preset?.favorites_url || item.url || "" : "";
         const urn=/soundcloud/i.test(source)?soundcloudUrn(url):"";
         const durationText=String(item.text||"").split("\n")[0].match(/\((?:(\d+):)?(\d+):(\d{2})\)$/);
         const duration=Number(item.duration)|| (durationText?Number(durationText[1]||0)*3600+Number(durationText[2])*60+Number(durationText[3]):0);
-        return this.items.remember({ title: item.text || item.name || "Untitled", source, input: !!item.input, favoriteId: channel?.url || "", url, sourceId:urn || String(item.id || ""), soundcloudUrn:urn, duration,
-          sourcePayload:{params:item.params || {},presetParams:preset || {}},
+        return this.items.remember({ title: item.text || item.name || "Untitled", source, input: !!item.input, favoriteId: channel?.url || "", url, sourceId:library.libraryIdentity?.id || urn || String(item.id || ""), soundcloudUrn:urn, duration,
+          ...library, sourcePayload:{params:item.params || {},commonParams:item.commonParams || {},presetParams:preset || {}},
           artwork: this.artwork(/^[0-9a-f]{6,}$/i.test(String(item["icon-id"] || "")) ? { coverid: item["icon-id"] } : { artwork_url: item["icon-id"] || item.icon }), actions });
       }) };
   }
@@ -155,17 +174,26 @@ class LyrionClient {
     if (action.kind !== kind || !["play", "add", "next"].includes(kind)) throw new Error("Unsupported source action.");
     return this.rpc(player, this.command(action, "", 0, 50));
   }
-  exactCommand({referenceId,soundcloudTrack},kind){
+  exactCommand({referenceId,soundcloudTrack},kind,player){
     const command={play:"play",add:"add",next:"insert"}[kind];
     if(!command)throw Error("Unsupported exact playback action");
     const item=referenceId?this.items.get(referenceId):null;
+    if(item?.libraryIdentity){
+      const identity=item.libraryIdentity,action=item.libraryActions?.[kind];
+      if(identity.server!==this.baseUrl || identity.playerId!==player)throw Error("This library reference belongs to another Lyrion server or player. Browse again for the selected player.");
+      if(!["album","artist"].includes(identity.type) || !/^\d+$/.test(identity.id) || !action || action.cmd?.length!==1 || action.cmd[0]!=="playlistcontrol" ||
+        String(action.params?.[`${identity.type}_id`])!==identity.id || action.params?.cmd!==({play:"load",add:"add",next:"insert"}[kind]) ||
+        JSON.stringify(libraryParams(action.params))!==JSON.stringify(identity.params))throw Error("This library reference does not support that exact action. Browse again and use its returned action token.");
+      return this.command({...action,kind},"",0,50);
+    }
+    if(ambiguousLibraryUrl(item?.url))throw Error("This library reference lacks an exact album or artist ID. Browse again and use a new reference or its returned action token.");
     const urn=soundcloudUrn(soundcloudTrack);
     const url=item?.url || (urn?`soundcloud://${urn}`:"");
     if(!url)throw Error("An exact referenceId or SoundCloud track URN is required.");
     return ["playlist",command,url];
   }
   async executeExact(player,input,kind){
-    return this.rpc(player,this.exactCommand(input,kind));
+    return this.rpc(player,this.exactCommand(input,kind,player));
   }
   async control(player, action) {
     const commands = { play: ["play"], pause: ["pause", 1], next: ["playlist", "index", "+1"], previous: ["playlist", "index", "-1"], clear: ["playlist", "clear"] };
