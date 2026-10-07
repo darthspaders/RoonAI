@@ -3623,6 +3623,55 @@ input {
   font-size: 15px;
 }
 
+.trackDetails {
+  margin: 4px 0 10px;
+}
+
+.trackDetails > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 6px 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.trackDetails > summary .scoreBadge {
+  max-width: 100%;
+  width: auto;
+  white-space: normal;
+}
+
+.trackDetails > summary::-webkit-details-marker {
+  display: none;
+}
+
+.trackDetails > summary::before {
+  content: "\25B8";
+  opacity: 0.75;
+}
+
+.trackDetails[open] > summary::before {
+  content: "\25BE";
+}
+
+.trackDetailsStats {
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.trackDetailsHint {
+  margin-left: auto;
+  font-size: 0.8rem;
+  opacity: 0.7;
+  text-decoration: underline;
+}
+
+.trackDetails[open] > summary .trackDetailsHint {
+  opacity: 0.45;
+}
+
 .trackLabel {
   margin-top: 3px;
   color: rgba(250, 246, 255, 0.94);

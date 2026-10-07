@@ -19,41 +19,20 @@ const viewports = [
 ];
 
 // Retain the production function body, including its DOM and keyboard behavior.
-// Quoted strings and comments must not make a nested callback look like the end.
+// Validate candidate top-level closing braces with the JS parser, so quoted
+// strings, regex literals and nested callbacks cannot create a false boundary.
 function sourceFunction(source, name) {
   const expression = new RegExp(`(?:async\\s+)?function ${name}\\s*\\(`, "g");
   const matches = [...source.matchAll(expression)];
   assert.equal(matches.length, 1, `Expected one production ${name} function`);
   const start = matches[0].index;
-  const body = source.indexOf("{", source.indexOf(")", start));
-  let depth = 0;
-  let quote = "";
-  let lineComment = false;
-  let blockComment = false;
-  for (let index = body; index < source.length; index += 1) {
-    const character = source[index];
-    const next = source[index + 1];
-    if (lineComment) {
-      if (character === "\n") lineComment = false;
-      continue;
-    }
-    if (blockComment) {
-      if (character === "*" && next === "/") { blockComment = false; index += 1; }
-      continue;
-    }
-    if (quote) {
-      if (character === "\\") index += 1;
-      else if (character === quote) quote = "";
-      continue;
-    }
-    if (character === "/" && next === "/") { lineComment = true; index += 1; continue; }
-    if (character === "/" && next === "*") { blockComment = true; index += 1; continue; }
-    if (character === '"' || character === "'" || character === "`") { quote = character; continue; }
-    if (character === "{") depth += 1;
-    if (character === "}" && --depth === 0) {
-      const result = source.slice(start, index + 1);
+  for (const ending of source.slice(start).matchAll(/^\}/gm)) {
+    const result = source.slice(start, start + ending.index + 1);
+    try {
       new Function(result); // Syntax-check extraction; do not execute it here.
       return result;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
     }
   }
   throw new Error(`Cannot extract production ${name}`);
@@ -152,7 +131,110 @@ async function screenshot(page, name) {
   await page.screenshot({ path: path.join(directory, `${name}.png`) });
 }
 
-async function checkCase(browser, html, client, viewport, mode) {
+function trackCardClient(app) {
+  const names = [
+    "escapeHtml", "safeHttpUrl", "jsonDataAttr", "trackPayload", "normalizeKeyText", "normalizeMatchText",
+    "trackKeyFor", "trackFeedbackKeys", "feedbackForTrack", "applyFeedbackToTrack", "applyFeedbackToTracks",
+    "tidalTrackUrl", "formatSeconds", "formatDuration", "artistCreditConfirmed", "roonVisibleTrack",
+    "artistConfirmationBadgeHtml", "displayedResultTracks", "scoreBandFor", "minimumScoreLabel",
+    "compactScoreBadgeHtml", "trackDetailsSummaryHtml", "rememberTrackDetailsToggle", "matchSplitHtml",
+    "scoreBreakdownHtml", "whyMatchedHtml", "statusChecksHtml", "evidenceLedgerValues", "evidenceLedgerRowHtml",
+    "evidenceLedgerHtml", "normalizeFeedbackValue", "feedbackButtonsHtml", "resultDiagnosticsFor",
+    "resultDiagnosticsHtml", "trackCardHtml", "cleanRenderedArtifacts", "emptyResultHtml", "renderResults"
+  ];
+  const scoreMax = app.match(/const SCORE_MAX = \{[\s\S]*?\};/);
+  assert.ok(scoreMax, "Production score limits are available to the card renderer");
+  return `
+    const $ = (selector) => document.querySelector(selector);
+    const state = { openTrackDetails: new Set(), feedbackByKey: {}, resultArtistConfirmedOnly: false };
+    ${scoreMax[0]}
+    // These neighboring panels are outside this fixture; the results renderer,
+    // card/analysis renderers, identity helpers and toggle handler stay real.
+    function updateRejectedDebug() {}
+    function showPoolDiagnostics() {}
+    function showQueueReport() {}
+    function showIntentDebug() {}
+    function showSourceReport() {}
+    function updateNowDiscoveryTools() {}
+    function activeZone() { return null; }
+    ${names.map((name) => sourceFunction(app, name)).join("\n")}
+    const fixtureTrack = {
+      title: "This Charming Man (New York Vocal) [2008 Remaster]", artist: "The Smiths",
+      label: "Warner Music UK Ltd", releaseDate: "2008-09-16", durationMs: 336000, score: 49, belowMinimum: true,
+      scoreBreakdown: { promptMatch: { percent: 52, label: "Loose" }, tasteMatch: { percent: 84, label: "Taste-adjacent" } },
+      tidal: { title: "This Charming Man", tidalUrl: "https://tidal.com/browse/track/1" },
+      roon: { match: { title: "This Charming Man" }, artistCreditConfirmed: "The Smiths" },
+      evidenceLedger: { version: 1, decision: "kept", proof: { genre: ["Synthetic genre evidence"] } }
+    };
+    window.fixtureTrackKey = trackKeyFor(fixtureTrack);
+    document.querySelectorAll(".view").forEach((view) => view.classList.toggle("isActive", view.id === "discoverView"));
+    $("#tracks").addEventListener("toggle", rememberTrackDetailsToggle, true);
+    renderResults({ tracks: [fixtureTrack, {
+      ...fixtureTrack, title: "Second fixture track", artist: "Fixture artist", roon: {},
+      tidal: { tidalUrl: "https://tidal.com/browse/track/2" }
+    }], verification: { roonQueueable: true } });
+  `;
+}
+
+async function checkTrackCards(page, viewport) {
+  const details = page.locator(".trackDetails").first();
+  const summary = details.locator("summary");
+  await summary.scrollIntoViewIfNeeded();
+  await afterLayout(page);
+  assert.equal(await details.evaluate((element) => element.open), false, "Result analysis starts collapsed");
+  const geometry = await summary.evaluate((element) => {
+    const badge = element.querySelector(".scoreBadge");
+    const box = element.getBoundingClientRect();
+    const badgeBox = badge.getBoundingClientRect();
+    return {
+      left: box.left, right: box.right, badgeLeft: badgeBox.left, badgeRight: badgeBox.right,
+      badgeScrollWidth: badge.scrollWidth, badgeClientWidth: badge.clientWidth, viewportWidth: innerWidth,
+      text: element.textContent
+    };
+  });
+  assert.ok(geometry.badgeLeft >= Math.max(0, geometry.left) - 1, "Score badge starts inside the summary and viewport");
+  assert.ok(geometry.badgeRight <= Math.min(geometry.right, geometry.viewportWidth) + 1,
+    `Complete score badge fits the phone summary: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.badgeScrollWidth <= geometry.badgeClientWidth + 1, "The badge's own text is not clipped");
+  for (const text of ["Discovery 49", "below minimum", "Prompt 52%", "Taste 84%"])
+    assert.ok(geometry.text.includes(text), `Collapsed summary retains ${text}`);
+  assert.equal(await details.locator(".evidenceLedger").isVisible(), false, "Collapsed analysis is hidden by native details");
+  for (const selector of [".feedbackButtons", ".trackActions"]) {
+    assert.equal(await page.locator(".track").first().locator(selector).isVisible(), true, `${selector} remains visible`);
+  }
+  await screenshot(page, `track-details-${viewport.name}-collapsed`);
+
+  await summary.click();
+  await page.waitForFunction(() => state.openTrackDetails.has(window.fixtureTrackKey));
+  assert.equal(await details.locator(".evidenceLedger").isVisible(), true, "Opening reveals real analysis");
+  await page.evaluate(() => renderResults(state.lastResult));
+  assert.equal(await details.evaluate((element) => element.open), true, "Real result rerender preserves opened analysis");
+
+  // Filtering changes displayed/result indices; open state must follow identity.
+  await page.evaluate(() => {
+    state.resultArtistConfirmedOnly = true;
+    renderResults({ ...state.lastResult, tracks: [...state.lastResult.tracks].reverse() });
+  });
+  assert.equal(await page.locator(".trackDetails").count(), 1, "Audit filter renders the exact-artist track");
+  assert.equal(await details.getAttribute("data-track-key"), await page.evaluate(() => window.fixtureTrackKey));
+  assert.equal(await details.evaluate((element) => element.open), true, "Filtering/reordering preserves state by identity");
+
+  await summary.focus();
+  await page.keyboard.press("Space");
+  await page.waitForFunction(() => !state.openTrackDetails.has(window.fixtureTrackKey));
+  assert.equal(await details.evaluate((element) => element.open), false, "Keyboard Space closes analysis");
+  assert.notEqual(await summary.evaluate((element) => getComputedStyle(element).outlineStyle), "none", "Keyboard disclosure has a visible focus outline");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => state.openTrackDetails.has(window.fixtureTrackKey));
+  assert.equal(await details.evaluate((element) => element.open), true, "Keyboard Enter opens analysis");
+  await page.keyboard.press("Space");
+  await page.waitForFunction(() => !state.openTrackDetails.has(window.fixtureTrackKey));
+  await page.evaluate(() => renderResults(state.lastResult));
+  assert.equal(await details.evaluate((element) => element.open), false, "Real rerender preserves closed analysis");
+  console.log(`Passed track details ${viewport.name} ${viewport.width}x${viewport.height}: badge fit, native disclosure, keyboard and rerender identity`);
+}
+
+async function checkCase(browser, html, client, viewport, mode, checkSurface = null) {
   const context = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: 1,
@@ -188,6 +270,12 @@ async function checkCase(browser, html, client, viewport, mode) {
   try {
     await page.goto(`${fixtureOrigin}/`, { waitUntil: "load", timeout: 10000 });
     await page.addScriptTag({ content: client });
+    if (checkSurface) {
+      await checkSurface(page, viewport);
+      assert.deepEqual(pageErrors, [], "Fixture has no client errors");
+      assert.deepEqual(forbiddenRequests, [], "No app API or action request was attempted");
+      return;
+    }
     await page.evaluate((nextMode) => {
       const player = document.querySelector(".player");
       const tools = document.querySelector("#nowDiscoveryTools");
@@ -340,8 +428,21 @@ async function main() {
         }
       }
     }
+    const cardClient = trackCardClient(app);
+    const cardViewports = [
+      { name: "phone-360", width: 360, height: 800 },
+      { name: "phone-320", width: 320, height: 800 }
+    ];
+    for (const viewport of cardViewports) {
+      try {
+        await checkCase(browser, html, cardClient, viewport, "track-details", checkTrackCards);
+      } catch (error) {
+        failures.push(error);
+        console.error(error.message);
+      }
+    }
     if (failures.length) throw new AggregateError(failures, `${failures.length} browser layout case(s) failed`);
-    console.log(`Browser regression passed: ${viewports.length * 3} isolated real-CSS layouts; no live services or playback.`);
+    console.log(`Browser regression passed: ${viewports.length * 3} player layouts and ${cardViewports.length} phone result-card cases; no live services or playback.`);
   } finally {
     await browser.close();
   }
