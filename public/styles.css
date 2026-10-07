@@ -3637,6 +3637,12 @@ input {
   list-style: none;
 }
 
+.trackDetails > summary .scoreBadge {
+  max-width: 100%;
+  width: auto;
+  white-space: normal;
+}
+
 .trackDetails > summary::-webkit-details-marker {
   display: none;
 }
