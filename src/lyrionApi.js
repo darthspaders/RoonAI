@@ -4,6 +4,7 @@ const path = require("node:path");
 const { AsyncLocalStorage } = require("node:async_hooks");
 const { LyrionClient } = require("./lyrionClient");
 const { LyrionFavorites } = require("./lyrionFavorites");
+const { ambiguousLibraryUrl } = require("./lyrionItems");
 
 function createLyrionApi({ roon, readJson, sendJson, catalogue=null, client = new LyrionClient({itemsFile:path.join(__dirname,"../data/lyrion-items.json")}), file = path.join(__dirname, "../data/lyrion-selection.json"), favoritesFile = path.join(__dirname, "../data/lyrion-favorites.json") }) {
   const favorites = new LyrionFavorites(favoritesFile);
@@ -54,7 +55,7 @@ function createLyrionApi({ roon, readJson, sendJson, catalogue=null, client = ne
     if (req.method === "GET" && route === "artwork") {
       const imagePath = url.searchParams.get("path") || "";
       const imageUrl = new URL(imagePath, client.baseUrl);
-      if (imageUrl.origin !== client.baseUrl || !/^\/(imageproxy|music|plugins|html)\//.test(imageUrl.pathname)) return sendJson(res, 400, { error: "Invalid artwork path" });
+      if (imageUrl.origin !== client.baseUrl || !/^\/(imageproxy|music|plugins|html|contributor)\//.test(imageUrl.pathname)) return sendJson(res, 400, { error: "Invalid artwork path" });
       const headers = {};
       if (process.env.LYRION_USERNAME) headers.Authorization = `Basic ${Buffer.from(`${process.env.LYRION_USERNAME}:${process.env.LYRION_PASSWORD || ""}`).toString("base64")}`;
       const image = await fetch(imageUrl, { headers, signal: AbortSignal.timeout(10000) });
@@ -110,6 +111,7 @@ function createLyrionApi({ roon, readJson, sendJson, catalogue=null, client = ne
       if(req.method!=="POST" || !["add","remove"].includes(body.action))throw Error("Choose add or remove favorite.");
       return exclusive(async()=>{
         const item=client.items.get(body.referenceId);
+        if(item.libraryIdentity || ambiguousLibraryUrl(item.url))throw Error("Library collections cannot be saved by a title-query URL. Use the native library's favorite controls instead.");
         const exists=await client.rpc(player,["favorites","exists",item.url]);
         if(body.action==="add" && !Number(exists.exists))await client.rpc(player,["favorites","add",`url:${item.url}`,`title:${item.title}`,"type:audio"]);
         if(body.action==="remove" && Number(exists.exists))await client.rpc(player,["favorites","delete",`item_id:${exists.index}`]);
@@ -130,7 +132,7 @@ function createLyrionApi({ roon, readJson, sendJson, catalogue=null, client = ne
           const entry = client.getAction(body.token, player);
           if (entry.action.kind !== body.action || !["play", "add", "next"].includes(body.action)) throw new Error("Invalid queue action.");
         }
-        if(route==="queue" && (body.referenceId || body.soundcloudTrack))client.exactCommand(body,body.action);
+        if(route==="queue" && (body.referenceId || body.soundcloudTrack))client.exactCommand(body,body.action,player);
         if (starts) await handoff("lyrion");
         if(route==="queue" && (body.referenceId || body.soundcloudTrack) && !["play","add","next"].includes(body.action))throw Error("Invalid queue action.");
         if(route==="queue" || body.action==="clear")client.artistStations?.stop(player,"Queue changed; automatic additions stopped.");
