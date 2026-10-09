@@ -4014,6 +4014,32 @@ input {
   color: #fff;
 }
 
+.queueReportDetails > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.queueReportDetails > summary::-webkit-details-marker {
+  display: none;
+}
+
+.queueReportDetails > summary::before {
+  content: "\25B8";
+  opacity: 0.75;
+}
+
+.queueReportDetails[open] > summary::before {
+  content: "\25BE";
+}
+
+.queueReportDetails[open] > summary .trackDetailsHint {
+  opacity: 0.45;
+}
+
 .queueReport p {
   margin-top: 6px;
 }

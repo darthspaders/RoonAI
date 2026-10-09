@@ -149,6 +149,7 @@ const state = {
   rejectedDebugOpen: false,
   resultArtistConfirmedOnly: false,
   openTrackDetails: new Set(),
+  queueReportOpen: false,
   sonicProduction: {
     enabled: false,
     productionMode: "off",
@@ -3037,18 +3038,32 @@ function statusChecksHtml(track) {
   `;
 }
 
+function queueReportSummaryText(result = {}) {
+  const failed = Array.isArray(result.failed) ? result.failed : [];
+  const queued = Array.isArray(result.queued) ? result.queued : [];
+  const actionText = result.topOfQueue ? "added next after the current track" : "added to the existing Roon queue";
+  return [
+    queued.length ? `${queued.length} track${queued.length === 1 ? "" : "s"} ${actionText}` : "",
+    failed.length ? `${failed.length} failed` : ""
+  ].filter(Boolean).join(" · ");
+}
+
 function queueReportHtml(result = {}) {
   const failed = Array.isArray(result.failed) ? result.failed : [];
   const queued = Array.isArray(result.queued) ? result.queued : [];
   const title = `Queued ${result.queuedCount || queued.length}/${result.requested || queued.length + failed.length}`;
   const targetReached = Number(result.queuedCount || queued.length) >= Number(result.requested || 0);
   const backupCount = queued.filter((item) => item.isAlternate).length;
-  const actionText = result.topOfQueue ? "added next after the current track" : "added to the existing Roon queue";
   const addedTracks = queued.slice(0, 18);
+  const summaryText = queueReportSummaryText(result);
   return `
-    <div>
-      <strong>${escapeHtml(title)}</strong>
-      ${queued.length ? `<p>${escapeHtml(`${queued.length} Rabbit Hole track${queued.length === 1 ? "" : "s"} ${actionText}. Existing queue items may still appear above them in Roon.`)}</p>` : ""}
+    <details class="queueReportDetails"${state.queueReportOpen ? " open" : ""}>
+      <summary>
+        <strong>${escapeHtml(title)}</strong>
+        ${summaryText ? `<span class="trackDetailsStats">${escapeHtml(summaryText)}</span>` : ""}
+        <span class="trackDetailsHint">Details</span>
+      </summary>
+      ${queued.length ? "<p>Existing queue items may still appear above them in Roon.</p>" : ""}
       ${backupCount ? `<p>${escapeHtml(backupCount)} backup track${backupCount === 1 ? "" : "s"} used to fill the queue.</p>` : ""}
       ${result.warning ? `<p>${escapeHtml(result.warning)}</p>` : ""}
       ${addedTracks.length ? `
@@ -3087,8 +3102,14 @@ function queueReportHtml(result = {}) {
           `).join("")}
         </ul>
       ` : "<p>All displayed tracks were accepted by Roon.</p>"}
-    </div>
+    </details>
   `;
+}
+
+function rememberQueueReportToggle(event) {
+  const details = event.target;
+  if (!details?.matches?.(".queueReportDetails")) return;
+  state.queueReportOpen = details.open;
 }
 
 function showQueueReport(result = null) {
@@ -8688,6 +8709,7 @@ $("#sendTidalQueue").addEventListener("click", () => {
 });
 
 $("#tracks").addEventListener("toggle", rememberTrackDetailsToggle, true);
+$("#queueReport").addEventListener("toggle", rememberQueueReportToggle, true);
 
 $("#tracks").addEventListener("click", async (event) => {
   const tidalButton = event.target.closest("[data-tidal-open]");
