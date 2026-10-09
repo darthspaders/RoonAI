@@ -149,6 +149,7 @@ const state = {
   rejectedDebugOpen: false,
   resultArtistConfirmedOnly: false,
   openTrackDetails: new Set(),
+  resultsCollapsed: false,
   sonicProduction: {
     enabled: false,
     productionMode: "off",
@@ -3089,6 +3090,17 @@ function queueReportHtml(result = {}) {
       ` : "<p>All displayed tracks were accepted by Roon.</p>"}
     </div>
   `;
+}
+
+function setResultsCollapsed(collapsed) {
+  state.resultsCollapsed = Boolean(collapsed);
+  const body = $("#resultsBody");
+  const toggle = $("#resultsToggle");
+  if (body) body.hidden = state.resultsCollapsed;
+  if (!toggle) return;
+  toggle.setAttribute("aria-expanded", String(!state.resultsCollapsed));
+  toggle.textContent = state.resultsCollapsed ? "\u25B8" : "\u25BE";
+  toggle.title = state.resultsCollapsed ? "Show the track list" : "Hide the track list";
 }
 
 function showQueueReport(result = null) {
@@ -8518,6 +8530,7 @@ $("#playlistForm").addEventListener("submit", async (event) => {
   if (submitButton) submitButton.disabled = true;
   $("#busy").textContent = "Searching TIDAL + discovery sources...";
   $("#resultTitle").textContent = "Building rabbit hole...";
+  setResultsCollapsed(false);
   $("#tracks").innerHTML = "";
   state.resultArtistConfirmedOnly = false;
   const artistConfirmedToggle = $("#artistConfirmedOnly");
@@ -8688,6 +8701,8 @@ $("#sendTidalQueue").addEventListener("click", () => {
 });
 
 $("#tracks").addEventListener("toggle", rememberTrackDetailsToggle, true);
+$("#resultsToggle").addEventListener("click", () => setResultsCollapsed(!state.resultsCollapsed));
+$("#resultTitle").addEventListener("click", () => setResultsCollapsed(!state.resultsCollapsed));
 
 $("#tracks").addEventListener("click", async (event) => {
   const tidalButton = event.target.closest("[data-tidal-open]");
