@@ -477,9 +477,12 @@
 
         <section class="panel results">
           <div class="formHead">
-            <div>
-              <p class="eyebrow">Current Rabbit Hole</p>
-              <h2 id="resultTitle">No rabbit hole yet</h2>
+            <div class="resultsHeading">
+              <button type="button" id="resultsToggle" class="resultsToggle" aria-expanded="true" aria-controls="resultsBody" title="Hide the track list">&#9662;</button>
+              <div>
+                <p class="eyebrow">Current Rabbit Hole</p>
+                <h2 id="resultTitle" class="resultsTitleToggle">No rabbit hole yet</h2>
+              </div>
             </div>
             <div class="resultActions">
               <span id="busy"></span>
@@ -495,8 +498,10 @@
               </label>
             </div>
           </div>
-          <div id="queueReport" class="queueReport" hidden></div>
-          <div id="tracks" class="tracks"></div>
+          <div id="resultsBody" class="resultsBody">
+            <div id="queueReport" class="queueReport" hidden></div>
+            <div id="tracks" class="tracks"></div>
+          </div>
         </section>
 
       </section>
