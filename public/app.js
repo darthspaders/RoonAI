@@ -3094,7 +3094,7 @@ function queueReportHtml(result = {}) {
 }
 
 function setPanelFolded(toggleSelector, bodySelector, folded, what) {
-  const body = $(bodySelector);
+  const body = bodySelector ? $(bodySelector) : null;
   const toggle = $(toggleSelector);
   if (body) body.hidden = folded;
   if (!toggle) return;

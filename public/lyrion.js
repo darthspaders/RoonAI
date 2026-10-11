@@ -48,8 +48,8 @@
       <ul id="lyrionXtraResults" class="lyrionFavoriteList"></ul>
     </section>
     <div class="lyrionColumns">
-      <section class="panel"><h2>Sources & discovery</h2><p><a href="/soundcloud-setup.html">Connect SoundCloud playlists</a> · <a href="/siriusxm-setup.html">SiriusXM metadata</a></p><div class="lyrionToolbar"><label for="lyrionSource">Source</label><select id="lyrionSource"><option value="local">Local Library / NAS</option></select></div>
-      <form id="lyrionSearch" class="lyrionToolbar"><label for="lyrionQuery">Search</label><input id="lyrionQuery" type="search" placeholder="Artist, track or channel"><button type="submit">Search source</button><button id="lyrionSearchAll" type="button">Search all sources</button></form>
+      <section class="panel"><h2>Sources & discovery</h2><p><a href="/soundcloud-setup.html">Connect SoundCloud playlists</a> · <a href="/siriusxm-setup.html">SiriusXM metadata</a></p><div class="lyrionToolbar lyrionSourceRow"><button type="button" id="lyrionSourceToggle" class="resultsToggle" aria-expanded="true" aria-controls="lyrionSourceChoices" title="Hide the sources">&#9662;</button><select id="lyrionSource"><option value="local">Local Library / NAS</option></select></div>
+      <form id="lyrionSearch" class="lyrionToolbar"><input id="lyrionQuery" type="search" aria-label="Search" placeholder="Artist, track or channel"><button type="submit">Search source</button><button id="lyrionSearchAll" type="button">Search all sources</button></form>
       <div class="lyrionToolbar"><button type="button" id="lyrionResultsToggle" class="resultsToggle" aria-expanded="true" aria-controls="lyrionResultsBody" title="Hide the source list">&#9662;</button><button id="lyrionBack" type="button" disabled>Back</button><button id="lyrionHome" type="button">Browse source</button><span id="lyrionBrowseTitle" class="muted"></span></div>
       <div id="lyrionResultsBody"><ul id="lyrionResults" class="lyrionList"></ul><button id="lyrionMore" type="button" hidden>Load more</button></div>
       </section>
@@ -94,6 +94,10 @@
   const renderSystemChoices=choices('playbackSystem','Playback system');
   const renderPlayerChoices=choices('lyrionPlayer','Lyrion player');
   const renderSourceChoices=choices('lyrionSource','Music source');
+  const sourceChoices=$("lyrionSource").nextElementSibling;sourceChoices.id="lyrionSourceChoices";
+  const foldSources=folded=>{sourceChoices.classList.toggle("isFolded",folded);setPanelFolded("#lyrionSourceToggle",null,folded,"the sources");try{localStorage.setItem("rabbitHole.lyrionSourcesFolded",folded?"1":"0");}catch{}};
+  $("lyrionSourceToggle").onclick=()=>foldSources(!sourceChoices.classList.contains("isFolded"));
+  try{foldSources(localStorage.getItem("rabbitHole.lyrionSourcesFolded")==="1");}catch{foldSources(false);}
   const channelMetadata=new Map();let favoriteMetadataAt=0;
   const showTime=value=>value?new Date(value).toLocaleTimeString([],{hour:"numeric",minute:"2-digit",timeZoneName:"short"}):"";
   function programSummary(m){return [m?.currentShow?"Now: "+m.currentShow:"",m?.nextShow?"Next: "+m.nextShow+" · "+showTime(m.nextShowStart):""].filter(Boolean).join("\n");}
