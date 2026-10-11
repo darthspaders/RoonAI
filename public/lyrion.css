@@ -3,17 +3,15 @@
 .playbackSystemBar select { min-height:44px; width:auto; }
 .lyrionChoices {display:flex;flex-wrap:wrap;gap:8px;flex:1;min-width:0;}
 .lyrionChoices button {min-height:44px;padding:8px 16px;color:var(--muted);background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:8px;}
-.lyrionChoices button[aria-pressed="true"],#lyrionView .lyrionChoices button[aria-pressed="true"] {color:var(--accent);border-color:var(--accent);background:rgba(217,179,255,.09);}
 .playbackSystemBar select[hidden],#lyrionView select[hidden],#lyrionView .lyrionTabPanel[hidden],#lyrionView .lyrionCompact[hidden] {display:none!important;}
-.lyrionTabs {display:flex;flex-wrap:wrap;gap:6px;border-bottom:1px solid var(--line);padding-bottom:8px;}
-#lyrionView .lyrionTabs button {min-height:44px;flex:1;padding:10px 16px;border:0;border-bottom:2px solid transparent;border-radius:6px 6px 0 0;color:var(--muted);white-space:nowrap;}
-#lyrionView .lyrionTabs button[aria-selected="true"] {color:var(--accent);border-bottom-color:var(--accent);background:rgba(217,179,255,.07);}
+.lyrionTabs {display:flex;gap:4px;padding:4px;border:1px solid rgba(191,136,255,.14);border-radius:999px;background:rgba(4,1,10,.52);box-shadow:inset 0 1px 0 rgba(255,235,255,.15),0 10px 26px rgba(2,0,8,.34);}
+#lyrionView .lyrionTabs button {min-height:44px;flex:1 1 0;min-width:0;padding:10px 16px;border:1px solid transparent;background:transparent;box-shadow:none;color:var(--muted);white-space:nowrap;}
 .lyrionTabPanel {min-width:0;}
 .lyrionCompact {display:flex;align-items:center;gap:12px;min-width:0;}
 #lyrionCompactTitle {flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);}
 #lyrionView .lyrionNow:not(.lyrionNow--fullscreen) .lyrionCover {max-height:clamp(180px,calc(100dvh - 550px),520px);}
 #lyrionView .lyrionNow:not(.lyrionNow--fullscreen) .lyrionStageChannels {max-height:clamp(180px,calc(100dvh - 550px),520px);}
-@media(max-width:600px){#lyrionView .lyrionTabs button{flex:1 1 28%;padding:8px;} .lyrionCompact{flex-wrap:wrap;} #lyrionCompactTitle{flex-basis:60%;}}
+@media(max-width:600px){#lyrionView .lyrionTabs button{padding:8px 4px;font-size:14px;} .lyrionChoices{flex-basis:100%;} .lyrionChoices :is(button,a){white-space:nowrap;} .lyrionCompact{flex-wrap:wrap;} #lyrionCompactTitle{flex-basis:60%;}}
 body[data-playback-system="lyrion"] .shell > .view,
 body[data-playback-system="lyrion"] .shell > .topbar,
 body[data-playback-system="lyrion"] .shell > .secondaryNav,
