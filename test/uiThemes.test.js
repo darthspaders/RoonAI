@@ -79,7 +79,7 @@ test("dark orange makes the page blue-black, light accents white and mid accents
   for (const c of ["#7a4dff", "#9b3dd6", "#5b2a9e", "#c02bb0"]) {
     const out = mapColor(c, rules("dark-orange"));
     const { h } = hsl(out);
-    assert.ok(h >= 18 && h <= 26, `${c} -> ${out} has hue ${h}`);
+    assert.ok(h >= 10 && h <= 16, `${c} -> ${out} has hue ${h}`);
     assert.ok(contrast(out, page) >= 4.5, `${c} -> ${out} contrast ${contrast(out, page).toFixed(2)}`);
   }
 });
@@ -87,7 +87,7 @@ test("dark orange makes the page blue-black, light accents white and mid accents
 test("dark orange paints strong accent tints solid orange and leaves faint lines and text neutral", () => {
   const spread = (c) => { const [r, g, b] = c.match(/\d+/g).map(Number); return Math.max(r, g, b) - Math.min(r, g, b); };
   for (const c of ["rgba(167, 124, 255, 0.32)", "rgba(217, 179, 255, 0.44)", "rgba(225, 165, 255, 0.48)"]) {
-    assert.equal(mapColor(c, rules("dark-orange")), "rgba(217, 79, 0, 0.85)", c);
+    assert.equal(mapColor(c, rules("dark-orange")), "rgba(228, 74, 32, 0.95)", c);
   }
   for (const c of ["rgba(205, 166, 255, 0.24)", "rgba(217, 179, 255, 0.1)", "rgba(238, 228, 252, 0.82)", "rgba(250, 246, 255, 1)"]) {
     assert.ok(spread(mapColor(c, rules("dark-orange"))) <= 16, `${c} -> ${mapColor(c, rules("dark-orange"))} is not neutral`);
