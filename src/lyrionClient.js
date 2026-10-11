@@ -1,6 +1,7 @@
 "use strict";
 const crypto = require("node:crypto");
 const {LyrionItems,soundcloudUrn,ambiguousLibraryUrl}=require("./lyrionItems");
+const { createHqplayerControl } = require("./hqplayerControl");
 
 function sourceFor(url = "") {
   if (/^(file:|\/)/i.test(url)) return "Local";
@@ -39,12 +40,15 @@ function libraryReference(actions, server, player, source) {
   return { libraryIdentity: { type, id, server, playerId: player, params: libraryParams(native.params) },
     libraryActions: Object.fromEntries(Object.entries(actions).filter(([,action])=>action.cmd.length===1 && action.cmd[0]==="playlistcontrol")) };
 }
+const usableHost = host => !!host && !/^(127\.|0\.0\.0\.0$|localhost$|::1?$|\[::1?\]$)/i.test(host);
 class LyrionClient {
   constructor({ baseUrl = process.env.LYRION_URL || "http://127.0.0.1:9000", fetchImpl = fetch, itemsFile } = {}) {
     this.baseUrl = new URL(baseUrl).origin;
     this.fetch = fetchImpl;
     this.actions = new Map();
     this.items = new LyrionItems(itemsFile);
+    this.hqplayer = createHqplayerControl();
+    this.playerModels = null;
   }
   async rpc(player, command) {
     const headers = { "Content-Type": "application/json" };
@@ -61,6 +65,21 @@ class LyrionClient {
   async players() {
     const result = await this.rpc("", ["serverstatus", 0, 999]);
     return (result.players_loop || []).map(p => ({ id: p.playerid, name: p.name, connected: !!Number(p.connected), playing: !!Number(p.isplaying), model: p.model }));
+  }
+  async hqplayerFor(player, s) {
+    if (!this.hqplayer) return null;
+    try {
+      if (!this.playerModels || Date.now() - this.playerModels.at > 30000) {
+        const list = await this.players();
+        const pref = list.some(p => p.model === "hqplayer") ? await this.rpc("", ["pref", "plugin.hqplayerbridge:addresses", "?"]).catch(() => ({})) : {};
+        this.playerModels = { at: Date.now(), list, addresses: String(pref?._p2 || "").split(/[\s,;]+/).filter(usableHost) };
+      }
+      if (this.playerModels.list.find(p => p.id === player)?.model !== "hqplayer") return null;
+      const raw = String(s.player_ip || "").trim(), own = /^[^:]+:\d+$/.test(raw) ? raw.replace(/:\d+$/, "") : raw;
+      const configured = this.playerModels.addresses;
+      const host = configured.length === 1 ? configured[0] : configured.includes(own) ? own : !configured.length && usableHost(own) ? own : "";
+      return host ? await this.hqplayer.status(host) : null;
+    } catch { return null; }
   }
   async requirePlayer(id) {
     if (!(await this.players()).some(p => p.id === id && p.connected)) throw new Error("Choose a connected Lyrion player first.");
@@ -89,11 +108,12 @@ class LyrionClient {
       current = result.playlist_loop?.[0];
     }
     if (s.remoteMeta) current = { ...current, ...s.remoteMeta };
+    const hqplayer = await this.hqplayerFor(player, s);
     return { playerId: player, playerName: s.player_name, connected: !!Number(s.player_connected),
       state: s.mode === "play" ? "playing" : s.mode === "pause" ? "paused" : "stopped",
       position: Number(s.time) || 0, duration: Number(s.duration) || Number(current?.duration) || this.onDemandMetadata?.(current?.url)?.duration || 0,
       nowPlaying: current ? this.track(current) : null, queue: (s.playlist_loop || []).map(t => this.track(t)),
-      queueCount: Number(s.playlist_tracks) || 0, queueIndex: index, offset };
+      queueCount: Number(s.playlist_tracks) || 0, queueIndex: index, offset, hqplayer };
   }
   remember(action, player, source) {
     while (this.actions.size >= 10000) this.actions.delete(this.actions.keys().next().value);
