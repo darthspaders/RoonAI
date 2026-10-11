@@ -63,7 +63,8 @@ docker compose up -d --build
 
 Open `http://YOUR_SERVER_IP:3777`. Choose **Lyrion** and a connected player to
 browse sources or use transport controls. For Roon, enable **The Rabbit Hole**
-in **Roon → Settings → Extensions**, then select a zone in Rabbit Hole.
+in **Roon → Settings → Extensions**, then pick a zone in the **Roon Zone** row
+under Playback System.
 
 The supplied Compose file uses Linux host networking for Roon discovery and
 loopback audio relays, and a persistent volume for private data and Roon pairing.

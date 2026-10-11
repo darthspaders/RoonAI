@@ -154,3 +154,7 @@ body.lyrionFullscreenOpen {overflow:hidden;}
 #lyrionSoundCloudPlaylists label {display:block;margin:16px 0 6px;font-size:12px;color:var(--muted);}
 #lyrionSoundCloudPlaylists input {box-sizing:border-box;width:100%;min-width:0;min-height:44px;}
 #lyrionSoundCloudPlaylists form {margin:0;}
+/* Roon zones as pills under the Playback System bar, laid out like the Playback System and HQPlayer rows. */
+.roonZoneBar {display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:-4px 0 12px;}
+body[data-playback-system="lyrion"] #roonZoneBar,#roonZoneBar[hidden] {display:none;}
+.roonZoneLabel {color:var(--muted);font-size:16px;}
