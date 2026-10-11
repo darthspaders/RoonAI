@@ -50,8 +50,8 @@
     <div class="lyrionColumns">
       <section class="panel"><h2>Sources & discovery</h2><p><a href="/soundcloud-setup.html">Connect SoundCloud playlists</a> · <a href="/siriusxm-setup.html">SiriusXM metadata</a></p><div class="lyrionToolbar"><label for="lyrionSource">Source</label><select id="lyrionSource"><option value="local">Local Library / NAS</option></select></div>
       <form id="lyrionSearch" class="lyrionToolbar"><label for="lyrionQuery">Search</label><input id="lyrionQuery" type="search" placeholder="Artist, track or channel"><button type="submit">Search source</button><button id="lyrionSearchAll" type="button">Search all sources</button></form>
-      <div class="lyrionToolbar"><button id="lyrionBack" type="button" disabled>Back</button><button id="lyrionHome" type="button">Browse source</button><span id="lyrionBrowseTitle" class="muted"></span></div>
-      <ul id="lyrionResults" class="lyrionList"></ul><button id="lyrionMore" type="button" hidden>Load more</button>
+      <div class="lyrionToolbar"><button type="button" id="lyrionResultsToggle" class="resultsToggle" aria-expanded="true" aria-controls="lyrionResultsBody" title="Hide the source list">&#9662;</button><button id="lyrionBack" type="button" disabled>Back</button><button id="lyrionHome" type="button">Browse source</button><span id="lyrionBrowseTitle" class="muted"></span></div>
+      <div id="lyrionResultsBody"><ul id="lyrionResults" class="lyrionList"></ul><button id="lyrionMore" type="button" hidden>Load more</button></div>
       </section>
       <section class="panel"><div class="lyrionToolbar"><h2>Queue</h2><button data-lyrion-control="clear">Clear queue</button></div><p id="lyrionQueueCount" class="muted"></p><ol id="lyrionQueue" class="lyrionList"></ol><button id="lyrionQueueMore" type="button" hidden>Next queue page</button></section>
     </div>`;
@@ -387,8 +387,10 @@
     if(!favorites.length){const empty=document.createElement("p");empty.className="muted";empty.textContent="No saved channels yet. Choose Favorite beside a SiriusXM channel in Sources & discovery.";$("lyrionStageChannels").append(empty);}
     ui.querySelectorAll("[data-favorite-id]").forEach(b=>{const saved=favorites.some(f=>f.id===b.dataset.favoriteId);b.textContent=saved?"Saved":"Favorite";b.disabled=saved;});
   }
+  let resultsFolded=false;
+  const foldResults=folded=>{resultsFolded=folded;setPanelFolded("#lyrionResultsToggle","#lyrionResultsBody",folded,"the source list");};
   function renderItems(items, append=false) {
-    if (!append) $("lyrionResults").replaceChildren();
+    if (!append) { $("lyrionResults").replaceChildren(); foldResults(false); }
     for (const item of items) {
       const row=document.createElement("li"), text=document.createElement("div"); text.className="lyrionText"; text.textContent=item.title;
       const sub=document.createElement("small"); sub.textContent=[item.artist,item.source].filter(Boolean).join(" · "); text.append(sub); row.append(text);
@@ -494,6 +496,7 @@
   });
   $("lyrionSearch").onsubmit=run(()=>search(false)); $("lyrionSearchAll").onclick=run(()=>search(true));
   $("lyrionBack").onclick=run(()=>browse(history.pop()||{source:"local"}));
+  $("lyrionResultsToggle").onclick=()=>foldResults(!resultsFolded);
   $("lyrionMore").onclick=run(()=>browse({...browseRequest,offset:(browseRequest.offset||0)+50},true));
   ui.querySelectorAll("[data-lyrion-control]").forEach(b=>b.onclick=run(async()=>{if(b.dataset.lyrionControl==="clear"&&!confirm("Clear this Lyrion player's queue?"))return;await api("control",{action:b.dataset.lyrionControl});await refreshStatus();}));
   async function selectSystem() {

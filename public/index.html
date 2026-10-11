@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>The Rabbit Hole</title>
-    <link rel="stylesheet" href="/styles.css?v=20261004-rabbit-hole-panel-1">
+    <link rel="stylesheet" href="/styles.css?v=20261011-fold-toggles-1">
     <link rel="stylesheet" href="/database.css?v=20260919-local-metadata-1">
     <link rel="stylesheet" href="/sonicBlindReview.css?v=20260925-1">
     <link rel="stylesheet" href="/lyrion.css?v=11">
@@ -364,12 +364,16 @@
       <section id="discoverView" class="view discoverView">
           <form id="playlistForm" class="panel composer">
             <div class="formHead">
-              <div>
-                <p class="eyebrow">Playlist Builder</p>
-                <h2>Start the Rabbit Hole Journey</h2>
+              <div class="resultsHeading">
+                <button type="button" id="composerToggle" class="resultsToggle" aria-expanded="true" aria-controls="composerBody" title="Hide the playlist builder">&#9662;</button>
+                <div>
+                  <p class="eyebrow">Playlist Builder</p>
+                  <h2 id="composerTitle" class="resultsTitleToggle">Start the Rabbit Hole Journey</h2>
+                </div>
               </div>
               <button type="submit">Generate</button>
             </div>
+            <div id="composerBody" class="composerBody">
             <textarea id="request" name="request" placeholder="Find 90s trance, dark ambient, tracks like The Crystal Method, chill driving music, or long progressive house released this week"></textarea>
             <div class="quickActions">
               <button type="button" data-preset="now">Use current Roon track</button>
@@ -473,13 +477,17 @@
                 </label>
               </div>
             </details>
+            </div>
           </form>
 
         <section class="panel results">
           <div class="formHead">
-            <div>
-              <p class="eyebrow">Current Rabbit Hole</p>
-              <h2 id="resultTitle">No rabbit hole yet</h2>
+            <div class="resultsHeading">
+              <button type="button" id="resultsToggle" class="resultsToggle" aria-expanded="true" aria-controls="resultsBody" title="Hide the track list">&#9662;</button>
+              <div>
+                <p class="eyebrow">Current Rabbit Hole</p>
+                <h2 id="resultTitle" class="resultsTitleToggle">No rabbit hole yet</h2>
+              </div>
             </div>
             <div class="resultActions">
               <span id="busy"></span>
@@ -495,8 +503,10 @@
               </label>
             </div>
           </div>
-          <div id="queueReport" class="queueReport" hidden></div>
-          <div id="tracks" class="tracks"></div>
+          <div id="resultsBody" class="resultsBody">
+            <div id="queueReport" class="queueReport" hidden></div>
+            <div id="tracks" class="tracks"></div>
+          </div>
         </section>
 
       </section>
@@ -785,12 +795,12 @@
     </main>
     <button type="button" id="jumpTop" class="jumpTop" hidden>Now Playing</button>
     <script src="/statusLive.js?v=1"></script>
-    <script src="/app.js?v=20261004-rabbit-hole-panel-1"></script>
+    <script src="/app.js?v=20261011-builder-fold-1"></script>
     <script src="/sonicBlindReview.js?v=20260925-1"></script>
     <script src="/webmcpTools.js"></script>
     <script src="/sonicCoverage.js?v=20260917-1"></script>
     <script src="/database.js?v=20260919-local-metadata-1"></script>
-    <script src="/lyrion.js?v=15"></script>
+    <script src="/lyrion.js?v=16"></script>
     <script src="/soundSpectrumVideo.js?v=1"></script>
   <script src="/soundSpectrumStage.js?v=5"></script>
     <script src="/lyrionVisualizer.js?v=11"></script>
