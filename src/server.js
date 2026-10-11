@@ -2911,7 +2911,7 @@ const handleVoice = createVoiceApi({ tools: rabbitHoleMcpTools, router: modelRou
   availability: () => ({ synapseAvailable: Boolean(config.ai.openai.enabled && config.ai.openai.apiKey), localAvailable: Boolean(config.openAiCompatibleBaseUrl || config.ollamaBaseUrl) }) });
 
 const lyrionCatalogue=new (require('./lyrionCatalogue').LyrionCatalogue)({tidal});
-const lyrionApi = require("./lyrionApi").createLyrionApi({ roon, readJson, sendJson, catalogue:lyrionCatalogue });
+const lyrionApi = require("./lyrionApi").createLyrionApi({ roon, readJson, sendJson, catalogue:lyrionCatalogue, hqplayerLinks: config.hqplayer, playbackLinks: config.playbackLinks });
 const soundcloudApi = require("./soundcloudApi").createSoundCloudApi({readJson,sendJson,items:lyrionApi.client.items});
 const siriusxmAccount = new (require("./siriusxmAccount").SiriusXmAccount)();
 const siriusxmOnDemand = require("./siriusxmOnDemandApi").createSiriusXmOnDemandApi({lyrion:lyrionApi,readJson,sendJson});

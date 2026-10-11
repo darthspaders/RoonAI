@@ -6,7 +6,7 @@ const { LyrionClient } = require("./lyrionClient");
 const { LyrionFavorites } = require("./lyrionFavorites");
 const { ambiguousLibraryUrl } = require("./lyrionItems");
 
-function createLyrionApi({ roon, readJson, sendJson, catalogue=null, client = new LyrionClient({itemsFile:path.join(__dirname,"../data/lyrion-items.json")}), file = path.join(__dirname, "../data/lyrion-selection.json"), favoritesFile = path.join(__dirname, "../data/lyrion-favorites.json") }) {
+function createLyrionApi({ roon, readJson, sendJson, catalogue=null, hqplayerLinks = {}, playbackLinks = {}, client = new LyrionClient({itemsFile:path.join(__dirname,"../data/lyrion-items.json")}), file = path.join(__dirname, "../data/lyrion-selection.json"), favoritesFile = path.join(__dirname, "../data/lyrion-favorites.json") }) {
   const favorites = new LyrionFavorites(favoritesFile);
   const favoriteImages = items => items.map(item => ({ ...item,
     artwork: client.artwork ? client.artwork({ artwork_url: item.artwork }) : item.artwork }));
@@ -50,6 +50,13 @@ function createLyrionApi({ roon, readJson, sendJson, catalogue=null, client = ne
       lyrion: state?(state.displayPlaybackState||state):null };
   }
   async function displayStatus(player,offset,limit){const state=await siriusxm.overlay(await client.status(player,offset,limit));return catalogue?catalogue.enrich(state):state;}
+  const webLink = value => { try { const link = new URL(String(value || "")); return /^https?:$/.test(link.protocol) ? link.href : ""; } catch { return ""; } };
+  async function linksToHqplayer() {
+    let web = webLink(hqplayerLinks.webUrl);
+    if (!web) { const host = await client.hqplayerWebHost?.().catch(() => ""); if (host) web = webLink(`http://${host.includes(":") ? `[${host}]` : host}:8088`); }
+    const tuner = webLink(hqplayerLinks.tunerUrl);
+    return [web && { id: "hqplayer", label: "Web Interface", url: web }, tuner && { id: "hqptuner", label: "HQPTuner", url: tuner }].filter(Boolean);
+  }
   async function handle(req, res, url) {
     const route = url.pathname.slice("/api/lyrion/".length);
     if (req.method === "GET" && route === "artwork") {
@@ -101,6 +108,8 @@ function createLyrionApi({ roon, readJson, sendJson, catalogue=null, client = ne
       selectedPlayer = player;
       return sendJson(res, 200, { selectedPlayer });
     }
+    if (req.method === "GET" && route === "hqplayer-links") return sendJson(res, 200, { links: await linksToHqplayer() });
+    if (req.method === "GET" && route === "playback-links") { const rouen = webLink(playbackLinks.rouenUrl); return sendJson(res, 200, { links: rouen ? [{ id: "rouen", label: "Rouen", url: rouen }] : [] }); }
     if (!player) { const error = new Error("Choose a Lyrion player first."); error.statusCode = 400; throw error; }
     if (req.method === "GET" && ["status","now-playing","queue"].includes(route)) {
       const station=client.artistStations?.status(player)||null;
