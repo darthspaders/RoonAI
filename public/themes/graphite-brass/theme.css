@@ -15,3 +15,18 @@ h1, h2, .appIdentityName, #nowTitle, #lyrionTitle {
   font-weight: 400;
   letter-spacing: 0;
 }
+
+@layer pills {
+  :is(.lyrionChoices, .lyrionTabs, .viewTabs, .secondaryNavItems, .lyrionCenterViews, .dbViewSwitch, .tidalLibraryFilters) button:is(.active, [aria-pressed="true"], [aria-current="page"], [aria-selected="true"]) {
+    background: #c9a45c !important;
+    border-color: #c9a45c !important;
+    box-shadow: none !important;
+    color: #17191c !important;
+    font-weight: 700 !important;
+  }
+
+  :is(.lyrionChoices, .lyrionTabs, .viewTabs, .secondaryNavItems, .lyrionCenterViews, .dbViewSwitch, .tidalLibraryFilters) button:is(.active, [aria-pressed="true"], [aria-current="page"], [aria-selected="true"]):hover {
+    background: #d6b46e !important;
+    border-color: #d6b46e !important;
+  }
+}

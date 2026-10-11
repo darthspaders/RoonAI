@@ -249,3 +249,19 @@ test("graphite and brass ships Manrope and Young Serif with their licence and us
   assert.match(css, /body \{[^}]*font-family: "Manrope"/);
   assert.match(css, /h1, h2[^{]*\{[^}]*font-family: "Young Serif"/);
 });
+
+test("graphite and brass fills the selected pill in every pill group, Lyrion's tabs included, with solid brass and dark text, and leaves cards alone", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "public", "themes", "graphite-brass", "theme.css"), "utf8");
+  const groups = ":is(.lyrionChoices, .lyrionTabs, .viewTabs, .secondaryNavItems, .lyrionCenterViews, .dbViewSwitch, .tidalLibraryFilters) button";
+  const state = ':is(.active, [aria-pressed="true"], [aria-current="page"], [aria-selected="true"])';
+  assert.ok(css.includes("@layer pills {"), "brass pills share the pills layer");
+  const rule = (suffix) => css.match(new RegExp(`${(groups + state + suffix).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\{([^}]*)\\}`))?.[1];
+  const solid = rule("");
+  assert.ok(solid, "selected pill rule");
+  const value = (block, prop) => block.match(new RegExp(`\\n\\s*${prop}: ([^;]+?) !important;`))?.[1];
+  assert.deepEqual(["background", "border-color", "color"].map((p) => value(solid, p)), ["#c9a45c", "#c9a45c", "#17191c"]);
+  const hover = rule(":hover");
+  assert.ok(hover, "selected pill hover rule");
+  for (const fill of [value(solid, "background"), value(hover, "background")]) assert.ok(contrast(fill, "#17191c") >= 4.5, `${fill} on #17191c`);
+  assert.doesNotMatch(css, /scoringModeCard/);
+});
