@@ -176,3 +176,4 @@ body.lyrionFullscreenOpen {overflow:hidden;}
 .lyrionExploreTile img {width:52px;height:52px;object-fit:contain;}
 .lyrionExploreTile span {font-size:13px;line-height:1.3;overflow-wrap:anywhere;}
 @media(max-width:600px){.lyrionShelfRow{grid-auto-columns:124px;gap:12px;}.lyrionExploreGrid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));}}
+#lyrionView .lyrionExploreTile img.lyrionIconPlate {box-sizing:border-box;padding:7px;border-radius:10px;}

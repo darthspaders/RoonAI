@@ -427,6 +427,15 @@
     if(result.results.length===1&&result.results[0].request){browseRequest=result.results[0].request;$("lyrionMore").hidden=result.results[0].items.length>=result.results[0].count;}
     $("lyrionBrowseTitle").textContent=result.results.map(r=>`${r.source}: ${r.error||(r.searchable===false?"browse only":`${r.items.length} of ${r.count} results`)}`).join(" · ");
   }
+  function plateDarkGlyph(img){
+    try{
+      const canvas=document.createElement("canvas");canvas.width=canvas.height=32;const g=canvas.getContext("2d");g.drawImage(img,0,0,32,32);
+      const data=g.getImageData(0,0,32,32).data;let covered=0,light=0;
+      for(let i=0;i<data.length;i+=4){if(data[i+3]<128)continue;covered++;light+=(0.2126*data[i]+0.7152*data[i+1]+0.0722*data[i+2])/255;}
+      const dark=covered>0&&covered<0.6*1024&&light/covered<0.2;
+      img.classList.toggle("lyrionIconPlate",dark);img.style.background=dark?"#ececec":"";
+    }catch{}
+  }
   function homeCard(item,open){
     const [title,...rest]=String(item.title).split("\n"),artist=rest.join(" · ");
     const b=document.createElement("button");b.type="button";b.className="lyrionCard";
@@ -449,7 +458,7 @@
     const explore=data.explore?.sources||[];
     $("lyrionExplore").replaceChildren(...explore.map(source=>{
       const b=document.createElement("button");b.type="button";b.className="lyrionExploreTile";
-      const icon=document.createElement("img");icon.alt="";artworkImage(icon,source.artwork||"");
+      const icon=document.createElement("img");icon.alt="";icon.addEventListener("load",()=>{if(source.artworkFallback&&icon.src.endsWith(source.artworkFallback))delete icon.dataset.retryAt;plateDarkGlyph(icon);});artworkImage(icon,source.artwork||source.artworkFallback||"","",source.artworkFallback||"");
       const label=document.createElement("span");label.textContent=source.title;b.append(icon,label);b.onclick=run(()=>openSource(source.id));
       const row=document.createElement("li");row.append(b);return row;
     }));

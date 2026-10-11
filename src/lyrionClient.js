@@ -139,12 +139,13 @@ class LyrionClient {
   async sources(player) {
     const apps = await this.rpc(player, ["apps", 0, 100, "menu:1"]);
     const radios = await this.rpc(player, ["radios", 0, 100, "menu:1"]);
-    const items = [...(apps.item_loop || []), ...(radios.item_loop || [])];
-    return [...LIBRARY_SOURCES.map(({ id, title, icon }) => ({ id, title, artwork: this.artwork({ artwork_url: icon }), actions: {} })), ...items.map(item => {
+    const radioFallback = this.artwork({ artwork_url: "html/images/radio.png" });
+    const items = [...(apps.item_loop || []).map(item => [item, ""]), ...(radios.item_loop || []).map(item => [item, radioFallback])];
+    return [...LIBRARY_SOURCES.map(({ id, title, icon }) => ({ id, title, artwork: this.artwork({ artwork_url: icon }), actions: {} })), ...items.map(([item, artworkFallback]) => {
       const action = resolveAction(item, {}, "go");
       const id = action && (LIBRARY_IDS.has(action.cmd[0]) ? `app:${action.cmd[0]}` : action.cmd[0]);
       const artwork = item.icon || item["icon-id"] ? this.artwork({ artwork_url: item.icon || item["icon-id"] }) : "";
-      return action ? { id, title: item.text, ...(artwork ? { artwork } : {}), actions: { browse: this.remember({ ...action, kind: "browse" }, player, item.text) }, input: !!item.input } : null;
+      return action ? { id, title: item.text, ...(artwork ? { artwork } : {}), ...(artworkFallback ? { artworkFallback } : {}), actions: { browse: this.remember({ ...action, kind: "browse" }, player, item.text) }, input: !!item.input } : null;
     }).filter(Boolean)];
   }
   async home(player) {

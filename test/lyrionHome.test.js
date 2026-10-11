@@ -23,6 +23,8 @@ const favorites = { count: 1, base: { actions: {
   presetParams: { favorites_url: "http://api.somafm.com/dronezone256.pls", favorites_type: "audio", favorites_title: "SomaFM Drone Zone 256" } }] };
 const apps = { item_loop: [{ text: "Radio Paradise", icon: "plugins/RadioParadise/html/icon.png",
   actions: { go: { cmd: ["radioparadise", "items"], params: { menu: "radioparadise" } } } }] };
+const radios = { item_loop: [{ text: "SomaFM", "icon-id": "plugins/SomaFM/SomaFM_svg.png",
+  actions: { go: { cmd: ["somafm", "items"], params: { menu: "somafm" } } } }] };
 
 function recordingClient(overrides = {}) {
   const client = new LyrionClient({ baseUrl: "http://lms.example:9000" });
@@ -31,7 +33,7 @@ function recordingClient(overrides = {}) {
     client.calls.push(command);
     const key = command[0] === "browselibrary" ? command.find(part => /^sort:/.test(part)) || "browse" : command[0];
     if (overrides[key] instanceof Error) throw overrides[key];
-    return overrides[key] || { "sort:new": newAlbums, favorites, apps, radios: { item_loop: [] } }[key] || { count: 0, item_loop: [] };
+    return overrides[key] || { "sort:new": newAlbums, favorites, apps, radios }[key] || { count: 0, item_loop: [] };
   };
   return client;
 }
@@ -41,6 +43,14 @@ test("new music and Lyrion favorites are offered as library sources after songs,
   assert.deepEqual(sources.slice(0, 5).map(s => [s.id, s.title]), [
     ["local", "Local Library / NAS"], ["local-albums", "Local Library: Albums"], ["local-artists", "Local Library: Artists"],
     ["local-new", "Local Library: New Music"], ["favorites", "Lyrion Favorites"]]);
+});
+
+test("radio menu sources fall back to LMS's stock radio icon when their own icon fails, and apps do not", async () => {
+  const sources = await recordingClient().sources("p1");
+  const soma = sources.find(s => s.title === "SomaFM");
+  assert.equal(new URL(soma.artwork, "http://rh.example").searchParams.get("path"), "/plugins/SomaFM/SomaFM_svg.png");
+  assert.equal(new URL(soma.artworkFallback, "http://rh.example").searchParams.get("path"), "/html/images/radio.png");
+  assert.equal(sources.find(s => s.title === "Radio Paradise").artworkFallback, undefined);
 });
 
 test("new music lists albums newest first and each album plays or opens its tracks", async () => {
@@ -120,6 +130,7 @@ const section = (from, to) => source.slice(source.indexOf(from), source.indexOf(
 
 function element(tag) {
   const node = { tagName: tag, children: [], dataset: {}, attributes: {}, hidden: false, className: "", disabled: false,
+    addEventListener(type, fn) { (this.listeners ||= {})[type] = fn; },
     append(...nodes) { this.children.push(...nodes); }, prepend(...nodes) { this.children.unshift(...nodes); },
     replaceChildren(...nodes) { this.children = nodes; },
     setAttribute(name, value) { this.attributes[name] = String(value); }, getAttribute(name) { return this.attributes[name]; },
@@ -133,17 +144,18 @@ function homeHarness() {
   const calls = [];
   const context = { player: "p1", calls, nodes,
     document: { createElement: element }, $: id => nodes[id],
-    run: fn => async () => fn(), artworkImage: (img, url) => { img.src = url; },
+    run: fn => async () => fn(), artworkImage: (img, url, identity, fallback) => { img.src = url; img.fallback = fallback; },
     api: async (route, body) => { calls.push(["api", route, body]); return {}; },
     refreshStatus: async () => calls.push(["refreshStatus"]), selectTab: (id) => calls.push(["selectTab", id]),
-    renderSourceChoices: () => calls.push(["renderSourceChoices"]), home: async () => calls.push(["home", nodes.lyrionSource.value]) };
+    plateDarkGlyph: () => {}, renderSourceChoices: () => calls.push(["renderSourceChoices"]), home: async () => calls.push(["home", nodes.lyrionSource.value]) };
   vm.runInNewContext(`${section("  function button(label, fn)", "  let showResults=")}${section("  function homeCard(", "  let statusRequest=")}; this.renderHome = renderHome; this.openSource = openSource;`, context);
   return context;
 }
 const homeData = {
   newMusic: { count: 100, items: [{ title: "Say You Will\nFleetwood Mac", artwork: "/art/1", actions: { play: "play-album", browse: "open-album" } }] },
   favorites: { count: 1, items: [{ title: "SomaFM Drone Zone 256", artwork: "/art/2", actions: { play: "play-drone" } }] },
-  explore: { sources: [{ id: "local", title: "Local Library / NAS" }, { id: "radioparadise", title: "Radio Paradise", artwork: "/art/3", actions: { browse: "rp" } }] }
+  explore: { sources: [{ id: "local", title: "Local Library / NAS" }, { id: "radioparadise", title: "Radio Paradise", artwork: "/art/3", actions: { browse: "rp" } },
+    { id: "somafm", title: "SomaFM", artwork: "/art/broken", artworkFallback: "/art/radio", actions: { browse: "soma" } }] }
 };
 
 test("the Home tab shows new albums with their artist, favorites and explore tiles", () => {
@@ -155,7 +167,9 @@ test("the Home tab shows new albums with their artist, favorites and explore til
   assert.equal(album.getAttribute("aria-label"), "Play Say You Will by Fleetwood Mac");
   assert.equal(all(album, "img")[0].src, "/art/1");
   assert.deepEqual(all(h.nodes.lyrionRadios, "button").map(b => b.getAttribute("aria-label")), ["Play SomaFM Drone Zone 256"]);
-  assert.deepEqual(all(h.nodes.lyrionExplore, "button").map(b => b.textContent), ["Local Library / NAS", "Radio Paradise"]);
+  assert.deepEqual(all(h.nodes.lyrionExplore, "button").map(b => b.textContent), ["Local Library / NAS", "Radio Paradise", "SomaFM"]);
+  assert.deepEqual(all(h.nodes.lyrionExplore, "img").map(i => typeof i.listeners?.load), ["function", "function", "function"]);
+  assert.deepEqual(all(h.nodes.lyrionExplore, "img").map(i => [i.src, i.fallback]), [["", ""], ["/art/3", ""], ["/art/broken", "/art/radio"]]);
 });
 
 test("tapping an album or a favorite plays it now on the selected player", async () => {
@@ -215,4 +229,39 @@ test("a favorite that is a folder opens in Sources instead of playing", async ()
   await folder.onclick();
   assert.deepEqual(JSON.parse(JSON.stringify(h.calls)), [["selectTab", "sources"], ["browse", { token: "open-folder" }]]);
   assert.equal(h.history.length, 0);
+});
+
+function glyphHarness(pixel, coverage) {
+  const data = new Uint8ClampedArray(32 * 32 * 4);
+  for (let i = 0; i < 32 * 32; i++) if (i < coverage * 32 * 32) data.set([...pixel, 255], i * 4);
+  const context = { document: { createElement: () => ({ getContext: () => ({ drawImage() {}, getImageData: () => ({ data }) }) }) } };
+  vm.runInNewContext(section("  function plateDarkGlyph(", "  function homeCard("), context);
+  const img = { style: {}, classList: { set: new Set(), toggle(name, on) { on ? this.set.add(name) : this.set.delete(name); } } };
+  context.plateDarkGlyph(img);
+  return img;
+}
+
+test("a dark glyph on a transparent icon, like HQPlayer Bridge's, gets a light plate so it shows on a dark tile", () => {
+  const img = glyphHarness([0, 0, 0], 0.14);
+  assert.equal(img.classList.set.has("lyrionIconPlate"), true);
+  assert.equal(img.style.background, "#ececec");
+});
+
+test("coloured, light or full-bleed icons keep their own look", () => {
+  for (const [pixel, coverage] of [[[30, 215, 96], 0.5], [[240, 240, 240], 0.3], [[10, 10, 10], 0.95], [[0, 0, 0], 0]]) {
+    const img = glyphHarness(pixel, coverage);
+    assert.equal(img.classList.set.has("lyrionIconPlate"), false, JSON.stringify([pixel, coverage]));
+    assert.equal(img.style.background, "");
+  }
+});
+
+test("once an explore icon has fallen back to the stock radio icon it stops retrying the broken one", () => {
+  const h = homeHarness();
+  h.renderHome(homeData);
+  const [, rp, soma] = all(h.nodes.lyrionExplore, "img");
+  for (const img of [rp, soma]) img.dataset.retryAt = "123";
+  soma.src = "http://rh.example/art/radio"; soma.listeners.load();
+  rp.listeners.load();
+  assert.equal(soma.dataset.retryAt, undefined);
+  assert.equal(rp.dataset.retryAt, "123");
 });
