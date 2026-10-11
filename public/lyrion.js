@@ -6,6 +6,11 @@
   ui.innerHTML = `
     <div class="panel lyrionToolbar"><label for="lyrionPlayer">Lyrion player</label><select id="lyrionPlayer"><option value="">Choose a player</option></select><button id="lyrionRefresh" type="button">Refresh players</button></div>
     <p id="lyrionMessage" role="status" aria-live="polite"></p>
+    <section class="panel lyrionHome" id="lyrionHomeView" aria-label="Lyrion home">
+      <section class="lyrionShelf" aria-labelledby="lyrionNewMusicHeading"><div class="lyrionShelfHead"><h2 id="lyrionNewMusicHeading">New Music</h2><button id="lyrionNewMusicMore" type="button">More</button></div><p id="lyrionNewMusicStatus" class="muted" role="status" hidden></p><ul id="lyrionNewMusic" class="lyrionShelfRow"></ul></section>
+      <section class="lyrionShelf" aria-labelledby="lyrionRadiosHeading"><div class="lyrionShelfHead"><h2 id="lyrionRadiosHeading">Favorites</h2></div><p id="lyrionRadiosStatus" class="muted" role="status" hidden></p><ul id="lyrionRadios" class="lyrionShelfRow"></ul></section>
+      <section class="lyrionShelf" aria-labelledby="lyrionExploreHeading"><div class="lyrionShelfHead"><h2 id="lyrionExploreHeading">Explore</h2></div><p id="lyrionExploreStatus" class="muted" role="status" hidden></p><ul id="lyrionExplore" class="lyrionExploreGrid"></ul></section>
+    </section>
     <section class="panel lyrionNow" id="lyrionNow" aria-label="Lyrion now playing">
       <img id="lyrionBackdrop" class="lyrionBackdrop" alt="" aria-hidden="true" hidden>
       <div class="lyrionStageBar"><span class="muted">Lyrion · Now playing</span><button id="lyrionFullscreen" type="button" aria-controls="lyrionNow" aria-pressed="false">Fullscreen</button></div>
@@ -61,7 +66,7 @@
   document.querySelector(".appHeader").after(bar);
   let player = "", sources = [], favorites = [], browseRequest = {}, history = [], queueOffset = 0, epoch = 0, busy = false, polling = false;
   // Keep the existing controls and state; navigation only changes visibility.
-  const tabDefinitions=[['now','Now playing', $('lyrionNow')],['channels','Channels',ui.querySelector('.lyrionFavorites')],['shows','Shows',$('lyrionShowsHeading').closest('section')],['artists','Artist stations',$('lyrionArtists')],['xtra','Xtra channels',$('lyrionXtra')],['sources','Sources',ui.querySelector('.lyrionColumns > section')],['queue','Queue',ui.querySelector('.lyrionColumns > section:last-child')]];
+  const tabDefinitions=[['home','Home',$('lyrionHomeView')],['now','Now playing', $('lyrionNow')],['channels','Channels',ui.querySelector('.lyrionFavorites')],['shows','Shows',$('lyrionShowsHeading').closest('section')],['artists','Artist stations',$('lyrionArtists')],['xtra','Xtra channels',$('lyrionXtra')],['sources','Sources',ui.querySelector('.lyrionColumns > section')],['queue','Queue',ui.querySelector('.lyrionColumns > section:last-child')]];
   const tabs=document.createElement('nav');tabs.className='lyrionTabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Lyrion sections');
   $('lyrionMessage').before(tabs);
   const compact=document.createElement('div');compact.className='lyrionCompact';compact.hidden=true;
@@ -78,7 +83,7 @@
     const wrapper=document.createElement('section');wrapper.id='lyrionPanel-'+id;wrapper.setAttribute('role','tabpanel');wrapper.setAttribute('aria-labelledby','lyrionTab-'+id);wrapper.className='lyrionTabPanel';
     panel.before(wrapper);wrapper.append(panel);
     // The wrapper owns panel semantics; existing sections retain their layout.
-    const b=document.createElement('button');b.type='button';b.id='lyrionTab-'+id;b.textContent=label;b.setAttribute('role','tab');b.setAttribute('aria-controls',wrapper.id);b.onclick=()=>selectTab(id);tabs.append(b);
+    const b=document.createElement('button');b.type='button';b.id='lyrionTab-'+id;b.textContent=label;b.setAttribute('role','tab');b.setAttribute('aria-controls',wrapper.id);b.onclick=()=>{selectTab(id);if(id==='home'&&player)void loadHome();};tabs.append(b);
     const def=tabDefinitions.find(t=>t[0]===id);def[2]=wrapper;
   }
   const columns=ui.querySelector('.lyrionColumns');for(const child of [...columns.children])columns.before(child);columns.remove();
@@ -414,13 +419,55 @@
     browseRequest=request; renderItems(result.items,append); $("lyrionMore").hidden=(request.offset||0)+result.items.length>=result.count;
     $("lyrionBack").disabled=!history.length; $("lyrionBrowseTitle").textContent=result.message || `${result.count} items`;
   }
-  async function home() { history=[]; const source=sources.find(s=>s.id===$("lyrionSource").value); await browse(["local","local-albums","local-artists"].includes(source?.id)?{source:source.id}:{token:source?.actions.browse,query:$("lyrionQuery").value}); }
+  async function home() { history=[]; const source=sources.find(s=>s.id===$("lyrionSource").value); await browse(source?.actions?.browse?{token:source.actions.browse,query:$("lyrionQuery").value}:{source:source?.id||"local"}); }
   async function search(all) {
     const version=epoch; const result=await api("search",{query:$("lyrionQuery").value,sources:all?[]:[$("lyrionSource").value]}); if(version!==epoch)return;
     renderItems(result.results.flatMap(r=>r.items)); $("lyrionMore").hidden=true;
     history=[]; $("lyrionBack").disabled=true;
     if(result.results.length===1&&result.results[0].request){browseRequest=result.results[0].request;$("lyrionMore").hidden=result.results[0].items.length>=result.results[0].count;}
     $("lyrionBrowseTitle").textContent=result.results.map(r=>`${r.source}: ${r.error||(r.searchable===false?"browse only":`${r.items.length} of ${r.count} results`)}`).join(" · ");
+  }
+  function plateDarkGlyph(img){
+    try{
+      const canvas=document.createElement("canvas");canvas.width=canvas.height=32;const g=canvas.getContext("2d");g.drawImage(img,0,0,32,32);
+      const data=g.getImageData(0,0,32,32).data;let covered=0,light=0;
+      for(let i=0;i<data.length;i+=4){if(data[i+3]<128)continue;covered++;light+=(0.2126*data[i]+0.7152*data[i+1]+0.0722*data[i+2])/255;}
+      const dark=covered>0&&covered<0.6*1024&&light/covered<0.2;
+      img.classList.toggle("lyrionIconPlate",dark);img.style.background=dark?"#ececec":"";
+    }catch{}
+  }
+  function homeCard(item,open){
+    const [title,...rest]=String(item.title).split("\n"),artist=rest.join(" · ");
+    const b=document.createElement("button");b.type="button";b.className="lyrionCard";
+    const art=document.createElement("span");art.className="lyrionCardArt";const img=document.createElement("img");img.alt="";artworkImage(img,item.artwork||"");art.append(img);
+    const name=document.createElement("strong");name.textContent=title;b.append(art,name);
+    if(artist){const sub=document.createElement("small");sub.textContent=artist;b.append(sub);}
+    b.setAttribute("aria-label",(item.actions?.play?"Play ":"Open ")+title+(artist?" by "+artist:""));b.onclick=run(open);
+    const row=document.createElement("li");row.append(b);return row;
+  }
+  function shelfStatus(id,text){const status=$(id);status.textContent=text;status.hidden=!text;}
+  async function openSource(id){$("lyrionSource").value=id;renderSourceChoices();selectTab("sources",true);await home();}
+  function renderHome(data){
+    const opener=item=>item.actions?.play?async()=>{await api("queue",{action:"play",token:item.actions.play});await refreshStatus();}
+      :item.actions?.browse?async()=>{selectTab("sources",true);history=[];await browse({token:item.actions.browse});}:null;
+    for(const [list,shelf,failure,empty] of [["lyrionNewMusic",data.newMusic,"Could not load new music. ","No albums in the Lyrion library yet."],
+      ["lyrionRadios",data.favorites,"Could not load favorites. ","No favorites in Lyrion yet. Favorite a station or album in Lyrion and it appears here."]]){
+      $(list).replaceChildren(...(shelf?.items||[]).map(item=>[item,opener(item)]).filter(([,open])=>open).map(([item,open])=>homeCard(item,open)));
+      shelfStatus(list+"Status",shelf?.error?failure+shelf.error:$(list).children.length?"":empty);
+    }
+    const explore=data.explore?.sources||[];
+    $("lyrionExplore").replaceChildren(...explore.map(source=>{
+      const b=document.createElement("button");b.type="button";b.className="lyrionExploreTile";
+      const icon=document.createElement("img");icon.alt="";icon.addEventListener("load",()=>{if(source.artworkFallback&&icon.src.endsWith(source.artworkFallback))delete icon.dataset.retryAt;plateDarkGlyph(icon);});artworkImage(icon,source.artwork||source.artworkFallback||"","",source.artworkFallback||"");
+      const label=document.createElement("span");label.textContent=source.title;b.append(icon,label);b.onclick=run(()=>openSource(source.id));
+      const row=document.createElement("li");row.append(b);return row;
+    }));
+    shelfStatus("lyrionExploreStatus",data.explore?.error?"Could not load sources. "+data.explore.error:explore.length?"":"No sources reported by this player.");
+  }
+  async function loadHome(){
+    const version=epoch,requestedPlayer=player;
+    try{const data=await api("home",null,playerQuery());if(version===epoch&&requestedPlayer===player)renderHome(data);}
+    catch(error){if(version===epoch&&requestedPlayer===player)renderHome({newMusic:{error:error.message},favorites:{error:error.message},explore:{error:error.message}});}
   }
   let statusRequest=0,lastAppliedStatus=0;
   async function refreshStatus() {
@@ -474,10 +521,10 @@
     if(version!==epoch||requestedPlayer!==player)return;
     $("lyrionArtistResults").replaceChildren();$("lyrionArtistStatus").textContent="Search an artist or choose a shortcut."; queueOffset=0; history=[]; $("lyrionResults").replaceChildren(); $("lyrionQueue").replaceChildren();
     ui.querySelectorAll("[data-lyrion-control]").forEach(b=>{b.disabled=!player;});
-    if(!player){ $("lyrionSxm").hidden=true; setScrollingLabel("lyrionTitle","Choose your Lyrion player"); setScrollingLabel("lyrionArtist",""); $("lyrionAlbum").textContent=""; artworkImage($("lyrionCover"), ""); artworkImage($("lyrionBackdrop"), ""); $("lyrionStageQueue").textContent=""; $("lyrionChain").textContent="Lyrion"; $("lyrionProgress").value=0; $("lyrionTime").textContent=""; $("lyrionQueueCount").textContent=""; return; }
+    if(!player){ for(const id of ["lyrionNewMusic","lyrionRadios","lyrionExplore"])$(id).replaceChildren(); shelfStatus("lyrionNewMusicStatus","Choose a Lyrion player above to see its music."); shelfStatus("lyrionRadiosStatus",""); shelfStatus("lyrionExploreStatus",""); $("lyrionSxm").hidden=true; setScrollingLabel("lyrionTitle","Choose your Lyrion player"); setScrollingLabel("lyrionArtist",""); $("lyrionAlbum").textContent=""; artworkImage($("lyrionCover"), ""); artworkImage($("lyrionBackdrop"), ""); $("lyrionStageQueue").textContent=""; $("lyrionChain").textContent="Lyrion"; $("lyrionProgress").value=0; $("lyrionTime").textContent=""; $("lyrionQueueCount").textContent=""; return; }
     const availableSources=await api("sources",null,playerQuery());if(version!==epoch||requestedPlayer!==player)return;sources=availableSources.sources;
     $("lyrionSource").replaceChildren(...sources.map(s=>new Option(s.title,s.id)));
-    await refreshStatus(); await home();
+    void loadHome(); await refreshStatus(); await home();
   }
   async function refreshPlayers() {
     const result=await api("players"),preferred=player||result.selectedPlayer||""; player=result.players.some(p=>p.id===preferred)?preferred:"";
@@ -487,7 +534,7 @@
     else if(preferred&&!player)message("Your previous Lyrion player is unavailable. Choose a player above to start playback.");
   }
   $("lyrionPlayer").onchange=run(async()=>{player=$("lyrionPlayer").value; if(player)await api("player",{});await loadPlayer();});
-  $("lyrionRefresh").onclick=run(refreshPlayers); $("lyrionSource").onchange=run(home); $("lyrionHome").onclick=run(home);
+  $("lyrionRefresh").onclick=run(refreshPlayers); $("lyrionSource").onchange=run(home); $("lyrionHome").onclick=run(home); $("lyrionNewMusicMore").onclick=run(()=>openSource("local-new"));
   $("lyrionFindChannels").onclick=run(async()=>{
     const source=sources.find(s=>s.id==="siriusxm");if(!source)throw new Error("Choose a connected player with the SiriusXM plugin enabled in Lyrion.");
     $("lyrionSource").value=source.id;renderSourceChoices();selectTab("sources",true);await home();

@@ -31,8 +31,13 @@ playback. Roon and Lyrion retain independent selections and queues.
 
 ## Browse and play
 
-The Lyrion interface has Now playing, Channels, Shows, Artist stations, Xtra
-channels, Sources and Queue views. Browse or search Sources to reach your local
+The Lyrion interface has Home, Now playing, Channels, Shows, Artist stations,
+Xtra channels, Sources and Queue views. Home mirrors the Lyrion web UI's home:
+the 25 newest albums (**More** opens the full list), the server's own Lyrion
+favorites, and an Explore grid of every source. Choosing an album or a favorite
+plays it now; choosing an Explore tile opens that source in Sources. New Music
+and Lyrion Favorites are also Sources entries; they browse but are skipped by
+search. Browse or search Sources to reach your local
 library, radio menus and installed LMS apps. Install and sign into subscription
 plugins in LMS first. Some menus return another browse/search category; open it
 before selecting playable results.

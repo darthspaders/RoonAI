@@ -104,12 +104,12 @@ test("choosing a local library source in the UI browses it by source id rather t
   const source = fs.readFileSync(require.resolve("../public/lyrion.js"), "utf8");
   const homeCode = source.slice(source.indexOf("  async function home()"), source.indexOf("  async function search(all)"));
   const requests = [];
-  const context = { sources: [{ id: "local" }, { id: "local-albums" }, { id: "spotty", actions: { browse: "tok" } }],
+  const context = { sources: [{ id: "local", actions: {} }, { id: "local-albums", actions: {} }, { id: "local-new", actions: {} }, { id: "favorites", actions: {} }, { id: "spotty", actions: { browse: "tok" } }],
     $: id => ({ lyrionSource: { value: context.selected }, lyrionQuery: { value: "cure" } })[id],
     browse: async request => requests.push(request), history: [], selected: "" };
   vm.runInNewContext(`${homeCode}; this.home = home;`, context);
-  for (const selected of ["local", "local-albums", "spotty"]) { context.selected = selected; await context.home(); }
-  assert.deepEqual(JSON.parse(JSON.stringify(requests)), [{ source: "local" }, { source: "local-albums" }, { token: "tok", query: "cure" }]);
+  for (const selected of ["local", "local-albums", "local-new", "favorites", "spotty"]) { context.selected = selected; await context.home(); }
+  assert.deepEqual(JSON.parse(JSON.stringify(requests)), [{ source: "local" }, { source: "local-albums" }, { source: "local-new" }, { source: "favorites" }, { token: "tok", query: "cure" }]);
 });
 
 test("assistant tools can browse the album and artist library views", async () => {
