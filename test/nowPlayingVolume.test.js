@@ -155,3 +155,9 @@ test("the volume row fits a narrow rail: it never outgrows its container and the
   assert.match(rule, /min-width: 0;/);
   assert.match(css, /\.nowVolume \.volumeReadout \{[^}]*min-width: 3ch;[^}]*text-align: left;/);
 });
+
+test("the volume slider shows a hand when it can be dragged and a grabbing cursor while dragged, like the position sliders", () => {
+  const css = fs.readFileSync(require.resolve("../public/styles.css"), "utf8");
+  assert.match(css, /\.nowVolume \.volumeSlider:not\(:disabled\) \{\s*cursor: pointer;\s*\}/);
+  assert.match(css, /\.nowVolume \.volumeSlider:not\(:disabled\):active \{\s*cursor: grabbing;\s*\}/);
+});

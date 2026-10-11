@@ -12457,3 +12457,11 @@ body .nowVolume .volumeSlider,
   font-variant-numeric: tabular-nums;
   text-align: left;
 }
+
+.nowVolume .volumeSlider:not(:disabled) {
+  cursor: pointer;
+}
+
+.nowVolume .volumeSlider:not(:disabled):active {
+  cursor: grabbing;
+}
