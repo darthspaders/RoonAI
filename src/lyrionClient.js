@@ -40,6 +40,7 @@ function libraryReference(actions, server, player, source) {
   return { libraryIdentity: { type, id, server, playerId: player, params: libraryParams(native.params) },
     libraryActions: Object.fromEntries(Object.entries(actions).filter(([,action])=>action.cmd.length===1 && action.cmd[0]==="playlistcontrol")) };
 }
+const usableHost = host => !!host && !/^(127\.|0\.0\.0\.0$|localhost$|::1?$|\[::1?\]$)/i.test(host);
 class LyrionClient {
   constructor({ baseUrl = process.env.LYRION_URL || "http://127.0.0.1:9000", fetchImpl = fetch, itemsFile } = {}) {
     this.baseUrl = new URL(baseUrl).origin;
@@ -66,11 +67,18 @@ class LyrionClient {
     return (result.players_loop || []).map(p => ({ id: p.playerid, name: p.name, connected: !!Number(p.connected), playing: !!Number(p.isplaying), model: p.model }));
   }
   async hqplayerFor(player, s) {
-    const host = String(s.player_ip || "").replace(/:\d+$/, "");
-    if (!host || !this.hqplayer) return null;
+    if (!this.hqplayer) return null;
     try {
-      if (!this.playerModels || Date.now() - this.playerModels.at > 30000) this.playerModels = { at: Date.now(), list: await this.players() };
-      return this.playerModels.list.find(p => p.id === player)?.model === "hqplayer" ? await this.hqplayer.status(host) : null;
+      if (!this.playerModels || Date.now() - this.playerModels.at > 30000) {
+        const list = await this.players();
+        const pref = list.some(p => p.model === "hqplayer") ? await this.rpc("", ["pref", "plugin.hqplayerbridge:addresses", "?"]).catch(() => ({})) : {};
+        this.playerModels = { at: Date.now(), list, addresses: String(pref?._p2 || "").split(/[\s,;]+/).filter(usableHost) };
+      }
+      if (this.playerModels.list.find(p => p.id === player)?.model !== "hqplayer") return null;
+      const raw = String(s.player_ip || "").trim(), own = /^[^:]+:\d+$/.test(raw) ? raw.replace(/:\d+$/, "") : raw;
+      const configured = this.playerModels.addresses;
+      const host = configured.length === 1 ? configured[0] : configured.includes(own) ? own : !configured.length && usableHost(own) ? own : "";
+      return host ? await this.hqplayer.status(host) : null;
     } catch { return null; }
   }
   async requirePlayer(id) {

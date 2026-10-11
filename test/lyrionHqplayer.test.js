@@ -49,13 +49,39 @@ test("an unreachable or silent HQPlayer reports null instead of stalling", async
   assert.equal(await refused.status("192.168.60.76"), null);
 });
 
-function lmsClient(model) {
+function lmsClient(model, { playerIp = "192.168.60.76:52550", addresses = null } = {}) {
   const client = new LyrionClient({ baseUrl: "http://lms.example:9000" });
   client.rpc = async (player, command) => command[0] === "serverstatus"
     ? { players_loop: [{ playerid: "p1", name: "HQPlayer (HQPlayerEmbedded)", connected: 1, model }] }
-    : { mode: "play", player_connected: 1, player_ip: "192.168.60.76:52550", playlist_tracks: 0 };
+    : command[0] === "pref" ? { _p2: addresses }
+    : { mode: "play", player_connected: 1, player_ip: playerIp, playlist_tracks: 0 };
   return client;
 }
+async function askedHosts(model, options) {
+  const hosts = [], client = lmsClient(model, options);
+  client.hqplayer = { status: async host => { hosts.push(host); return parseHqplayerStatus(DSD); } };
+  const status = await client.status("p1");
+  return { hosts, hqplayer: status.hqplayer };
+}
+
+test("HQPlayer is found at the address the HQPlayer Bridge plugin is configured with, even when LMS lists the bridge player on loopback", async () => {
+  const { hosts, hqplayer } = await askedHosts("hqplayer", { playerIp: "127.0.0.1:0", addresses: "192.168.60.76" });
+  assert.deepEqual(hosts, ["192.168.60.76"]);
+  assert.equal(hqplayer.filter, "poly-sinc-gauss-xla");
+});
+
+test("without a plugin address the player's own address is used, but never a loopback or unspecified one", async () => {
+  assert.deepEqual((await askedHosts("hqplayer", { playerIp: "192.168.60.80:1234" })).hosts, ["192.168.60.80"]);
+  for (const playerIp of ["127.0.0.1:0", "0.0.0.0:0", "localhost:9000", "::1"]) {
+    const { hosts, hqplayer } = await askedHosts("hqplayer", { playerIp });
+    assert.deepEqual([hosts, hqplayer], [[], null], playerIp);
+  }
+});
+
+test("several plugin addresses pick the one the player is on, and are otherwise too ambiguous to use", async () => {
+  assert.deepEqual((await askedHosts("hqplayer", { playerIp: "192.168.60.77:5", addresses: "192.168.60.76, 192.168.60.77" })).hosts, ["192.168.60.77"]);
+  assert.deepEqual((await askedHosts("hqplayer", { playerIp: "127.0.0.1:0", addresses: "192.168.60.76 192.168.60.77" })).hosts, []);
+});
 
 test("Lyrion status carries HQPlayer's output for an HQPlayer bridge player, found at that player's own address", async () => {
   const hosts = [];
