@@ -54,3 +54,8 @@ test("the Playback System and Lyrion Player labels are title-cased, visibly and 
   assert.match(source, /choices\('lyrionPlayer','Lyrion Player'\)/);
   assert.doesNotMatch(source, /Playback system|>Lyrion player<|'Lyrion player'/);
 });
+
+test("the Refresh Players button is title-cased like the other controls", () => {
+  assert.match(source, /<button id="lyrionRefresh" type="button">Refresh Players<\/button>/);
+  assert.doesNotMatch(source, />Refresh players</);
+});
