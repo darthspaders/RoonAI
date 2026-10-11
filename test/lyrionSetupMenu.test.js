@@ -39,3 +39,8 @@ test("the Setup menu closes on a click outside it or on Escape, and stays open f
   h.listeners.keydown({ key: "Escape" }); assert.equal(h.menu.open, false); assert.equal(h.summary.focused, true);
   h.summary.focused = false; h.listeners.keydown({ key: "Escape" }); assert.equal(h.summary.focused, false);
 });
+
+test("the playback system hint is title-cased like the controls around it", () => {
+  assert.match(source, /<span id="playbackSystemHint" class="muted">Independent Players and Queues<\/span>/);
+  assert.doesNotMatch(source, /Independent players and queues/);
+});

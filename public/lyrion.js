@@ -57,7 +57,7 @@
     </div>`;
   document.querySelector(".shell").append(ui);
   const bar = document.createElement("div"); bar.className = "playbackSystemBar";
-  bar.innerHTML = `<label for="playbackSystem">Playback system</label><select id="playbackSystem"><option value="roon">Roon</option><option value="lyrion">Lyrion</option></select><span id="playbackSystemHint" class="muted">Independent players and queues</span>`;
+  bar.innerHTML = `<label for="playbackSystem">Playback system</label><select id="playbackSystem"><option value="roon">Roon</option><option value="lyrion">Lyrion</option></select><span id="playbackSystemHint" class="muted">Independent Players and Queues</span>`;
   document.querySelector(".appHeader").after(bar);
   let player = "", sources = [], favorites = [], browseRequest = {}, history = [], queueOffset = 0, epoch = 0, busy = false, polling = false;
   // Keep the existing controls and state; navigation only changes visibility.
