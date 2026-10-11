@@ -13,11 +13,16 @@ const fn = name => {
   return app.slice(start, end + 2);
 };
 
-function harness() {
+function harness(toggleId = "#resultsToggle", bodyId = "#resultsBody") {
   const toggle = { textContent: "", title: "", attrs: {}, setAttribute(k, v) { this.attrs[k] = String(v); } };
   const body = { hidden: false };
-  const context = { state: { resultsCollapsed: false }, $: s => ({ "#resultsToggle": toggle, "#resultsBody": body }[s] || null) };
-  vm.runInNewContext([fn("setResultsCollapsed"), "this.setResultsCollapsed = setResultsCollapsed;"].join("\n"), context);
+  const context = { state: { resultsCollapsed: false, composerCollapsed: false }, $: s => ({ [toggleId]: toggle, [bodyId]: body }[s] || null) };
+  vm.runInNewContext([
+    fn("setPanelFolded"),
+    fn("setResultsCollapsed"),
+    fn("setComposerCollapsed"),
+    "this.setResultsCollapsed = setResultsCollapsed; this.setComposerCollapsed = setComposerCollapsed;"
+  ].join("\n"), context);
   return { context, toggle, body };
 }
 
@@ -53,4 +58,37 @@ test("starting a Generate expands the list before the working placeholder is sho
 test("the toggle and the title both toggle the list", () => {
   assert.match(app, /\$\("#resultsToggle"\)\.addEventListener\("click"/);
   assert.match(app, /\$\("#resultTitle"\)\.addEventListener\("click"/);
+});
+
+test("collapsing the playlist builder hides everything under its header and flips the toggle", () => {
+  const { context, toggle, body } = harness("#composerToggle", "#composerBody");
+  context.setComposerCollapsed(true);
+  assert.equal(body.hidden, true);
+  assert.equal(toggle.attrs["aria-expanded"], "false");
+  assert.equal(toggle.title, "Show the playlist builder");
+  assert.equal(context.state.composerCollapsed, true);
+  context.setComposerCollapsed(false);
+  assert.equal(body.hidden, false);
+  assert.equal(toggle.attrs["aria-expanded"], "true");
+  assert.equal(toggle.title, "Hide the playlist builder");
+});
+
+test("the builder body holds the request, quick actions, playlist seeds and Advanced, while Generate stays in the header", () => {
+  const start = html.indexOf('<form id="playlistForm"');
+  assert.notEqual(start, -1, "playlistForm exists");
+  const form = html.slice(start, html.indexOf("</form>", start));
+  const head = form.slice(0, form.indexOf('<div id="composerBody"'));
+  const body = form.slice(form.indexOf('<div id="composerBody"'));
+  assert.match(head, /<button type="submit">Generate<\/button>/);
+  assert.match(head, /id="composerToggle"[^>]*aria-controls="composerBody"[^>]*title="Hide the playlist builder"/);
+  assert.match(head, /id="composerToggle"[^>]*aria-expanded="true"/);
+  for (const id of ['id="request"', 'class="quickActions"', 'class="playlistSeed"', 'class="advanced"']) {
+    assert.ok(body.includes(id), `${id} is inside composerBody`);
+    assert.ok(!head.includes(id), `${id} is not in the header`);
+  }
+});
+
+test("the builder toggle and its title both fold the builder", () => {
+  assert.match(app, /\$\("#composerToggle"\)\.addEventListener\("click", \(\) => setComposerCollapsed\(!state\.composerCollapsed\)\)/);
+  assert.match(app, /\$\("#composerTitle"\)\.addEventListener\("click", \(\) => setComposerCollapsed\(!state\.composerCollapsed\)\)/);
 });
