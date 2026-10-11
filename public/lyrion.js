@@ -9,8 +9,8 @@
     <section class="panel lyrionNow" id="lyrionNow" aria-label="Lyrion now playing">
       <img id="lyrionBackdrop" class="lyrionBackdrop" alt="" aria-hidden="true" hidden>
       <div class="lyrionStageBar"><span class="muted">Lyrion · Now playing</span><button id="lyrionFullscreen" type="button" aria-controls="lyrionNow" aria-pressed="false">Fullscreen</button></div>
-      <div class="lyrionNowDetails lyrionRail"><h2 id="lyrionTitle">Choose your Lyrion player</h2><p id="lyrionArtist"></p><p id="lyrionAlbum" class="muted"></p><section id="lyrionSxm" class="lyrionSxm" aria-label="SiriusXM program information" hidden></section><section class="lyrionConnection"><h3>Playback</h3><p id="lyrionChain" class="muted">Lyrion</p></section></div>
-      <div class="lyrionArtworkLane"><img id="lyrionCover" class="lyrionCover" alt="" hidden><p class="lyrionArtEmpty muted">Artwork will appear here</p><p id="lyrionStageQueue" class="muted"></p></div>
+      <div class="lyrionNowDetails lyrionRail"><h2 id="lyrionTitle">Choose your Lyrion player</h2><p id="lyrionArtist"></p><p id="lyrionAlbum" class="muted"></p><section id="lyrionSxm" class="lyrionSxm" aria-label="SiriusXM program information" hidden></section></div>
+      <div class="lyrionArtworkLane"><img id="lyrionCover" class="lyrionCover" alt="" hidden><p class="lyrionArtEmpty muted">Artwork will appear here</p><div id="lyrionPlayback" class="playbackStrip"><p id="lyrionChain">Lyrion</p><p id="lyrionHqplayer" class="playbackStripSignal" hidden></p></div><p id="lyrionStageQueue" class="muted"></p></div>
       <section id="lyrionStageFavorites" class="lyrionRail" aria-labelledby="lyrionStageFavoritesHeading"><h3 id="lyrionStageFavoritesHeading">Favorite channels</h3><div id="lyrionStageChannels" class="lyrionStageChannels"></div></section>
       <footer class="lyrionStageFooter"><div class="lyrionActions"><button data-lyrion-control="previous">Previous</button><button data-lyrion-control="play">Play</button><button data-lyrion-control="pause">Pause</button><button data-lyrion-control="next">Next</button></div><p id="lyrionStageMessage" role="status" aria-live="polite" hidden></p><progress id="lyrionProgress" max="1" value="0" aria-label="Playback progress"></progress><p id="lyrionTime" class="muted"></p></footer>
     </section>
@@ -422,6 +422,10 @@
     if(result.results.length===1&&result.results[0].request){browseRequest=result.results[0].request;$("lyrionMore").hidden=result.results[0].items.length>=result.results[0].count;}
     $("lyrionBrowseTitle").textContent=result.results.map(r=>`${r.source}: ${r.error||(r.searchable===false?"browse only":`${r.items.length} of ${r.count} results`)}`).join(" · ");
   }
+  function renderHqplayer(h){
+    const line=$("lyrionHqplayer"),text=hqplayerSummary(h);
+    line.textContent=text;line.hidden=!text;
+  }
   let statusRequest=0,lastAppliedStatus=0;
   async function refreshStatus() {
     if(!player)return; const version=epoch,requestedPlayer=player;
@@ -446,6 +450,7 @@
     void refreshFavoriteMetadata();
     setScrollingLabel("lyrionTitle",t?.title||"Nothing playing"); setScrollingLabel("lyrionArtist",t?.artist||""); $("lyrionAlbum").textContent=t?.album||"";
     $("lyrionCompactTitle").textContent=[t?.title,t?.artist].filter(Boolean).join(" — ");
+    renderHqplayer(s.hqplayer);
     $("lyrionChain").textContent=`Lyrion → ${s.playerName} · ${s.connected?s.state:"player offline"}${t?.source?` · ${t.source}`:""}`;
     const artworkIdentity=JSON.stringify([requestedPlayer,t?.url||'',t?.title||'',t?.artist||'']);
     artworkImage($("lyrionCover"),t?.artwork || "",artworkIdentity,t?.artworkFallback||"");
@@ -474,7 +479,7 @@
     if(version!==epoch||requestedPlayer!==player)return;
     $("lyrionArtistResults").replaceChildren();$("lyrionArtistStatus").textContent="Search an artist or choose a shortcut."; queueOffset=0; history=[]; $("lyrionResults").replaceChildren(); $("lyrionQueue").replaceChildren();
     ui.querySelectorAll("[data-lyrion-control]").forEach(b=>{b.disabled=!player;});
-    if(!player){ $("lyrionSxm").hidden=true; setScrollingLabel("lyrionTitle","Choose your Lyrion player"); setScrollingLabel("lyrionArtist",""); $("lyrionAlbum").textContent=""; artworkImage($("lyrionCover"), ""); artworkImage($("lyrionBackdrop"), ""); $("lyrionStageQueue").textContent=""; $("lyrionChain").textContent="Lyrion"; $("lyrionProgress").value=0; $("lyrionTime").textContent=""; $("lyrionQueueCount").textContent=""; return; }
+    if(!player){ $("lyrionSxm").hidden=true; setScrollingLabel("lyrionTitle","Choose your Lyrion player"); setScrollingLabel("lyrionArtist",""); $("lyrionAlbum").textContent=""; artworkImage($("lyrionCover"), ""); artworkImage($("lyrionBackdrop"), ""); $("lyrionStageQueue").textContent=""; $("lyrionChain").textContent="Lyrion"; renderHqplayer(null); $("lyrionProgress").value=0; $("lyrionTime").textContent=""; $("lyrionQueueCount").textContent=""; return; }
     const availableSources=await api("sources",null,playerQuery());if(version!==epoch||requestedPlayer!==player)return;sources=availableSources.sources;
     $("lyrionSource").replaceChildren(...sources.map(s=>new Option(s.title,s.id)));
     await refreshStatus(); await home();

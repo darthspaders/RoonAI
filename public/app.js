@@ -4694,7 +4694,7 @@ function renderState(payload) {
   const zone = activeZone();
   const visualStage = document.querySelector("#playerView .player");
   if (visualStage) {
-    const playback = { zoneId: state.selectedZoneId, connected: Boolean(payload.connected), state: zone?.state || "stopped",
+    const playback = { zoneId: state.selectedZoneId, zoneName: zone?.display_name || "", connected: Boolean(payload.connected), state: zone?.state || "stopped",
       hqplayer: zone?.display_name === "HQPlayer" && zone.outputs?.length === 1 && zone.outputs[0].display_name === "HQPlayer" };
     visualStage.dataset.playbackZoneId = playback.zoneId;
     visualStage.dataset.playbackConnected = String(playback.connected);
