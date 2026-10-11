@@ -101,9 +101,10 @@ test("other players get no HQPlayer block and HQPlayer is never asked", async ()
 
 const source = fs.readFileSync(require.resolve("../public/lyrion.js"), "utf8");
 const section = (from, to) => source.slice(source.indexOf(from), source.indexOf(to));
+const summary = fs.readFileSync(require.resolve("../public/hqplayerSummary.js"), "utf8");
 const rows = status => {
   const context = {};
-  vm.runInNewContext(section("  function hqplayerRows(", "  function renderHqplayer("), context);
+  vm.runInNewContext(summary, context);
   return JSON.parse(JSON.stringify(context.hqplayerRows(status)));
 };
 
@@ -117,13 +118,19 @@ test("PCM output reads in kHz with its depth, and an empty shaper or missing sta
   assert.deepEqual(rows(null), []);
 });
 
-test("the HQPlayer rows sit in the Playback section under the playback chain", () => {
-  assert.match(source, /<p id="lyrionChain" class="muted">Lyrion<\/p><dl id="lyrionHqplayer" class="lyrionHqplayer" hidden><\/dl>/);
+test("Lyrion's playback chain and HQPlayer output sit in one strip under the album art", () => {
+  assert.match(source, /<p class="lyrionArtEmpty muted">Artwork will appear here<\/p><div id="lyrionPlayback" class="playbackStrip"><p id="lyrionChain">Lyrion<\/p><p id="lyrionHqplayer" class="playbackStripSignal" hidden><\/p><\/div>/);
+  assert.doesNotMatch(source, /<h3>Playback<\/h3>/);
   const refresh = section("  async function refreshStatus()", "  async function loadPlayer()");
   assert.match(refresh, /renderHqplayer\(s\.hqplayer\);/);
 });
 
-test("the HQPlayer rows are spaced like the other Now playing detail rows", () => {
-  const css = fs.readFileSync(require.resolve("../public/lyrion.css"), "utf8");
-  assert.match(css, /\.lyrionHqplayer \{[^}]*gap:12px 24px;/);
+test("the Lyrion HQPlayer line shows the one-line summary and hides when HQPlayer reports nothing", () => {
+  const line = { textContent: "", hidden: true };
+  const context = { $: id => ({ lyrionHqplayer: line })[id] };
+  vm.runInNewContext(summary + section("  function renderHqplayer(", "  let statusRequest="), context);
+  context.renderHqplayer(parseHqplayerStatus(DSD));
+  assert.deepEqual([line.textContent, line.hidden], ["DSD512 · 22.5792 MHz / 1-bit SDM · poly-sinc-gauss-xla · ASDM7ECv3 · 1.4x realtime", false]);
+  context.renderHqplayer(null);
+  assert.deepEqual([line.textContent, line.hidden], ["", true]);
 });

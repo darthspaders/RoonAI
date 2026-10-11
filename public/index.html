@@ -4,10 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>The Rabbit Hole</title>
-    <link rel="stylesheet" href="/styles.css?v=20261004-rabbit-hole-panel-1">
+    <link rel="stylesheet" href="/styles.css?v=20261011-playback-strip-2">
     <link rel="stylesheet" href="/database.css?v=20260919-local-metadata-1">
     <link rel="stylesheet" href="/sonicBlindReview.css?v=20260925-1">
-    <link rel="stylesheet" href="/lyrion.css?v=12">
+    <link rel="stylesheet" href="/lyrion.css?v=13">
     <link rel="stylesheet" href="/lyrionVisualizer.css?v=11">
     <link rel="stylesheet" href="/roonVisualizer.css?v=6">
   </head>
@@ -295,6 +295,7 @@
             </div>
             <div class="artStack">
               <div class="cover" id="cover"></div>
+              <div id="nowPlayback" class="playbackStrip" hidden><p id="nowPlaybackChain"></p><p id="nowPlaybackSignal" class="playbackStripSignal" hidden></p></div>
             </div>
             <div id="nowDiscoveryBadge" class="nowDiscoveryBadge"></div>
             <div id="nowDiscoveryTools" class="nowDiscoveryTools" hidden>
@@ -785,12 +786,14 @@
     </main>
     <button type="button" id="jumpTop" class="jumpTop" hidden>Now Playing</button>
     <script src="/statusLive.js?v=1"></script>
-    <script src="/app.js?v=20261004-rabbit-hole-panel-1"></script>
+    <script src="/hqplayerSummary.js?v=1"></script>
+    <script src="/app.js?v=20261011-playback-strip-1"></script>
+    <script src="/roonPlaybackStrip.js?v=1"></script>
     <script src="/sonicBlindReview.js?v=20260925-1"></script>
     <script src="/webmcpTools.js"></script>
     <script src="/sonicCoverage.js?v=20260917-1"></script>
     <script src="/database.js?v=20260919-local-metadata-1"></script>
-    <script src="/lyrion.js?v=16"></script>
+    <script src="/lyrion.js?v=17"></script>
     <script src="/soundSpectrumVideo.js?v=1"></script>
   <script src="/soundSpectrumStage.js?v=5"></script>
     <script src="/lyrionVisualizer.js?v=11"></script>

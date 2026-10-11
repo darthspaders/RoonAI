@@ -362,6 +362,9 @@ module.exports = {
     baseUrl: process.env.PC_MONITOR_BASE_URL || "http://127.0.0.1:3088",
     timeoutMs: Number(process.env.PC_MONITOR_TIMEOUT_MS || 1200)
   },
+  roonHqplayer: {
+    zones: process.env.ROON_HQPLAYER_ZONES || ""
+  },
   hqplayer: {
     signalPathPrefix: process.env.HQPLAYER_SIGNAL_PATH_PREFIX || "poly-sinc-gauss-hires-mp, TPDF, PCM",
     signalPathStatic: process.env.HQPLAYER_SIGNAL_PATH_STATIC || "",
