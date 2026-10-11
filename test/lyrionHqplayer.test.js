@@ -122,3 +122,8 @@ test("the HQPlayer rows sit in the Playback section under the playback chain", (
   const refresh = section("  async function refreshStatus()", "  async function loadPlayer()");
   assert.match(refresh, /renderHqplayer\(s\.hqplayer\);/);
 });
+
+test("the HQPlayer rows are spaced like the other Now playing detail rows", () => {
+  const css = fs.readFileSync(require.resolve("../public/lyrion.css"), "utf8");
+  assert.match(css, /\.lyrionHqplayer \{[^}]*gap:12px 24px;/);
+});
