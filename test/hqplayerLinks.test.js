@@ -87,8 +87,8 @@ test("the HQPlayer row sits right under the Playback System bar and loads with t
 test("the HQPlayer links look like unselected pills and the Playback System, HQPlayer and Lyrion Player labels share one size", () => {
   const css = fs.readFileSync(require.resolve("../public/lyrion.css"), "utf8");
   const rule = selector => css.match(new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*\\{([^}]*)\\}"))?.[1] || "";
-  assert.match(rule(".hqplayerLinksBar a"), /border:1px solid rgba\(217,179,255,\.14\);/);
-  assert.doesNotMatch(rule(".hqplayerLinksBar a"), /var\(--line\)/);
+  assert.match(rule(":is(.hqplayerLinksBar,#playbackSystemLinks) a"), /border:1px solid rgba\(217,179,255,\.14\);/);
+  assert.doesNotMatch(rule(":is(.hqplayerLinksBar,#playbackSystemLinks) a"), /var\(--line\)/);
   assert.match(rule('.playbackSystemBar label,.hqplayerLinksLabel,#lyrionView label[for="lyrionPlayer"]'), /font-size:16px;/);
   assert.doesNotMatch(rule(".hqplayerLinksLabel"), /font-size/);
 });

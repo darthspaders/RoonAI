@@ -6,7 +6,7 @@ const { LyrionClient } = require("./lyrionClient");
 const { LyrionFavorites } = require("./lyrionFavorites");
 const { ambiguousLibraryUrl } = require("./lyrionItems");
 
-function createLyrionApi({ roon, readJson, sendJson, catalogue=null, hqplayerLinks = {}, client = new LyrionClient({itemsFile:path.join(__dirname,"../data/lyrion-items.json")}), file = path.join(__dirname, "../data/lyrion-selection.json"), favoritesFile = path.join(__dirname, "../data/lyrion-favorites.json") }) {
+function createLyrionApi({ roon, readJson, sendJson, catalogue=null, hqplayerLinks = {}, playbackLinks = {}, client = new LyrionClient({itemsFile:path.join(__dirname,"../data/lyrion-items.json")}), file = path.join(__dirname, "../data/lyrion-selection.json"), favoritesFile = path.join(__dirname, "../data/lyrion-favorites.json") }) {
   const favorites = new LyrionFavorites(favoritesFile);
   const favoriteImages = items => items.map(item => ({ ...item,
     artwork: client.artwork ? client.artwork({ artwork_url: item.artwork }) : item.artwork }));
@@ -109,6 +109,7 @@ function createLyrionApi({ roon, readJson, sendJson, catalogue=null, hqplayerLin
       return sendJson(res, 200, { selectedPlayer });
     }
     if (req.method === "GET" && route === "hqplayer-links") return sendJson(res, 200, { links: await linksToHqplayer() });
+    if (req.method === "GET" && route === "playback-links") { const rouen = webLink(playbackLinks.rouenUrl); return sendJson(res, 200, { links: rouen ? [{ id: "rouen", label: "Rouen", url: rouen }] : [] }); }
     if (!player) { const error = new Error("Choose a Lyrion player first."); error.statusCode = 400; throw error; }
     if (req.method === "GET" && ["status","now-playing","queue"].includes(route)) {
       const station=client.artistStations?.status(player)||null;

@@ -57,7 +57,7 @@
     </div>`;
   document.querySelector(".shell").append(ui);
   const bar = document.createElement("div"); bar.className = "playbackSystemBar";
-  bar.innerHTML = `<label for="playbackSystem">Playback system</label><select id="playbackSystem"><option value="roon">Roon</option><option value="lyrion">Lyrion</option></select><span id="playbackSystemHint" class="muted">Independent players and queues</span>`;
+  bar.innerHTML = `<label for="playbackSystem">Playback system</label><select id="playbackSystem"><option value="roon">Roon</option><option value="lyrion">Lyrion</option></select><span id="playbackSystemLinks" class="lyrionChoices" hidden></span><span id="playbackSystemHint" class="muted">Independent players and queues</span>`;
   document.querySelector(".appHeader").after(bar);
   const hqplayerRow = document.createElement("div"); hqplayerRow.id = "hqplayerLinks"; hqplayerRow.className = "hqplayerLinksBar"; hqplayerRow.hidden = true;
   hqplayerRow.innerHTML = `<span class="hqplayerLinksLabel">HQPlayer</span><span id="hqplayerLinkList" class="lyrionChoices"></span>`;
@@ -68,6 +68,13 @@
   }
   async function loadHqplayerLinks(){
     try{const response=await fetch("/api/lyrion/hqplayer-links",{cache:"no-store"});renderHqplayerLinks(response.ok?(await response.json()).links||[]:[]);}catch{renderHqplayerLinks([]);}
+  }
+  function renderPlaybackLinks(links){
+    $("playbackSystemLinks").replaceChildren(...links.map(link=>{const a=document.createElement("a");a.textContent=link.label+" ↗";a.href=link.url;a.target="_blank";a.rel="noopener noreferrer";return a;}));
+    $("playbackSystemLinks").hidden=!links.length;
+  }
+  async function loadPlaybackLinks(){
+    try{const response=await fetch("/api/lyrion/playback-links",{cache:"no-store"});renderPlaybackLinks(response.ok?(await response.json()).links||[]:[]);}catch{renderPlaybackLinks([]);}
   }
   let player = "", sources = [], favorites = [], browseRequest = {}, history = [], queueOffset = 0, epoch = 0, busy = false, polling = false;
   // Keep the existing controls and state; navigation only changes visibility.
@@ -534,6 +541,7 @@
   renderSystemChoices();
   selectSystem();
   void loadHqplayerLinks();
+  void loadPlaybackLinks();
   async function pollStatus(){if(!ui.hidden&&!polling&&!document.hidden){polling=true;try{await refreshStatus();}catch(e){message(e.message);}finally{polling=false;}}}
   setInterval(pollStatus,3000);
   document.addEventListener('visibilitychange',pollStatus);
