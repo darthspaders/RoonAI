@@ -12396,3 +12396,21 @@ body.playerFullWindow .player.player--fullscreen.isFullWindow .nowInfo .nowSourc
   margin: 0;
   overflow: auto;
 }
+
+.resultsHeading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.resultsToggle {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0 8px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.resultsTitleToggle {
+  cursor: pointer;
+}
