@@ -11,8 +11,8 @@ not replace that audio route. Lyrion controls also work without pairing Roon.
 ## What is included
 
 - Roon extension pairing, zone selection, now playing, transport and queue controls.
-- An independent Lyrion interface with Now playing, Channels, Shows, Artist
-  stations, Xtra channels, Sources and Queue views.
+- An independent Lyrion interface with Home, Now playing, Channels, Shows,
+  Artist stations, Xtra channels, Sources and Queue views.
 - Browsing and playback through your installed LMS plugins, including local
   libraries, internet radio and supported streaming services.
 - SiriusXM live-channel favorites and metadata, plus authenticated shows,

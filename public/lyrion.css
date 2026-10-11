@@ -154,3 +154,25 @@ body.lyrionFullscreenOpen {overflow:hidden;}
 #lyrionSoundCloudPlaylists label {display:block;margin:16px 0 6px;font-size:12px;color:var(--muted);}
 #lyrionSoundCloudPlaylists input {box-sizing:border-box;width:100%;min-width:0;min-height:44px;}
 #lyrionSoundCloudPlaylists form {margin:0;}
+/* Lyrion home: newest albums, the server's favorites and its sources, like the Lyrion web UI's home. */
+.lyrionHome {display:grid;gap:28px;}
+.lyrionShelf {min-width:0;}
+.lyrionShelfHead {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;}
+#lyrionView .lyrionShelfHead h2 {margin:0;font-size:18px;}
+#lyrionView .lyrionShelfHead button {min-height:36px;padding:6px 18px;border-radius:999px;}
+.lyrionShelf > p {margin:0 0 12px;}
+.lyrionShelfRow {display:grid;grid-auto-flow:column;grid-auto-columns:150px;gap:16px;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity;list-style:none;margin:0;padding:2px 2px 12px;}
+.lyrionShelfRow li {min-width:0;scroll-snap-align:start;}
+#lyrionView .lyrionCard {display:grid;gap:2px;width:100%;min-height:0;padding:0;border:0;border-radius:6px;background:none;color:var(--text);text-align:left;cursor:pointer;}
+#lyrionView .lyrionCard:hover:not(:disabled) {background:none;}
+.lyrionCardArt {display:block;aspect-ratio:1;margin-bottom:6px;overflow:hidden;border:1px solid var(--lyrion-line);border-radius:6px;background:rgba(0,0,0,.3);}
+#lyrionView .lyrionCardArt img {display:block;width:100%;height:100%;object-fit:cover;}
+#lyrionView .lyrionCard:is(:hover,:focus-visible) .lyrionCardArt {border-color:var(--accent);}
+.lyrionCard strong,.lyrionCard small {overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.lyrionCard strong {font-size:14px;font-weight:600;}
+.lyrionCard small {font-size:12px;color:var(--muted);}
+.lyrionExploreGrid {display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:12px;list-style:none;margin:0;padding:0;}
+#lyrionView .lyrionExploreTile {display:grid;justify-items:center;align-content:center;gap:10px;width:100%;height:100%;min-height:120px;padding:14px 10px;border-radius:10px;color:var(--text);text-align:center;white-space:normal;}
+.lyrionExploreTile img {width:52px;height:52px;object-fit:contain;}
+.lyrionExploreTile span {font-size:13px;line-height:1.3;overflow-wrap:anywhere;}
+@media(max-width:600px){.lyrionShelfRow{grid-auto-columns:124px;gap:12px;}.lyrionExploreGrid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));}}

@@ -20,9 +20,11 @@ function resolveAction(item, base, name) {
   return { cmd: action.cmd, params: { ...action.params, ...itemParams } };
 }
 const LIBRARY_SOURCES = [
-  { id: "local", title: "Local Library / NAS" },
-  { id: "local-albums", title: "Local Library: Albums", mode: "albums" },
-  { id: "local-artists", title: "Local Library: Artists", mode: "artists" }
+  { id: "local", title: "Local Library / NAS", icon: "html/images/musicfolder.png" },
+  { id: "local-albums", title: "Local Library: Albums", mode: "albums", icon: "html/images/albums.png" },
+  { id: "local-artists", title: "Local Library: Artists", mode: "artists", icon: "html/images/artists.png" },
+  { id: "local-new", title: "Local Library: New Music", mode: "albums", sort: "new", searchable: false, icon: "html/images/newmusic.png" },
+  { id: "favorites", title: "Lyrion Favorites", command: ["favorites", "items"], label: "Lyrion favorites", searchable: false, icon: "html/images/favorites.png" }
 ];
 const LIBRARY_IDS = new Set(LIBRARY_SOURCES.map(s => s.id));
 function libraryParams(params) {
@@ -138,11 +140,21 @@ class LyrionClient {
     const apps = await this.rpc(player, ["apps", 0, 100, "menu:1"]);
     const radios = await this.rpc(player, ["radios", 0, 100, "menu:1"]);
     const items = [...(apps.item_loop || []), ...(radios.item_loop || [])];
-    return [...LIBRARY_SOURCES.map(({ id, title }) => ({ id, title, actions: {} })), ...items.map(item => {
+    return [...LIBRARY_SOURCES.map(({ id, title, icon }) => ({ id, title, artwork: this.artwork({ artwork_url: icon }), actions: {} })), ...items.map(item => {
       const action = resolveAction(item, {}, "go");
       const id = action && (LIBRARY_IDS.has(action.cmd[0]) ? `app:${action.cmd[0]}` : action.cmd[0]);
-      return action ? { id, title: item.text, actions: { browse: this.remember({ ...action, kind: "browse" }, player, item.text) }, input: !!item.input } : null;
+      const artwork = item.icon || item["icon-id"] ? this.artwork({ artwork_url: item.icon || item["icon-id"] }) : "";
+      return action ? { id, title: item.text, ...(artwork ? { artwork } : {}), actions: { browse: this.remember({ ...action, kind: "browse" }, player, item.text) }, input: !!item.input } : null;
     }).filter(Boolean)];
+  }
+  async home(player) {
+    const shelf = async read => { try { return await read(); } catch (error) { return { error: error.message, items: [] }; } };
+    const [newMusic, favorites, explore] = await Promise.all([
+      shelf(() => this.browse(player, { source: "local-new", offset: 0, limit: 25 })),
+      shelf(() => this.browse(player, { source: "favorites", offset: 0, limit: 50 })),
+      shelf(async () => ({ sources: (await this.sources(player)).filter(s => !["local-new", "favorites"].includes(s.id)) }))
+    ]);
+    return { newMusic, favorites, explore: explore.error ? { error: explore.error, sources: [] } : explore };
   }
   async browse(player, { token, query = "", offset = 0, limit = 50, source = "local" } = {}) {
     if (token) {
@@ -153,7 +165,8 @@ class LyrionClient {
     }
     const library = LIBRARY_SOURCES.find(s => s.id === source);
     if (!library) throw new Error("Select a source to browse.");
-    if (library.mode) return this.menu(await this.rpc(player, ["browselibrary", "items", offset, limit, `mode:${library.mode}`, ...(query ? [`search:${query}`] : []), "menu:1"]), player, "Local");
+    if (library.command) return this.menu(await this.rpc(player, [...library.command, offset, limit, "menu:1"]), player, library.label);
+    if (library.mode) return this.menu(await this.rpc(player, ["browselibrary", "items", offset, limit, `mode:${library.mode}`, ...(library.sort ? [`sort:${library.sort}`] : []), ...(query ? [`search:${query}`] : []), "menu:1"]), player, "Local");
     const result = await this.rpc(player, ["titles", offset, limit, "tags:aljJuxd", ...(query ? [`search:${query}`] : [])]);
     return { count: Number(result.count) || 0, offset, items: (result.titles_loop || []).map(t => this.items.remember({ ...this.track(t), source: "Local", actions:
       Object.fromEntries([["play", "load"], ["add", "add"], ["next", "insert"]].map(([kind, cmd]) => [kind,
@@ -207,6 +220,7 @@ class LyrionClient {
     for (const source of sources) {
       try {
         let result, request;
+        if (LIBRARY_SOURCES.find(s => s.id === source.id)?.searchable === false) { results.push({ source: source.title, searchable: false, items: [] }); continue; }
         if (LIBRARY_IDS.has(source.id)) { request = { source: source.id, query }; result = await this.browse(player, request); }
         else {
           const root = await this.browse(player, { token: source.actions.browse, query });
