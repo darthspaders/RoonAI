@@ -38,7 +38,7 @@ function publicDir() {
 
 test("every bundled theme is listed with its label and the default is reported", () => {
   const listed = themes.list();
-  assert.deepEqual(listed.themes.map((t) => t.id).sort(), ["copper", "original", "roon", "roon-light"]);
+  assert.deepEqual(listed.themes.map((t) => t.id).sort(), ["copper", "dark-orange", "original", "roon", "roon-light"]);
   assert.equal(listed.themes.find((t) => t.id === "copper").label, "Obsidian & Copper");
   assert.equal(listed.default, "original");
 });
@@ -66,6 +66,43 @@ test("roon has no violet: light accents go neutral and mid accents go blue", () 
     const { h } = hsl(mapColor(mid, rules("roon")));
     assert.ok(h >= 210 && h <= 225, `${mid} -> ${mapColor(mid, rules("roon"))} has hue ${h}`);
   }
+});
+
+test("dark orange makes the page blue-black, light accents white and mid accents an orange that reads on it", () => {
+  const spread = (hex) => { const c = hex.match(/[0-9a-f]{2}/g).map((v) => parseInt(v, 16)); return Math.max(...c) - Math.min(...c); };
+  const page = mapColor("#05020b", rules("dark-orange"));
+  const bg = hsl(page);
+  assert.ok(Math.abs(bg.h - 225) < 3 && bg.s <= 0.22 && bg.l >= 0.06 && bg.l <= 0.09, `${page} ${JSON.stringify(bg)}`);
+  for (const c of ["#d9b3ff", "#faf6ff", "#ddc9ff", "#ff73d8", "#a77cff", "#8ff0ff"]) {
+    assert.ok(spread(mapColor(c, rules("dark-orange"))) <= 16, `${c} -> ${mapColor(c, rules("dark-orange"))} is not neutral`);
+  }
+  for (const c of ["#7a4dff", "#9b3dd6", "#5b2a9e", "#c02bb0"]) {
+    const out = mapColor(c, rules("dark-orange"));
+    const { h } = hsl(out);
+    assert.ok(h >= 18 && h <= 26, `${c} -> ${out} has hue ${h}`);
+    assert.ok(contrast(out, page) >= 4.5, `${c} -> ${out} contrast ${contrast(out, page).toFixed(2)}`);
+  }
+});
+
+test("dark orange paints strong accent tints solid orange and leaves faint lines and text neutral", () => {
+  const spread = (c) => { const [r, g, b] = c.match(/\d+/g).map(Number); return Math.max(r, g, b) - Math.min(r, g, b); };
+  for (const c of ["rgba(167, 124, 255, 0.32)", "rgba(217, 179, 255, 0.44)", "rgba(225, 165, 255, 0.48)"]) {
+    assert.equal(mapColor(c, rules("dark-orange")), "rgba(217, 79, 0, 0.85)", c);
+  }
+  for (const c of ["rgba(205, 166, 255, 0.24)", "rgba(217, 179, 255, 0.1)", "rgba(238, 228, 252, 0.82)", "rgba(250, 246, 255, 1)"]) {
+    assert.ok(spread(mapColor(c, rules("dark-orange"))) <= 16, `${c} -> ${mapColor(c, rules("dark-orange"))} is not neutral`);
+  }
+});
+
+test("a rule's alpha range matches on the colour's opacity, hex colours count as opaque, and minAlpha only ever raises it", () => {
+  const rule = [{ alpha: [0.3, 0.6], set: { hue: 120 } }];
+  assert.equal(mapColor("rgba(255, 0, 0, 0.5)", rule), "rgba(0, 255, 0, 0.5)");
+  assert.equal(mapColor("rgba(255, 0, 0, 0.2)", rule), "rgba(255, 0, 0, 0.2)");
+  assert.equal(mapColor("#ff0000", rule), "#ff0000");
+  assert.equal(mapColor("rgb(255, 0, 0)", rule), "rgb(255, 0, 0)");
+  const raise = [{ set: { minAlpha: 0.8 } }];
+  assert.equal(mapColor("rgba(255, 0, 0, 0.3)", raise), "rgba(255, 0, 0, 0.8)");
+  assert.equal(mapColor("rgba(255, 0, 0, 0.9)", raise), "rgba(255, 0, 0, 0.9)");
 });
 
 test("roon light turns the dark page white and its light text near-black", () => {

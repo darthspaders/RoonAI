@@ -1,0 +1,11 @@
+{
+  "id": "dark-orange",
+  "label": "Dark Orange",
+  "rules": [
+    { "hue": [0, 360], "light": [0, 0.2], "set": { "hue": 225, "maxSat": 0.2, "addLight": 0.05 } },
+    { "hue": [160, 345], "light": [0.7, 1], "alpha": [0.28, 0.6], "set": { "hue": 22, "maxSat": 1, "minLight": 0.425, "maxLight": 0.425, "minAlpha": 0.85 } },
+    { "hue": [160, 345], "light": [0.7, 1], "set": { "maxSat": 0.03 } },
+    { "hue": [200, 345], "set": { "hue": 22, "maxSat": 1, "minLight": 0.5, "maxLight": 0.52 } },
+    { "hue": [160, 200], "set": { "maxSat": 0.06 } }
+  ]
+}

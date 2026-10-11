@@ -23,26 +23,28 @@ function toRgb(h, s, l) {
   return [f(0), f(8), f(4)].map((v) => Math.round(v * 255));
 }
 
-function remap([h, s, l], rules, { greys = false } = {}) {
+function remap([h, s, l], rules, { greys = false, alpha = 1 } = {}) {
   if (s < 0.08 && !greys) return null;
   for (const rule of rules) {
     const [hueFrom, hueTo] = rule.hue || [0, 360];
     const [lightFrom, lightTo] = rule.light || [0, 1];
     const [satFrom, satTo] = rule.sat || [0, 1];
-    if (h < hueFrom || h >= hueTo || l < lightFrom || l > lightTo || s < satFrom || s > satTo) continue;
+    const [alphaFrom, alphaTo] = rule.alpha || [0, 1];
+    if (h < hueFrom || h >= hueTo || l < lightFrom || l > lightTo || s < satFrom || s > satTo || alpha < alphaFrom || alpha > alphaTo) continue;
     const set = rule.set || {};
     const lightness = (set.invertLight ? 1 - l : l) + (set.addLight || 0);
     return [
       set.hue ?? h,
       Math.min(s, set.maxSat ?? 1),
-      Math.min(set.maxLight ?? 1, Math.max(set.minLight ?? 0, lightness))
+      Math.min(set.maxLight ?? 1, Math.max(set.minLight ?? 0, lightness)),
+      Math.max(alpha, set.minAlpha ?? 0)
     ];
   }
   return null;
 }
 
 function mapColor(color, rules, options) {
-  let rgb, format;
+  let rgb, format, alpha = 1;
   if (color[0] === "#") {
     const hex = color.length === 4 ? [...color.slice(1)].map((c) => c + c).join("") : color.slice(1);
     rgb = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
@@ -51,10 +53,11 @@ function mapColor(color, rules, options) {
     const fn = color.slice(0, color.indexOf("("));
     const parts = color.slice(fn.length + 1, -1).split(",").map((p) => p.trim());
     rgb = parts.slice(0, 3).map(Number);
-    format = (c) => `${fn}(${c.join(", ")}${parts[3] === undefined ? "" : `, ${parts[3]}`})`;
+    if (parts[3] !== undefined) alpha = Number(parts[3]);
+    format = (c, a) => `${fn}(${c.join(", ")}${parts[3] === undefined ? "" : `, ${a === alpha ? parts[3] : a}`})`;
   }
-  const next = remap(toHsl(...rgb), rules, options);
-  return next ? format(toRgb(...next)) : color;
+  const next = remap(toHsl(...rgb), rules, { ...options, alpha });
+  return next ? format(toRgb(...next.slice(0, 3)), next[3]) : color;
 }
 
 function remapPixels(buffer, channels, rules, options) {
