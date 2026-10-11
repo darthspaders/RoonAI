@@ -107,7 +107,7 @@ function statusHarness(){
   syncArtistFavorites(){},syncXtraFavorites(){},refreshXtraFavorites:async()=>{},refreshFavoriteMetadata:async()=>{},
   refreshArtistFavorites:()=>favorites.promise,renderFavorites(){},playerQuery:()=>'?playerId='+encodeURIComponent(context.player),
   setScrollingLabel:(id,value)=>get(id).textContent=value,
-  time:seconds=>String(seconds),run:fn=>fn,home:async()=>{},showTime:value=>value};
+  time:seconds=>String(seconds),run:fn=>fn,home:async()=>{},renderLyrionDetails(){},refreshLyrionSystem:async()=>{},showTime:value=>value};
  vm.runInNewContext(artworkCode+statusCode+loadPlayerCode,context);
  return {...context,context,get,requests,events,favorites};
 }
@@ -165,4 +165,10 @@ test('changing players immediately rejects pending old-player polls, even while 
  const newStatus=h.requests.find(r=>r.route==='status'&&r.query.includes('two'));
  newStatus.resolve(state('New player',{playerId:'two'}));await switching;
  assert.equal(h.get('lyrionTitle').textContent,'New player');
+});
+
+test('each status refresh renders the now-playing details from the displayed track and the player duration',async()=>{
+ const h=statusHarness(),seen=[];h.context.renderLyrionDetails=(track,duration)=>seen.push([track.title,duration]);
+ const refresh=h.context.refreshStatus();h.requests[0].resolve(state('Detailed cut'));await refresh;
+ assert.deepEqual(seen,[['Detailed cut',100]]);
 });

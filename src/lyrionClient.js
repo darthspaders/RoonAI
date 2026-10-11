@@ -19,6 +19,14 @@ function resolveAction(item, base, name) {
   if (action.itemsParams && !itemParams) return null;
   return { cmd: action.cmd, params: { ...action.params, ...itemParams } };
 }
+const STATUS_TAGS = "tags:aljJKNuxdygorTItiq";
+const count = value => Math.max(0, Math.floor(Number(value) || 0));
+function trackDetails(t) {
+  const bitrate = String(t.bitrate || "").trim();
+  return { year: count(t.year), genre: /^no genre$/i.test(String(t.genre || "").trim()) ? "" : String(t.genre || "").trim(),
+    format: String(t.type || "").trim(), sampleRate: count(t.samplerate), bitDepth: count(t.samplesize),
+    bitrate: bitrate === "0" ? "" : bitrate, trackNumber: count(t.tracknum), disc: count(t.disc), discCount: count(t.disccount) };
+}
 const LIBRARY_SOURCES = [
   { id: "local", title: "Local Library / NAS" },
   { id: "local-albums", title: "Local Library: Albums", mode: "albums" },
@@ -78,14 +86,14 @@ class LyrionClient {
     const episode=this.onDemandMetadata?.(t.url);
     if(episode)return {id:episode.id,title:episode.title,artist:episode.artist||episode.showTitle||"",album:episode.album||"SiriusXM on demand",duration:episode.duration,artwork:this.artwork({artwork_url:episode.artwork}),source:episode.source||"SiriusXM on demand",index:Number(t["playlist index"]),url:t.url};
     return { id: String(t.id || ""), title: t.title || t.track || "Untitled", artist: t.artist || "", album: t.album || "",
-      duration: Number(t.duration) || 0, artwork: this.artwork(t), source: /siriusxm/i.test(`${t.album} ${t.artwork_url}`) ? "SiriusXM" : sourceFor(t.url), soundcloudUrn:soundcloudUrn(t.url), index: Number(t["playlist index"]), url: t.url || "" };
+      duration: Number(t.duration) || 0, artwork: this.artwork(t), source: /siriusxm/i.test(`${t.album} ${t.artwork_url}`) ? "SiriusXM" : sourceFor(t.url), soundcloudUrn:soundcloudUrn(t.url), index: Number(t["playlist index"]), url: t.url || "", details: trackDetails(t) };
   }
   async status(player, offset = 0, limit = 100) {
-    const s = await this.rpc(player, ["status", offset, limit, "tags:aljJKNuxd"]);
+    const s = await this.rpc(player, ["status", offset, limit, STATUS_TAGS]);
     const index = Number(s.playlist_cur_index || 0);
     let current = (s.playlist_loop || []).find(t => Number(t["playlist index"]) === index);
     if (!current && Number(s.playlist_tracks)) {
-      const result = await this.rpc(player, ["status", "-", 1, "tags:aljJKNuxd"]);
+      const result = await this.rpc(player, ["status", "-", 1, STATUS_TAGS]);
       current = result.playlist_loop?.[0];
     }
     if (s.remoteMeta) current = { ...current, ...s.remoteMeta };

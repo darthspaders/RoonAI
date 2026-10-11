@@ -9,7 +9,7 @@
     <section class="panel lyrionNow" id="lyrionNow" aria-label="Lyrion now playing">
       <img id="lyrionBackdrop" class="lyrionBackdrop" alt="" aria-hidden="true" hidden>
       <div class="lyrionStageBar"><span class="muted">Lyrion · Now playing</span><button id="lyrionFullscreen" type="button" aria-controls="lyrionNow" aria-pressed="false">Fullscreen</button></div>
-      <div class="lyrionNowDetails lyrionRail"><h2 id="lyrionTitle">Choose your Lyrion player</h2><p id="lyrionArtist"></p><p id="lyrionAlbum" class="muted"></p><section id="lyrionSxm" class="lyrionSxm" aria-label="SiriusXM program information" hidden></section><section class="lyrionConnection"><h3>Playback</h3><p id="lyrionChain" class="muted">Lyrion</p></section></div>
+      <div class="lyrionNowDetails lyrionRail"><h2 id="lyrionTitle">Choose your Lyrion player</h2><p id="lyrionArtist"></p><p id="lyrionAlbum" class="muted"></p><dl id="lyrionDetails" class="lyrionDetails" hidden></dl><section id="lyrionSxm" class="lyrionSxm" aria-label="SiriusXM program information" hidden></section><section class="lyrionConnection"><h3>Playback</h3><p id="lyrionChain" class="muted">Lyrion</p></section><section id="lyrionSystem" class="lyrionConnection lyrionSystem" hidden><h3>System</h3><div class="lyrionTemps"><span id="lyrionTempCpuChip" class="pcTempChip"><span>CPU</span><strong id="lyrionTempCpu">--</strong></span><span id="lyrionTempGpuChip" class="pcTempChip"><span>GPU</span><strong id="lyrionTempGpu">--</strong></span></div></section></div>
       <div class="lyrionArtworkLane"><img id="lyrionCover" class="lyrionCover" alt="" hidden><p class="lyrionArtEmpty muted">Artwork will appear here</p><p id="lyrionStageQueue" class="muted"></p></div>
       <section id="lyrionStageFavorites" class="lyrionRail" aria-labelledby="lyrionStageFavoritesHeading"><h3 id="lyrionStageFavoritesHeading">Favorite channels</h3><div id="lyrionStageChannels" class="lyrionStageChannels"></div></section>
       <footer class="lyrionStageFooter"><div class="lyrionActions"><button data-lyrion-control="previous">Previous</button><button data-lyrion-control="play">Play</button><button data-lyrion-control="pause">Pause</button><button data-lyrion-control="next">Next</button></div><p id="lyrionStageMessage" role="status" aria-live="polite" hidden></p><progress id="lyrionProgress" max="1" value="0" aria-label="Playback progress"></progress><p id="lyrionTime" class="muted"></p></footer>
@@ -78,7 +78,7 @@
     const wrapper=document.createElement('section');wrapper.id='lyrionPanel-'+id;wrapper.setAttribute('role','tabpanel');wrapper.setAttribute('aria-labelledby','lyrionTab-'+id);wrapper.className='lyrionTabPanel';
     panel.before(wrapper);wrapper.append(panel);
     // The wrapper owns panel semantics; existing sections retain their layout.
-    const b=document.createElement('button');b.type='button';b.id='lyrionTab-'+id;b.textContent=label;b.setAttribute('role','tab');b.setAttribute('aria-controls',wrapper.id);b.onclick=()=>selectTab(id);tabs.append(b);
+    const b=document.createElement('button');b.type='button';b.id='lyrionTab-'+id;b.textContent=label;b.setAttribute('role','tab');b.setAttribute('aria-controls',wrapper.id);b.onclick=()=>{selectTab(id);if(id==='now')void refreshLyrionSystem();};tabs.append(b);
     const def=tabDefinitions.find(t=>t[0]===id);def[2]=wrapper;
   }
   const columns=ui.querySelector('.lyrionColumns');for(const child of [...columns.children])columns.before(child);columns.remove();
@@ -422,6 +422,36 @@
     if(result.results.length===1&&result.results[0].request){browseRequest=result.results[0].request;$("lyrionMore").hidden=result.results[0].items.length>=result.results[0].count;}
     $("lyrionBrowseTitle").textContent=result.results.map(r=>`${r.source}: ${r.error||(r.searchable===false?"browse only":`${r.items.length} of ${r.count} results`)}`).join(" · ");
   }
+  function lyrionDetailRows(track,duration){
+    if(!track)return [];
+    const d=track.details||{},rows=[];
+    const codecs={flc:"FLAC",alc:"ALAC",mp3:"MP3",aac:"AAC",mp4:"AAC",wav:"WAV",aif:"AIFF",dsf:"DSD",dff:"DSD",ogg:"Ogg Vorbis",ops:"Opus",wma:"WMA",wvp:"WavPack",ape:"Monkey's Audio"};
+    if(duration>0)rows.push(["Track length",time(duration)]);else if(track.source!=="Local")rows.push(["Track length","Live stream"]);
+    if(d.year)rows.push(["Released",String(d.year)]);
+    if(d.genre)rows.push(["Genre",d.genre]);
+    const rate=[d.sampleRate?`${+(d.sampleRate/1000).toFixed(1)} kHz`:"",d.bitDepth?`${d.bitDepth}-bit`:""].filter(Boolean).join(" / ");
+    const format=[d.format?codecs[d.format.toLowerCase()]||d.format:"",rate,(d.bitrate||"").replace(/(\d)kbps/i,"$1 kbps")].filter(Boolean).join(" · ");
+    if(format)rows.push(["Format",format]);
+    if(d.trackNumber)rows.push(["Track",String(d.trackNumber)+(d.disc&&d.discCount>1?` · Disc ${d.disc} of ${d.discCount}`:"")]);
+    return rows;
+  }
+  function renderLyrionDetails(track,duration){
+    const list=$("lyrionDetails"),rows=lyrionDetailRows(track,duration);
+    list.replaceChildren(...rows.flatMap(([label,value])=>{const dt=document.createElement("dt"),dd=document.createElement("dd");dt.textContent=label;dd.textContent=value;return [dt,dd];}));
+    list.hidden=!rows.length;
+  }
+  function renderLyrionSystem(snapshot){
+    const cpu=snapshot?.cpu?.temperatureC,gpu=snapshot?.gpu?.temperatureC,known=v=>v!==null&&v!==undefined&&Number.isFinite(Number(v));
+    $("lyrionSystem").hidden=!snapshot||(!snapshot.connected&&!known(cpu)&&!known(gpu));
+    $("lyrionTempCpu").textContent=pcMonitorTempText(cpu);$("lyrionTempGpu").textContent=pcMonitorTempText(gpu);
+    setPcTempChipState($("lyrionTempCpuChip"),cpu);setPcTempChipState($("lyrionTempGpuChip"),gpu);
+  }
+  let systemLoading=false;
+  async function refreshLyrionSystem(){
+    if(ui.hidden||activeTab!=="now"||document.hidden||systemLoading)return;systemLoading=true;
+    try{const response=await fetch("/api/pc-monitor",{cache:"no-store"});renderLyrionSystem(response.ok?await response.json():null);}
+    catch{renderLyrionSystem(null);}finally{systemLoading=false;}
+  }
   let statusRequest=0,lastAppliedStatus=0;
   async function refreshStatus() {
     if(!player)return; const version=epoch,requestedPlayer=player;
@@ -445,6 +475,7 @@
     }
     void refreshFavoriteMetadata();
     setScrollingLabel("lyrionTitle",t?.title||"Nothing playing"); setScrollingLabel("lyrionArtist",t?.artist||""); $("lyrionAlbum").textContent=t?.album||"";
+    renderLyrionDetails(t,s.duration);
     $("lyrionCompactTitle").textContent=[t?.title,t?.artist].filter(Boolean).join(" — ");
     $("lyrionChain").textContent=`Lyrion → ${s.playerName} · ${s.connected?s.state:"player offline"}${t?.source?` · ${t.source}`:""}`;
     const artworkIdentity=JSON.stringify([requestedPlayer,t?.url||'',t?.title||'',t?.artist||'']);
@@ -474,10 +505,10 @@
     if(version!==epoch||requestedPlayer!==player)return;
     $("lyrionArtistResults").replaceChildren();$("lyrionArtistStatus").textContent="Search an artist or choose a shortcut."; queueOffset=0; history=[]; $("lyrionResults").replaceChildren(); $("lyrionQueue").replaceChildren();
     ui.querySelectorAll("[data-lyrion-control]").forEach(b=>{b.disabled=!player;});
-    if(!player){ $("lyrionSxm").hidden=true; setScrollingLabel("lyrionTitle","Choose your Lyrion player"); setScrollingLabel("lyrionArtist",""); $("lyrionAlbum").textContent=""; artworkImage($("lyrionCover"), ""); artworkImage($("lyrionBackdrop"), ""); $("lyrionStageQueue").textContent=""; $("lyrionChain").textContent="Lyrion"; $("lyrionProgress").value=0; $("lyrionTime").textContent=""; $("lyrionQueueCount").textContent=""; return; }
+    if(!player){ $("lyrionSxm").hidden=true; setScrollingLabel("lyrionTitle","Choose your Lyrion player"); setScrollingLabel("lyrionArtist",""); $("lyrionAlbum").textContent=""; renderLyrionDetails(null,0); artworkImage($("lyrionCover"), ""); artworkImage($("lyrionBackdrop"), ""); $("lyrionStageQueue").textContent=""; $("lyrionChain").textContent="Lyrion"; $("lyrionProgress").value=0; $("lyrionTime").textContent=""; $("lyrionQueueCount").textContent=""; return; }
     const availableSources=await api("sources",null,playerQuery());if(version!==epoch||requestedPlayer!==player)return;sources=availableSources.sources;
     $("lyrionSource").replaceChildren(...sources.map(s=>new Option(s.title,s.id)));
-    await refreshStatus(); await home();
+    void refreshLyrionSystem(); await refreshStatus(); await home();
   }
   async function refreshPlayers() {
     const result=await api("players"),preferred=player||result.selectedPlayer||""; player=result.players.some(p=>p.id===preferred)?preferred:"";
@@ -507,6 +538,7 @@
   selectSystem();
   async function pollStatus(){if(!ui.hidden&&!polling&&!document.hidden){polling=true;try{await refreshStatus();}catch(e){message(e.message);}finally{polling=false;}}}
   setInterval(pollStatus,3000);
+  setInterval(refreshLyrionSystem,10000);
   document.addEventListener('visibilitychange',pollStatus);
   document.addEventListener('fullscreenchange',pollStatus);
   window.addEventListener('pageshow',pollStatus);
