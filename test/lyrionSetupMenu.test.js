@@ -17,9 +17,11 @@ test("the Sources panel is titled Sources & Discovery and the setup pages sit in
   assert.doesNotMatch(source, /Sources & discovery/);
 });
 
-test("the Setup menu opens below its button, on top of the source list", () => {
+test("the Setup menu sits on the left under the heading and opens below its button, on top of the source list", () => {
+  assert.match(css, /\.lyrionSourcesHead\s*\{[^}]*display:grid;justify-items:start/);
+  assert.doesNotMatch(css, /\.lyrionSourcesHead\s*\{[^}]*justify-content:space-between/);
   assert.match(css, /\.lyrionSetup\s*\{[^}]*position:relative/);
-  assert.match(css, /\.lyrionSetup ul\s*\{[^}]*position:absolute[^}]*right:0[^}]*z-index:\d+/);
+  assert.match(css, /\.lyrionSetup ul\s*\{[^}]*position:absolute[^}]*left:0[^}]*z-index:\d+/);
 });
 
 function menuHarness() {
