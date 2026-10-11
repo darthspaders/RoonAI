@@ -12396,3 +12396,92 @@ body.playerFullWindow .player.player--fullscreen.isFullWindow .nowInfo .nowSourc
   margin: 0;
   overflow: auto;
 }
+
+/* Position sliders show they can be grabbed. */
+#seekSlider:not(:disabled),
+#lyrionProgress:not(:disabled) {
+  cursor: pointer;
+}
+
+#seekSlider:not(:disabled):active,
+#lyrionProgress:not(:disabled):active {
+  cursor: grabbing;
+}
+
+#seekSlider:disabled,
+#lyrionProgress:disabled {
+  cursor: default;
+}
+
+/* One visible position slider for Roon and Lyrion at every width. */
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider,
+#lyrionView .lyrionStageFooter #lyrionProgress {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 6px;
+  min-height: 6px;
+  margin: 7px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--accent) 0 var(--seek-progress, 0%), rgba(217, 179, 255, 0.22) var(--seek-progress, 0%) 100%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.035);
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-webkit-slider-runnable-track,
+#lyrionView .lyrionStageFooter #lyrionProgress::-webkit-slider-runnable-track {
+  height: 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-webkit-slider-thumb,
+#lyrionView .lyrionStageFooter #lyrionProgress::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -5px;
+  border: 2px solid rgba(248, 241, 255, 0.94);
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(217, 179, 255, 0.12);
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-moz-range-track,
+#lyrionView .lyrionStageFooter #lyrionProgress::-moz-range-track {
+  height: 6px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(217, 179, 255, 0.22);
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-moz-range-progress,
+#lyrionView .lyrionStageFooter #lyrionProgress::-moz-range-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider::-moz-range-thumb,
+#lyrionView .lyrionStageFooter #lyrionProgress::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(248, 241, 255, 0.94);
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(217, 179, 255, 0.12);
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider:disabled::-webkit-slider-thumb,
+#lyrionView .lyrionStageFooter #lyrionProgress:disabled::-webkit-slider-thumb {
+  visibility: hidden;
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) > .seekBlock #seekSlider:disabled::-moz-range-thumb,
+#lyrionView .lyrionStageFooter #lyrionProgress:disabled::-moz-range-thumb {
+  visibility: hidden;
+}
