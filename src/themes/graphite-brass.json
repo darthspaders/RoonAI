@@ -1,0 +1,12 @@
+{
+  "id": "graphite-brass",
+  "label": "Graphite & Brass",
+  "stylesheet": "theme.css",
+  "rules": [
+    { "hue": [0, 360], "light": [0, 0.2], "set": { "hue": 216, "maxSat": 0.1, "addLight": 0.08 } },
+    { "hue": [160, 345], "light": [0.7, 1], "alpha": [0.28, 0.6], "set": { "hue": 39, "maxSat": 0.5, "minLight": 0.57, "maxLight": 0.57, "minAlpha": 0.95 } },
+    { "hue": [160, 345], "light": [0.7, 1], "set": { "hue": 48, "maxSat": 0.12, "maxLight": 0.92 } },
+    { "hue": [200, 345], "set": { "hue": 39, "maxSat": 0.55, "minLight": 0.57, "maxLight": 0.62 } },
+    { "hue": [160, 200], "set": { "maxSat": 0.06 } }
+  ]
+}

@@ -83,7 +83,8 @@ function loadThemes(themesDir) {
       rules: theme.rules || [],
       greys: theme.greys === true,
       liftDarkening: theme.liftDarkening || null,
-      scheme: theme.scheme === "light" ? "light" : "dark"
+      scheme: theme.scheme === "light" ? "light" : "dark",
+      stylesheet: typeof theme.stylesheet === "string" ? theme.stylesheet : ""
     });
   }
   return themes;
@@ -103,21 +104,33 @@ function createThemes({ themesDir, defaultTheme }) {
     return { themes: [...themes.values()].map(({ id, label }) => ({ id, label })), default: fallback };
   }
 
+  function themeStylesheet(publicDir, theme, filePath) {
+    if (!theme.stylesheet || path.basename(theme.stylesheet) !== theme.stylesheet) return "";
+    if (path.resolve(filePath) !== path.resolve(publicDir, "styles.css")) return "";
+    try {
+      return fs.readFileSync(path.join(publicDir, "themes", theme.id, theme.stylesheet), "utf8");
+    } catch {
+      return "";
+    }
+  }
+
   function render(publicDir, filePath, data, cookieHeader) {
     const theme = active(cookieHeader);
     if (!theme || !theme.rules.length || !RECOLORED.has(path.extname(filePath))) return data;
     const key = `${theme.id}\0${filePath}`;
     const source = data.toString("utf8");
+    const extra = themeStylesheet(publicDir, theme, filePath);
     const hit = cache.get(key);
-    if (hit && hit.source === source) return hit.output;
+    if (hit && hit.source === source && hit.extra === extra) return hit.output;
     let output = source.replace(COLOR, (m) => mapColor(m, theme.rules, { greys: theme.greys }));
     if (theme.scheme === "light") output = output.replace(/color-scheme:\s*dark/g, "color-scheme: light");
     if (theme.liftDarkening) {
       const { below, brightness } = theme.liftDarkening;
       output = output.replace(/brightness\(\s*([\d.]+)\s*\)/g, (m, value) => (Number(value) < below ? `brightness(${brightness})` : m));
     }
+    if (extra) output = `${output}\n${extra}`;
     output = Buffer.from(output);
-    cache.set(key, { source, output });
+    cache.set(key, { source, extra, output });
     return output;
   }
 

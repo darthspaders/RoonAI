@@ -142,14 +142,15 @@ provider keys, TIDAL OAuth, Synapse model tiers and limits are documented in
 
 ## Colour themes
 
-Settings has a **Theme** picker: Original, Obsidian & Copper, Roon Dark, Roon Light and Dark Orange. The choice is saved per browser
+Settings has a **Theme** picker: Original, Obsidian & Copper, Roon Dark, Roon Light, Dark Orange and Graphite & Brass. The choice is saved per browser
 in a cookie and applies to every page. `UI_THEME` in `.env` sets the theme a browser gets before it picks one
 (default `original`).
 
 A theme is a JSON file in `src/themes/`. Its `rules` match colours by hue and lightness and set a new hue,
 a saturation cap, a lightness lift, a lightness flip (`invertLight`) and a lightness clamp (`minLight`/`maxLight`).
 A rule can also match on opacity (`alpha`), so faint tints and strong ones can go different ways, and raise
-it (`minAlpha`). The
+it (`minAlpha`). A theme can also name a `stylesheet` in `public/themes/<id>/`, appended to `styles.css` when
+that theme is served (Graphite & Brass uses it for its bundled Manrope and Young Serif fonts, under the SIL OFL). The
 first matching rule wins. Greys are left alone unless the theme sets `greys: true`. A light theme also sets
 `scheme: "light"`, `liftDarkening` (raises the `brightness()` filters that darken the artwork backdrop) and
 `artRules` (artwork is recoloured, never inverted). The server

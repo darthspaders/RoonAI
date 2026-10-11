@@ -38,7 +38,7 @@ function publicDir() {
 
 test("every bundled theme is listed with its label and the default is reported", () => {
   const listed = themes.list();
-  assert.deepEqual(listed.themes.map((t) => t.id).sort(), ["copper", "dark-orange", "original", "roon", "roon-light"]);
+  assert.deepEqual(listed.themes.map((t) => t.id).sort(), ["copper", "dark-orange", "graphite-brass", "original", "roon", "roon-light"]);
   assert.equal(listed.themes.find((t) => t.id === "copper").label, "Obsidian & Copper");
   assert.equal(listed.default, "original");
 });
@@ -208,4 +208,44 @@ test("the default theme applies when no cookie is set", () => {
   assert.equal(copperDefault.assetPath(dir, "/assets/art.jpg", undefined), path.join(dir, "themes", "copper", "assets", "art.jpg"));
   assert.match(copperDefault.render(dir, path.join(dir, "styles.css"), css, "rh_theme=original").toString(), /#d9b3ff/);
   fs.rmSync(dir, { recursive: true });
+});
+
+test("graphite and brass makes the page Rouen's graphite, text its warm off-white and strong tints solid brass", () => {
+  const page = hsl(mapColor("#05020b", rules("graphite-brass")));
+  assert.ok(Math.abs(page.h - 216) < 6 && page.s <= 0.12 && page.l >= 0.09 && page.l <= 0.12, JSON.stringify(page));
+  const text = hsl(mapColor("#faf6ff", rules("graphite-brass")));
+  assert.ok(text.h >= 40 && text.h <= 60 && text.s <= 0.13 && text.l >= 0.89 && text.l <= 0.93, JSON.stringify(text));
+  const tint = mapColor("rgba(167, 124, 255, 0.32)", rules("graphite-brass"));
+  const [r, g, b, a] = tint.match(/[\d.]+/g).map(Number);
+  const brass = hsl("#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join(""));
+  assert.ok(Math.abs(brass.h - 39) < 3 && a >= 0.95, `${tint} ${JSON.stringify(brass)}`);
+  for (const mid of ["#7a4dff", "#9b3dd6", "#5b2a9e", "#c02bb0"]) {
+    const out = mapColor(mid, rules("graphite-brass"));
+    assert.ok(Math.abs(hsl(out).h - 39) < 3, `${mid} -> ${out}`);
+    assert.ok(contrast(out, mapColor("#05020b", rules("graphite-brass"))) >= 4.5, `${mid} -> ${out} contrast`);
+  }
+});
+
+test("a theme's own stylesheet is appended to styles.css only, after the recolouring", () => {
+  const dir = publicDir();
+  fs.mkdirSync(path.join(dir, "themes", "graphite-brass"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "themes", "graphite-brass", "theme.css"), "body { font-family: \"Manrope\"; color: #d9b3ff; }");
+  fs.writeFileSync(path.join(dir, "other.css"), "a { color: #d9b3ff; }");
+  const served = themes.render(dir, path.join(dir, "styles.css"), fs.readFileSync(path.join(dir, "styles.css")), "rh_theme=graphite-brass").toString();
+  assert.match(served, /font-family: "Manrope"; color: #d9b3ff; \}$/);
+  assert.doesNotMatch(served.slice(0, served.indexOf("font-family")), /#d9b3ff/);
+  assert.doesNotMatch(themes.render(dir, path.join(dir, "other.css"), fs.readFileSync(path.join(dir, "other.css")), "rh_theme=graphite-brass").toString(), /Manrope/);
+  assert.doesNotMatch(themes.render(dir, path.join(dir, "styles.css"), fs.readFileSync(path.join(dir, "styles.css")), "rh_theme=copper").toString(), /Manrope/);
+});
+
+test("graphite and brass ships Manrope and Young Serif with their licence and uses them for body text and headings", () => {
+  const dir = path.join(__dirname, "..", "public", "themes", "graphite-brass");
+  assert.equal(theme("graphite-brass").stylesheet, "theme.css");
+  for (const font of ["manrope.woff2", "young-serif.woff2"]) assert.ok(fs.statSync(path.join(dir, "fonts", font)).size > 10000, font);
+  assert.match(fs.readFileSync(path.join(dir, "fonts", "LICENSE.txt"), "utf8"), /SIL Open Font License/);
+  const css = fs.readFileSync(path.join(dir, "theme.css"), "utf8");
+  assert.match(css, /@font-face \{ font-family: "Manrope"; src: url\("\/themes\/graphite-brass\/fonts\/manrope\.woff2"\)/);
+  assert.match(css, /@font-face \{ font-family: "Young Serif"; src: url\("\/themes\/graphite-brass\/fonts\/young-serif\.woff2"\)/);
+  assert.match(css, /body \{[^}]*font-family: "Manrope"/);
+  assert.match(css, /h1, h2[^{]*\{[^}]*font-family: "Young Serif"/);
 });
