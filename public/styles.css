@@ -12396,3 +12396,64 @@ body.playerFullWindow .player.player--fullscreen.isFullWindow .nowInfo .nowSourc
   margin: 0;
   overflow: auto;
 }
+
+/* Now Playing volume row, shared by the Roon and Lyrion rails. */
+.nowVolume {
+  display: grid;
+  grid-template-columns: max-content 30px minmax(40px, 1fr) 30px max-content;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  max-width: 380px;
+  margin-top: 18px;
+}
+
+.nowVolume[hidden] {
+  display: none !important;
+}
+
+.nowVolume .volumeLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+body .nowVolume .volumeStep,
+#lyrionView .nowVolume .volumeStep {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+body .nowVolume .volumeSlider,
+#lyrionView .nowVolume .volumeSlider {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  accent-color: var(--accent);
+}
+
+.nowVolume .volumeSlider[hidden],
+.nowVolume .volumeReadout[hidden] {
+  display: none;
+}
+
+.nowVolume .volumeReadout {
+  min-width: 3ch;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}

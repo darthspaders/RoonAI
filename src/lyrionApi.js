@@ -118,6 +118,7 @@ function createLyrionApi({ roon, readJson, sendJson, catalogue=null, client = ne
         return sendJson(res,200,{ok:true,changed:body.action==="add"?!Number(exists.exists):!!Number(exists.exists),referenceId:body.referenceId});
       });
     }
+    if (req.method === "POST" && route === "volume") { await client.requirePlayer(player); await client.setVolume(player, body); return sendJson(res, 200, { ok: true }); }
     if (req.method === "GET" && route === "sources") return sendJson(res, 200, { sources: await client.sources(player) });
     if (req.method === "POST" && route === "browse") return sendJson(res, 200, await client.browse(player, { ...body, offset, limit }));
     if (req.method === "POST" && route === "search") return sendJson(res, 200, await client.search(player, String(body.query || "").slice(0, 500), Array.isArray(body.sources) ? body.sources : []));
