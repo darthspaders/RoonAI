@@ -12396,3 +12396,69 @@ body.playerFullWindow .player.player--fullscreen.isFullWindow .nowInfo .nowSourc
   margin: 0;
   overflow: auto;
 }
+
+/* Playback chain and HQPlayer output in one or two lines under the album art, for Roon and Lyrion. */
+.playbackStrip {
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+  max-width: 100%;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--muted);
+}
+
+.playbackStrip[hidden],
+.playbackStrip [hidden] {
+  display: none;
+}
+
+.playbackStrip p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.playbackStripSignal {
+  color: var(--text);
+}
+
+.player:is(.player--regular, .player--maximized, .player--fullscreen) > .artStack:has(> #nowPlayback:not([hidden])) {
+  flex-direction: column;
+  gap: 8px;
+}
+
+@container (min-height: 200px) {
+  #playerView .player:is(.player--regular, .player--maximized, .player--fullscreen) > .artStack > .cover:has(+ #nowPlayback:not([hidden])) {
+    width: min(100cqw, calc(100cqh - 52px));
+  }
+}
+
+@container (min-height: 200px) and (max-width: 599.98px) {
+  #playerView .player:is(.player--regular, .player--maximized, .player--fullscreen) > .artStack > .cover:has(+ #nowPlayback:not([hidden])) {
+    width: min(100cqw, calc(100cqh - 72px));
+  }
+}
+
+@container (max-height: 199.98px) {
+  #nowPlayback {
+    display: none;
+  }
+}
+
+@media (max-width: 699px) {
+  #playerView .player.player--regular:not(.isMaximized):not(.isFullWindow):has(> .artStack > #nowPlayback:not([hidden])) {
+    grid-template-rows: auto auto auto minmax(280px, calc(72vw + 72px)) auto auto auto;
+  }
+
+  #playerView .player.player--regular:not(.isMaximized):not(.isFullWindow) > .artStack > .cover:has(+ #nowPlayback:not([hidden])) {
+    width: min(100cqw, calc(100cqh - 72px));
+  }
+}
+
+.sourceNote {
+  color: var(--muted);
+  font-size: 0.85em;
+  font-weight: 500;
+  white-space: nowrap;
+}

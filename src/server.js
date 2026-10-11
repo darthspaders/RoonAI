@@ -13,6 +13,9 @@ const { spawn } = require("node:child_process");
 const { URL } = require("url");
 const config = require("./config");
 const { acquireProcessLock } = require("./processLock");
+const { createHqplayerControl } = require("./hqplayerControl");
+const { parseRoonHqplayerZones, createRoonHqplayerRoute } = require("./roonHqplayer");
+const { createRoonSourceFormat, lyrionTitleSearch } = require("./roonSourceFormat");
 let appProcessLock;
 try {
   appProcessLock = acquireProcessLock(path.join(__dirname, "..", "data", "rabbit-hole.app.lock"), "Rabbit Hole app");
@@ -1965,6 +1968,13 @@ async function handleApi(req, res, url) {
     }));
   }
 
+  if (req.method === "GET" && pathname === "/api/roon/hqplayer") {
+    return sendJson(res, 200, await roonHqplayerStatus(url.searchParams.get("zone")));
+  }
+  if (req.method === "GET" && pathname === "/api/roon/source-format") {
+    return sendJson(res, 200, await roonSourceFormat(url.searchParams.get("zone_id")));
+  }
+
   if (req.method === "GET" && pathname === "/api/roon/playlists") {
     return sendJson(res, 200, await roonPlaylistsResponse({
       includeTidal: /^(1|true|yes)$/i.test(String(url.searchParams.get("includeTidal") || url.searchParams.get("all") || ""))
@@ -2911,7 +2921,12 @@ const handleVoice = createVoiceApi({ tools: rabbitHoleMcpTools, router: modelRou
   availability: () => ({ synapseAvailable: Boolean(config.ai.openai.enabled && config.ai.openai.apiKey), localAvailable: Boolean(config.openAiCompatibleBaseUrl || config.ollamaBaseUrl) }) });
 
 const lyrionCatalogue=new (require('./lyrionCatalogue').LyrionCatalogue)({tidal});
+const roonHqplayerZones = parseRoonHqplayerZones(config.roonHqplayer.zones);
+const roonHqplayerControl = createHqplayerControl();
+const roonHqplayerStatus = createRoonHqplayerRoute({ zones: roonHqplayerZones, control: roonHqplayerControl });
 const lyrionApi = require("./lyrionApi").createLyrionApi({ roon, readJson, sendJson, catalogue:lyrionCatalogue });
+const roonSourceFormat = createRoonSourceFormat({ getZone: (id) => roon.zones.get(id), hqplayerZones: roonHqplayerZones, control: roonHqplayerControl,
+  lyrionTitles: lyrionTitleSearch(lyrionApi.client), tidalQuality: resolveCurrentTrackQuality });
 const soundcloudApi = require("./soundcloudApi").createSoundCloudApi({readJson,sendJson,items:lyrionApi.client.items});
 const siriusxmAccount = new (require("./siriusxmAccount").SiriusXmAccount)();
 const siriusxmOnDemand = require("./siriusxmOnDemandApi").createSiriusXmOnDemandApi({lyrion:lyrionApi,readJson,sendJson});

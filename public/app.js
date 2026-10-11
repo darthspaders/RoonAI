@@ -124,6 +124,7 @@ const state = {
   nowQualityLoading: false,
   nowQualityInfo: null,
   nowQualityCache: {},
+  nowFormat: { key: "", text: "", from: "" },
   nowMatchIndex: -1,
   nowSonicProfile: {
     anchor: null,
@@ -1471,7 +1472,9 @@ function metadataTagBadgesForTrack(track = {}, excludedKeys = new Set()) {
   return out.slice(0, 5);
 }
 
-function nowSourceQualityHtml(info = null, track = null) {
+const NOW_FORMAT_NOTES = { hqplayer: "HQPlayer input", library: "Library file", tidal: "TIDAL catalogue" };
+
+function nowSourceQualityHtml(info = null, track = null, format = null) {
   const duration = formatTrackDuration(track?.durationMs);
 
   const detailRows = [];
@@ -1490,6 +1493,7 @@ function nowSourceQualityHtml(info = null, track = null) {
   if (label) detailRows.push({ label: "Label", value: label });
   if (genre) detailRows.push({ label: "Genre", value: genre });
   if (beatportGenre.subGenre) detailRows.push({ label: "Subgenre", value: beatportGenre.subGenre });
+  if (format?.text) detailRows.push({ label: "Format", value: format.text, note: NOW_FORMAT_NOTES[format.from] || "" });
   const bpm = Number(beatport.bpm || track?.metadataEnrichment?.bpm || 0);
   const keyName = String(beatport.keyName || track?.metadataEnrichment?.keyName || "").trim();
   const camelot = String(beatport.camelot || track?.metadataEnrichment?.camelot || "").trim();
@@ -1509,14 +1513,14 @@ function nowSourceQualityHtml(info = null, track = null) {
   if (!detailRows.length && !tagHtml) return "";
 
   return detailRows.map((row, index) => (
-    `<span class="sourceRow ${index === 0 ? "sourcePrimary" : "sourceDetail"} ${row.kind === "technical" ? "sourceTechnical" : ""}"><span class="sourceLabel">${escapeHtml(row.label)}</span><span class="sourceValue">${escapeHtml(row.value)}</span></span>`
+    `<span class="sourceRow ${index === 0 ? "sourcePrimary" : "sourceDetail"} ${row.kind === "technical" ? "sourceTechnical" : ""}"><span class="sourceLabel">${escapeHtml(row.label)}</span><span class="sourceValue">${escapeHtml(row.value)}${row.note ? ` <span class="sourceNote">${escapeHtml(row.note)}</span>` : ""}</span></span>`
   )).join("") + tagHtml;
 }
 
 function renderNowSourceQuality(info = null, track = state.nowTrack) {
   const source = $("#nowSourceFormat");
   if (!source) return;
-  const html = nowSourceQualityHtml(info, track);
+  const html = nowSourceQualityHtml(info, track, state.nowFormat);
   source.innerHTML = html;
   source.hidden = !html;
 }
@@ -1535,6 +1539,22 @@ function playbackQualityInfoFromTrack(track = null) {
     bitrate: source.bitrate || null,
     resolvedBy: "live-playback-source"
   };
+}
+
+function updateNowFormat(zone, track) {
+  const trackKey = track ? nowQualityKeyFor(track) : "";
+  const key = zone && trackKey ? [zone.zone_id, trackKey, zone.state === "playing"].join("|") : "";
+  if (key === state.nowFormat.key) return;
+  state.nowFormat = { key, text: "", from: "" };
+  if (!key) return;
+  fetch(`/api/roon/source-format?zone_id=${encodeURIComponent(zone.zone_id)}`, { cache: "no-store" })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((result) => {
+      if (state.nowFormat.key !== key || !result?.format) return;
+      state.nowFormat = { key, text: result.format, from: result.from || "" };
+      renderNowSourceQuality(state.nowQualityInfo, state.nowTrack);
+    })
+    .catch(() => {});
 }
 
 function updateNowSourceQuality(track = null) {
@@ -4694,7 +4714,7 @@ function renderState(payload) {
   const zone = activeZone();
   const visualStage = document.querySelector("#playerView .player");
   if (visualStage) {
-    const playback = { zoneId: state.selectedZoneId, connected: Boolean(payload.connected), state: zone?.state || "stopped",
+    const playback = { zoneId: state.selectedZoneId, zoneName: zone?.display_name || "", connected: Boolean(payload.connected), state: zone?.state || "stopped",
       hqplayer: zone?.display_name === "HQPlayer" && zone.outputs?.length === 1 && zone.outputs[0].display_name === "HQPlayer" };
     visualStage.dataset.playbackZoneId = playback.zoneId;
     visualStage.dataset.playbackConnected = String(playback.connected);
@@ -4766,6 +4786,7 @@ function renderState(payload) {
     outputs.innerHTML = "";
   }
   updateNowDiscoveryTools(zone);
+  updateNowFormat(zone, state.nowTrack || nowPlayingTrack(zone));
   updateNowSourceQuality(state.nowTrack || nowPlayingTrack(zone));
   updateJumpTopVisibility();
   renderSystemHealth();
