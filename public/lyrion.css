@@ -3,11 +3,11 @@
 .playbackSystemBar select { min-height:44px; width:auto; }
 .lyrionChoices {display:flex;flex-wrap:wrap;gap:8px;flex:1;min-width:0;}
 .lyrionChoices button {min-height:44px;padding:8px 16px;color:var(--muted);background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:8px;}
-.lyrionChoices button[aria-pressed="true"],#lyrionView .lyrionChoices button[aria-pressed="true"] {color:var(--accent);border-color:var(--accent);background:rgba(217,179,255,.09);}
+.lyrionChoices button[aria-pressed="true"],#lyrionView .lyrionChoices button[aria-pressed="true"] {color:var(--accent);border-color:rgba(217,179,255,.3);background:rgba(217,179,255,.09);}
 .playbackSystemBar select[hidden],#lyrionView select[hidden],#lyrionView .lyrionTabPanel[hidden],#lyrionView .lyrionCompact[hidden] {display:none!important;}
 .lyrionTabs {display:flex;flex-wrap:wrap;gap:6px;border-bottom:1px solid var(--line);padding-bottom:8px;}
 #lyrionView .lyrionTabs button {min-height:44px;flex:1;padding:10px 16px;border:0;border-bottom:2px solid transparent;border-radius:6px 6px 0 0;color:var(--muted);white-space:nowrap;}
-#lyrionView .lyrionTabs button[aria-selected="true"] {color:var(--accent);border-bottom-color:var(--accent);background:rgba(217,179,255,.07);}
+#lyrionView .lyrionTabs button[aria-selected="true"] {color:var(--accent);border-bottom-color:rgba(217,179,255,.3);background:rgba(217,179,255,.07);}
 .lyrionTabPanel {min-width:0;}
 .lyrionCompact {display:flex;align-items:center;gap:12px;min-width:0;}
 #lyrionCompactTitle {flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);}
