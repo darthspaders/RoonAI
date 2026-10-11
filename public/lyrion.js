@@ -48,10 +48,10 @@
       <ul id="lyrionXtraResults" class="lyrionFavoriteList"></ul>
     </section>
     <div class="lyrionColumns">
-      <section class="panel"><h2>Sources & discovery</h2><p><a href="/soundcloud-setup.html">Connect SoundCloud playlists</a> · <a href="/siriusxm-setup.html">SiriusXM metadata</a></p><div class="lyrionToolbar"><label for="lyrionSource">Source</label><select id="lyrionSource"><option value="local">Local Library / NAS</option></select></div>
-      <form id="lyrionSearch" class="lyrionToolbar"><label for="lyrionQuery">Search</label><input id="lyrionQuery" type="search" placeholder="Artist, track or channel"><button type="submit">Search source</button><button id="lyrionSearchAll" type="button">Search all sources</button></form>
-      <div class="lyrionToolbar"><button id="lyrionBack" type="button" disabled>Back</button><button id="lyrionHome" type="button">Browse source</button><span id="lyrionBrowseTitle" class="muted"></span></div>
-      <ul id="lyrionResults" class="lyrionList"></ul><button id="lyrionMore" type="button" hidden>Load more</button>
+      <section class="panel"><h2>Sources & discovery</h2><p><a href="/soundcloud-setup.html">Connect SoundCloud playlists</a> · <a href="/siriusxm-setup.html">SiriusXM metadata</a></p><div class="lyrionToolbar lyrionSourceRow"><button type="button" id="lyrionSourceToggle" class="resultsToggle" aria-expanded="true" aria-controls="lyrionSourceChoices" title="Hide the sources">&#9662;</button><select id="lyrionSource"><option value="local">Local Library / NAS</option></select></div>
+      <form id="lyrionSearch" class="lyrionToolbar"><input id="lyrionQuery" type="search" aria-label="Search" placeholder="Artist, track or channel"><button type="submit">Search source</button><button id="lyrionSearchAll" type="button">Search all sources</button></form>
+      <div class="lyrionToolbar"><button type="button" id="lyrionResultsToggle" class="resultsToggle" aria-expanded="true" aria-controls="lyrionResultsBody" title="Hide the source list">&#9662;</button><button id="lyrionBack" type="button" disabled>Back</button><button id="lyrionHome" type="button">Browse source</button><span id="lyrionBrowseTitle" class="muted"></span></div>
+      <div id="lyrionResultsBody"><ul id="lyrionResults" class="lyrionList"></ul><button id="lyrionMore" type="button" hidden>Load more</button></div>
       </section>
       <section class="panel"><div class="lyrionToolbar"><h2>Queue</h2><button data-lyrion-control="clear">Clear queue</button></div><p id="lyrionQueueCount" class="muted"></p><ol id="lyrionQueue" class="lyrionList"></ol><button id="lyrionQueueMore" type="button" hidden>Next queue page</button></section>
     </div>`;
@@ -94,6 +94,10 @@
   const renderSystemChoices=choices('playbackSystem','Playback system');
   const renderPlayerChoices=choices('lyrionPlayer','Lyrion player');
   const renderSourceChoices=choices('lyrionSource','Music source');
+  const sourceChoices=$("lyrionSource").nextElementSibling;sourceChoices.id="lyrionSourceChoices";
+  const foldSources=folded=>{sourceChoices.classList.toggle("isFolded",folded);setPanelFolded("#lyrionSourceToggle",null,folded,"the sources");try{localStorage.setItem("rabbitHole.lyrionSourcesFolded",folded?"1":"0");}catch{}};
+  $("lyrionSourceToggle").onclick=()=>foldSources(!sourceChoices.classList.contains("isFolded"));
+  try{foldSources(localStorage.getItem("rabbitHole.lyrionSourcesFolded")==="1");}catch{foldSources(false);}
   const channelMetadata=new Map();let favoriteMetadataAt=0;
   const showTime=value=>value?new Date(value).toLocaleTimeString([],{hour:"numeric",minute:"2-digit",timeZoneName:"short"}):"";
   function programSummary(m){return [m?.currentShow?"Now: "+m.currentShow:"",m?.nextShow?"Next: "+m.nextShow+" · "+showTime(m.nextShowStart):""].filter(Boolean).join("\n");}
@@ -387,8 +391,10 @@
     if(!favorites.length){const empty=document.createElement("p");empty.className="muted";empty.textContent="No saved channels yet. Choose Favorite beside a SiriusXM channel in Sources & discovery.";$("lyrionStageChannels").append(empty);}
     ui.querySelectorAll("[data-favorite-id]").forEach(b=>{const saved=favorites.some(f=>f.id===b.dataset.favoriteId);b.textContent=saved?"Saved":"Favorite";b.disabled=saved;});
   }
+  let resultsFolded=false;
+  const foldResults=folded=>{resultsFolded=folded;setPanelFolded("#lyrionResultsToggle","#lyrionResultsBody",folded,"the source list");};
   function renderItems(items, append=false) {
-    if (!append) $("lyrionResults").replaceChildren();
+    if (!append) { $("lyrionResults").replaceChildren(); foldResults(false); }
     for (const item of items) {
       const row=document.createElement("li"), text=document.createElement("div"); text.className="lyrionText"; text.textContent=item.title;
       const sub=document.createElement("small"); sub.textContent=[item.artist,item.source].filter(Boolean).join(" · "); text.append(sub); row.append(text);
@@ -494,6 +500,7 @@
   });
   $("lyrionSearch").onsubmit=run(()=>search(false)); $("lyrionSearchAll").onclick=run(()=>search(true));
   $("lyrionBack").onclick=run(()=>browse(history.pop()||{source:"local"}));
+  $("lyrionResultsToggle").onclick=()=>foldResults(!resultsFolded);
   $("lyrionMore").onclick=run(()=>browse({...browseRequest,offset:(browseRequest.offset||0)+50},true));
   ui.querySelectorAll("[data-lyrion-control]").forEach(b=>b.onclick=run(async()=>{if(b.dataset.lyrionControl==="clear"&&!confirm("Clear this Lyrion player's queue?"))return;await api("control",{action:b.dataset.lyrionControl});await refreshStatus();}));
   async function selectSystem() {

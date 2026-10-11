@@ -149,6 +149,8 @@ const state = {
   rejectedDebugOpen: false,
   resultArtistConfirmedOnly: false,
   openTrackDetails: new Set(),
+  resultsCollapsed: false,
+  composerCollapsed: false,
   sonicProduction: {
     enabled: false,
     productionMode: "off",
@@ -3089,6 +3091,26 @@ function queueReportHtml(result = {}) {
       ` : "<p>All displayed tracks were accepted by Roon.</p>"}
     </div>
   `;
+}
+
+function setPanelFolded(toggleSelector, bodySelector, folded, what) {
+  const body = bodySelector ? $(bodySelector) : null;
+  const toggle = $(toggleSelector);
+  if (body) body.hidden = folded;
+  if (!toggle) return;
+  toggle.setAttribute("aria-expanded", String(!folded));
+  toggle.textContent = folded ? "\u25B8" : "\u25BE";
+  toggle.title = `${folded ? "Show" : "Hide"} ${what}`;
+}
+
+function setResultsCollapsed(collapsed) {
+  state.resultsCollapsed = Boolean(collapsed);
+  setPanelFolded("#resultsToggle", "#resultsBody", state.resultsCollapsed, "the track list");
+}
+
+function setComposerCollapsed(collapsed) {
+  state.composerCollapsed = Boolean(collapsed);
+  setPanelFolded("#composerToggle", "#composerBody", state.composerCollapsed, "the playlist builder");
 }
 
 function showQueueReport(result = null) {
@@ -8518,6 +8540,7 @@ $("#playlistForm").addEventListener("submit", async (event) => {
   if (submitButton) submitButton.disabled = true;
   $("#busy").textContent = "Searching TIDAL + discovery sources...";
   $("#resultTitle").textContent = "Building rabbit hole...";
+  setResultsCollapsed(false);
   $("#tracks").innerHTML = "";
   state.resultArtistConfirmedOnly = false;
   const artistConfirmedToggle = $("#artistConfirmedOnly");
@@ -8688,6 +8711,10 @@ $("#sendTidalQueue").addEventListener("click", () => {
 });
 
 $("#tracks").addEventListener("toggle", rememberTrackDetailsToggle, true);
+$("#resultsToggle").addEventListener("click", () => setResultsCollapsed(!state.resultsCollapsed));
+$("#resultTitle").addEventListener("click", () => setResultsCollapsed(!state.resultsCollapsed));
+$("#composerToggle").addEventListener("click", () => setComposerCollapsed(!state.composerCollapsed));
+$("#composerTitle").addEventListener("click", () => setComposerCollapsed(!state.composerCollapsed));
 
 $("#tracks").addEventListener("click", async (event) => {
   const tidalButton = event.target.closest("[data-tidal-open]");

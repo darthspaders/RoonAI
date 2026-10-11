@@ -154,3 +154,11 @@ body.lyrionFullscreenOpen {overflow:hidden;}
 #lyrionSoundCloudPlaylists label {display:block;margin:16px 0 6px;font-size:12px;color:var(--muted);}
 #lyrionSoundCloudPlaylists input {box-sizing:border-box;width:100%;min-width:0;min-height:44px;}
 #lyrionSoundCloudPlaylists form {margin:0;}
+#lyrionSourceChoices.isFolded button:not([aria-pressed="true"]) {display:none;}
+#lyrionView {--lyrion-label-col:48px;}
+#lyrionSearch {padding-left:calc(var(--lyrion-label-col) + 12px);}
+#lyrionSearch #lyrionQuery {flex:1 1 320px;max-width:640px;}
+.lyrionSourceRow {align-items:flex-start;flex-wrap:nowrap;}
+#lyrionSourceToggle {margin-top:5px;}
+@media(max-width:600px){#lyrionSearch {padding-left:0;} #lyrionSearch #lyrionQuery {flex-basis:100%;max-width:none;} .lyrionSourceRow #lyrionSourceChoices {flex:1 1 0;}}
+:is(#lyrionSourceToggle,#lyrionResultsToggle) {margin-right:calc(var(--lyrion-label-col) - 34px);}
