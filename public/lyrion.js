@@ -4,7 +4,7 @@
   const ui = document.createElement("section");
   ui.id = "lyrionView"; ui.hidden = true; ui.setAttribute("aria-label", "Lyrion playback");
   ui.innerHTML = `
-    <div class="panel lyrionToolbar"><label for="lyrionPlayer">Lyrion player</label><select id="lyrionPlayer"><option value="">Choose a player</option></select><button id="lyrionRefresh" type="button">Refresh players</button></div>
+    <div class="panel lyrionToolbar"><label for="lyrionPlayer">Lyrion Player</label><select id="lyrionPlayer"><option value="">Choose a player</option></select><button id="lyrionRefresh" type="button">Refresh Players</button></div>
     <p id="lyrionMessage" role="status" aria-live="polite"></p>
     <section class="panel lyrionNow" id="lyrionNow" aria-label="Lyrion now playing">
       <img id="lyrionBackdrop" class="lyrionBackdrop" alt="" aria-hidden="true" hidden>
@@ -48,7 +48,7 @@
       <ul id="lyrionXtraResults" class="lyrionFavoriteList"></ul>
     </section>
     <div class="lyrionColumns">
-      <section class="panel"><h2>Sources & discovery</h2><p><a href="/soundcloud-setup.html">Connect SoundCloud playlists</a> · <a href="/siriusxm-setup.html">SiriusXM metadata</a></p><div class="lyrionToolbar"><label for="lyrionSource">Source</label><select id="lyrionSource"><option value="local">Local Library / NAS</option></select></div>
+      <section class="panel"><div class="lyrionSourcesHead"><h2>Sources & Discovery</h2><details class="lyrionSetup" id="lyrionSetup"><summary>Setup</summary><ul><li><a href="/soundcloud-setup.html">Connect SoundCloud playlists</a></li><li><a href="/siriusxm-setup.html">SiriusXM metadata</a></li></ul></details></div><div class="lyrionToolbar"><label for="lyrionSource">Source</label><select id="lyrionSource"><option value="local">Local Library / NAS</option></select></div>
       <form id="lyrionSearch" class="lyrionToolbar"><label for="lyrionQuery">Search</label><input id="lyrionQuery" type="search" placeholder="Artist, track or channel"><button type="submit">Search source</button><button id="lyrionSearchAll" type="button">Search all sources</button></form>
       <div class="lyrionToolbar"><button id="lyrionBack" type="button" disabled>Back</button><button id="lyrionHome" type="button">Browse source</button><span id="lyrionBrowseTitle" class="muted"></span></div>
       <ul id="lyrionResults" class="lyrionList"></ul><button id="lyrionMore" type="button" hidden>Load more</button>
@@ -57,7 +57,7 @@
     </div>`;
   document.querySelector(".shell").append(ui);
   const bar = document.createElement("div"); bar.className = "playbackSystemBar";
-  bar.innerHTML = `<label for="playbackSystem">Playback system</label><select id="playbackSystem"><option value="roon">Roon</option><option value="lyrion">Lyrion</option></select><span id="playbackSystemHint" class="muted">Independent players and queues</span>`;
+  bar.innerHTML = `<label for="playbackSystem">Playback System</label><select id="playbackSystem"><option value="roon">Roon</option><option value="lyrion">Lyrion</option></select><span id="playbackSystemHint" class="muted">Independent Players and Queues</span>`;
   document.querySelector(".appHeader").after(bar);
   let player = "", sources = [], favorites = [], browseRequest = {}, history = [], queueOffset = 0, epoch = 0, busy = false, polling = false;
   // Keep the existing controls and state; navigation only changes visibility.
@@ -91,8 +91,11 @@
     const render=()=>{group.replaceChildren();for(const option of select.options){if(!option.value)continue;const b=document.createElement('button');b.type='button';b.textContent=option.textContent;b.setAttribute('aria-pressed',String(select.value===option.value));b.onclick=()=>{select.value=option.value;select.dispatchEvent(new Event('change'));render();};group.append(b);}};
     select.addEventListener('change',render);new MutationObserver(render).observe(select,{childList:true,subtree:true});render();return render;
   }
-  const renderSystemChoices=choices('playbackSystem','Playback system');
-  const renderPlayerChoices=choices('lyrionPlayer','Lyrion player');
+  const setupMenu=$("lyrionSetup");
+  document.addEventListener("click",event=>{if(setupMenu.open&&!setupMenu.contains(event.target))setupMenu.open=false;});
+  document.addEventListener("keydown",event=>{if(event.key==="Escape"&&setupMenu.open){setupMenu.open=false;setupMenu.querySelector("summary").focus();}});
+  const renderSystemChoices=choices('playbackSystem','Playback System');
+  const renderPlayerChoices=choices('lyrionPlayer','Lyrion Player');
   const renderSourceChoices=choices('lyrionSource','Music source');
   const channelMetadata=new Map();let favoriteMetadataAt=0;
   const showTime=value=>value?new Date(value).toLocaleTimeString([],{hour:"numeric",minute:"2-digit",timeZoneName:"short"}):"";
@@ -384,7 +387,7 @@
       actions.append(play,shows,remove);row.append(actions);$("lyrionFavorites").append(row);
     }
     if(!favorites.length){ const empty=document.createElement("li");empty.className="muted";empty.textContent="No favorite channels yet. Browse SiriusXM and choose Favorite beside a channel.";$("lyrionFavorites").append(empty); }
-    if(!favorites.length){const empty=document.createElement("p");empty.className="muted";empty.textContent="No saved channels yet. Choose Favorite beside a SiriusXM channel in Sources & discovery.";$("lyrionStageChannels").append(empty);}
+    if(!favorites.length){const empty=document.createElement("p");empty.className="muted";empty.textContent="No saved channels yet. Choose Favorite beside a SiriusXM channel in Sources & Discovery.";$("lyrionStageChannels").append(empty);}
     ui.querySelectorAll("[data-favorite-id]").forEach(b=>{const saved=favorites.some(f=>f.id===b.dataset.favoriteId);b.textContent=saved?"Saved":"Favorite";b.disabled=saved;});
   }
   function renderItems(items, append=false) {
