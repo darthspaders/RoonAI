@@ -59,3 +59,9 @@ test("the Refresh Players button is title-cased like the other controls", () => 
   assert.match(source, /<button id="lyrionRefresh" type="button">Refresh Players<\/button>/);
   assert.doesNotMatch(source, />Refresh players</);
 });
+
+test("the Setup toggle starts on the panel's content edge, like the heading and the rows below it", () => {
+  const rule = css.match(/\.lyrionSetup summary\s*\{([^}]*)\}/)[1];
+  assert.match(rule, /padding:0;/);
+  assert.doesNotMatch(rule, /border:|background:|border-radius:/);
+});
