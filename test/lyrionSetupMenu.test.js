@@ -46,3 +46,11 @@ test("the playback system hint is title-cased like the controls around it", () =
   assert.match(source, /<span id="playbackSystemHint" class="muted">Independent Players and Queues<\/span>/);
   assert.doesNotMatch(source, /Independent players and queues/);
 });
+
+test("the Playback System and Lyrion Player labels are title-cased, visibly and as their button groups' names", () => {
+  assert.match(source, /<label for="playbackSystem">Playback System<\/label>/);
+  assert.match(source, /<label for="lyrionPlayer">Lyrion Player<\/label>/);
+  assert.match(source, /choices\('playbackSystem','Playback System'\)/);
+  assert.match(source, /choices\('lyrionPlayer','Lyrion Player'\)/);
+  assert.doesNotMatch(source, /Playback system|>Lyrion player<|'Lyrion player'/);
+});

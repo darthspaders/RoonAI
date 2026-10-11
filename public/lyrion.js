@@ -4,7 +4,7 @@
   const ui = document.createElement("section");
   ui.id = "lyrionView"; ui.hidden = true; ui.setAttribute("aria-label", "Lyrion playback");
   ui.innerHTML = `
-    <div class="panel lyrionToolbar"><label for="lyrionPlayer">Lyrion player</label><select id="lyrionPlayer"><option value="">Choose a player</option></select><button id="lyrionRefresh" type="button">Refresh players</button></div>
+    <div class="panel lyrionToolbar"><label for="lyrionPlayer">Lyrion Player</label><select id="lyrionPlayer"><option value="">Choose a player</option></select><button id="lyrionRefresh" type="button">Refresh players</button></div>
     <p id="lyrionMessage" role="status" aria-live="polite"></p>
     <section class="panel lyrionNow" id="lyrionNow" aria-label="Lyrion now playing">
       <img id="lyrionBackdrop" class="lyrionBackdrop" alt="" aria-hidden="true" hidden>
@@ -57,7 +57,7 @@
     </div>`;
   document.querySelector(".shell").append(ui);
   const bar = document.createElement("div"); bar.className = "playbackSystemBar";
-  bar.innerHTML = `<label for="playbackSystem">Playback system</label><select id="playbackSystem"><option value="roon">Roon</option><option value="lyrion">Lyrion</option></select><span id="playbackSystemHint" class="muted">Independent Players and Queues</span>`;
+  bar.innerHTML = `<label for="playbackSystem">Playback System</label><select id="playbackSystem"><option value="roon">Roon</option><option value="lyrion">Lyrion</option></select><span id="playbackSystemHint" class="muted">Independent Players and Queues</span>`;
   document.querySelector(".appHeader").after(bar);
   let player = "", sources = [], favorites = [], browseRequest = {}, history = [], queueOffset = 0, epoch = 0, busy = false, polling = false;
   // Keep the existing controls and state; navigation only changes visibility.
@@ -94,8 +94,8 @@
   const setupMenu=$("lyrionSetup");
   document.addEventListener("click",event=>{if(setupMenu.open&&!setupMenu.contains(event.target))setupMenu.open=false;});
   document.addEventListener("keydown",event=>{if(event.key==="Escape"&&setupMenu.open){setupMenu.open=false;setupMenu.querySelector("summary").focus();}});
-  const renderSystemChoices=choices('playbackSystem','Playback system');
-  const renderPlayerChoices=choices('lyrionPlayer','Lyrion player');
+  const renderSystemChoices=choices('playbackSystem','Playback System');
+  const renderPlayerChoices=choices('lyrionPlayer','Lyrion Player');
   const renderSourceChoices=choices('lyrionSource','Music source');
   const channelMetadata=new Map();let favoriteMetadataAt=0;
   const showTime=value=>value?new Date(value).toLocaleTimeString([],{hour:"numeric",minute:"2-digit",timeZoneName:"short"}):"";
