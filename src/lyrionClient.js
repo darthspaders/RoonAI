@@ -39,6 +39,12 @@ function libraryReference(actions, server, player, source) {
   return { libraryIdentity: { type, id, server, playerId: player, params: libraryParams(native.params) },
     libraryActions: Object.fromEntries(Object.entries(actions).filter(([,action])=>action.cmd.length===1 && action.cmd[0]==="playlistcontrol")) };
 }
+function lmsVolume(s) {
+  const raw = s["mixer volume"];
+  if (Number(s.use_volume_control) === 0 || raw === undefined || raw === null || raw === "" || !Number.isFinite(Number(raw))) return null;
+  const level = Number(raw);
+  return { type: "number", min: 0, max: 100, step: 1, value: Math.min(100, Math.abs(Math.round(level))), is_muted: level < 0 };
+}
 class LyrionClient {
   constructor({ baseUrl = process.env.LYRION_URL || "http://127.0.0.1:9000", fetchImpl = fetch, itemsFile } = {}) {
     this.baseUrl = new URL(baseUrl).origin;
@@ -93,7 +99,7 @@ class LyrionClient {
       state: s.mode === "play" ? "playing" : s.mode === "pause" ? "paused" : "stopped",
       position: Number(s.time) || 0, duration: Number(s.duration) || Number(current?.duration) || this.onDemandMetadata?.(current?.url)?.duration || 0,
       nowPlaying: current ? this.track(current) : null, queue: (s.playlist_loop || []).map(t => this.track(t)),
-      queueCount: Number(s.playlist_tracks) || 0, queueIndex: index, offset };
+      queueCount: Number(s.playlist_tracks) || 0, queueIndex: index, offset, volume: lmsVolume(s) };
   }
   remember(action, player, source) {
     while (this.actions.size >= 10000) this.actions.delete(this.actions.keys().next().value);
@@ -194,6 +200,14 @@ class LyrionClient {
   }
   async executeExact(player,input,kind){
     return this.rpc(player,this.exactCommand(input,kind,player));
+  }
+  async setVolume(player, { value, step } = {}) {
+    const number = v => v !== undefined && v !== null && v !== "" && Number.isFinite(Number(v));
+    let level;
+    if (number(step) && Number(step) !== 0) { const n = Math.max(-100, Math.min(100, Math.round(Number(step)))); level = (n > 0 ? "+" : "") + n; }
+    else if (number(value)) level = String(Math.max(0, Math.min(100, Math.round(Number(value)))));
+    else throw new Error("Send a volume level or step.");
+    return this.rpc(player, ["mixer", "volume", level]);
   }
   async control(player, action) {
     const commands = { play: ["play"], pause: ["pause", 1], next: ["playlist", "index", "+1"], previous: ["playlist", "index", "-1"], clear: ["playlist", "clear"] };

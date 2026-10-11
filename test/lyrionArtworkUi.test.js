@@ -107,7 +107,7 @@ function statusHarness(){
   syncArtistFavorites(){},syncXtraFavorites(){},refreshXtraFavorites:async()=>{},refreshFavoriteMetadata:async()=>{},
   refreshArtistFavorites:()=>favorites.promise,renderFavorites(){},playerQuery:()=>'?playerId='+encodeURIComponent(context.player),
   setScrollingLabel:(id,value)=>get(id).textContent=value,
-  time:seconds=>String(seconds),run:fn=>fn,home:async()=>{},showTime:value=>value};
+  time:seconds=>String(seconds),run:fn=>fn,home:async()=>{},lyrionVolume:{update(){}},showTime:value=>value};
  vm.runInNewContext(artworkCode+statusCode+loadPlayerCode,context);
  return {...context,context,get,requests,events,favorites};
 }

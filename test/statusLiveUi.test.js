@@ -200,7 +200,7 @@ function playerHarness() {
     zoneDisplayLabel: zone => zone.zone_id, escapeHtml: value => String(value), isLiveRadioZone: () => false,
     formatQueueInfo: () => "", formatSeconds: value => String(value), liveQueueHtml: () => "",
     artworkMetadataMatchesRoon: () => false, trustedRadioArtworkUrl: () => "", setCoverImage() {},
-    updateNowDiscoveryTools() {}, updateNowSourceQuality() {}, updateJumpTopVisibility() {}, renderSystemHealth() {},
+    updateNowDiscoveryTools() {}, updateNowSourceQuality() {}, renderNowVolume() {}, updateJumpTopVisibility() {}, renderSystemHealth() {},
     scheduleRabbitRecoveryRefresh() {}, renderStandbyPool() {}, renderMemoryStatus() {}, renderLlmStatus() {}, renderModelStatus() {},
     applyBridgeSyncAlert() {}, applyCalibration: value => calibrations.push(value), feedbackMapFromServer: value => value,
     applySession: value => { applied.push(value); playerState.lastResult = value.result; playerState.sessionUpdatedAt = value.updatedAt; },
