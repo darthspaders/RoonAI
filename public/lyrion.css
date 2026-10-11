@@ -159,3 +159,11 @@ body.lyrionFullscreenOpen {overflow:hidden;}
 .lyrionHqplayer[hidden] {display:none;}
 .lyrionHqplayer dt {font-weight:600;color:var(--muted);}
 .lyrionHqplayer dd {margin:0;overflow-wrap:anywhere;}
+/* HQPlayer web interface and HQPTuner links under the Playback System bar. */
+.hqplayerLinksBar {display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:-4px 0 12px;}
+.hqplayerLinksBar[hidden] {display:none;}
+.hqplayerLinksLabel {color:var(--muted);}
+.playbackSystemBar label,.hqplayerLinksLabel,#lyrionView label[for="lyrionPlayer"] {font-size:16px;}
+.hqplayerLinksBar a {display:inline-flex;align-items:center;min-height:44px;padding:8px 16px;box-sizing:border-box;color:var(--muted);background:rgba(0,0,0,.25);border:1px solid rgba(217,179,255,.14);border-radius:8px;text-decoration:none;}
+.hqplayerLinksBar a:is(:hover,:focus-visible) {color:var(--accent);border-color:rgba(217,179,255,.3);}
+.hqplayerLinksBar a:focus-visible {outline:2px solid var(--accent);outline-offset:3px;}

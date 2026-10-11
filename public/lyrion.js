@@ -59,6 +59,16 @@
   const bar = document.createElement("div"); bar.className = "playbackSystemBar";
   bar.innerHTML = `<label for="playbackSystem">Playback system</label><select id="playbackSystem"><option value="roon">Roon</option><option value="lyrion">Lyrion</option></select><span id="playbackSystemHint" class="muted">Independent players and queues</span>`;
   document.querySelector(".appHeader").after(bar);
+  const hqplayerRow = document.createElement("div"); hqplayerRow.id = "hqplayerLinks"; hqplayerRow.className = "hqplayerLinksBar"; hqplayerRow.hidden = true;
+  hqplayerRow.innerHTML = `<span class="hqplayerLinksLabel">HQPlayer</span><span id="hqplayerLinkList" class="lyrionChoices"></span>`;
+  bar.after(hqplayerRow);
+  function renderHqplayerLinks(links){
+    $("hqplayerLinkList").replaceChildren(...links.map(link=>{const a=document.createElement("a");a.textContent=link.label+" ↗";a.href=link.url;a.target="_blank";a.rel="noopener noreferrer";return a;}));
+    $("hqplayerLinks").hidden=!links.length;
+  }
+  async function loadHqplayerLinks(){
+    try{const response=await fetch("/api/lyrion/hqplayer-links",{cache:"no-store"});renderHqplayerLinks(response.ok?(await response.json()).links||[]:[]);}catch{renderHqplayerLinks([]);}
+  }
   let player = "", sources = [], favorites = [], browseRequest = {}, history = [], queueOffset = 0, epoch = 0, busy = false, polling = false;
   // Keep the existing controls and state; navigation only changes visibility.
   const tabDefinitions=[['now','Now playing', $('lyrionNow')],['channels','Channels',ui.querySelector('.lyrionFavorites')],['shows','Shows',$('lyrionShowsHeading').closest('section')],['artists','Artist stations',$('lyrionArtists')],['xtra','Xtra channels',$('lyrionXtra')],['sources','Sources',ui.querySelector('.lyrionColumns > section')],['queue','Queue',ui.querySelector('.lyrionColumns > section:last-child')]];
@@ -523,6 +533,7 @@
   try { $("playbackSystem").value=localStorage.getItem("rabbitHole.playbackSystem")==="lyrion"?"lyrion":"roon"; } catch {}
   renderSystemChoices();
   selectSystem();
+  void loadHqplayerLinks();
   async function pollStatus(){if(!ui.hidden&&!polling&&!document.hidden){polling=true;try{await refreshStatus();}catch(e){message(e.message);}finally{polling=false;}}}
   setInterval(pollStatus,3000);
   document.addEventListener('visibilitychange',pollStatus);

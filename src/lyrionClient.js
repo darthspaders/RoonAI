@@ -64,22 +64,34 @@ class LyrionClient {
   }
   async players() {
     const result = await this.rpc("", ["serverstatus", 0, 999]);
-    return (result.players_loop || []).map(p => ({ id: p.playerid, name: p.name, connected: !!Number(p.connected), playing: !!Number(p.isplaying), model: p.model }));
+    return (result.players_loop || []).map(p => ({ id: p.playerid, name: p.name, connected: !!Number(p.connected), playing: !!Number(p.isplaying), model: p.model, ip: p.ip || "" }));
+  }
+  async bridgeModels() {
+    if (!this.playerModels || Date.now() - this.playerModels.at > 30000) {
+      const list = await this.players();
+      const pref = list.some(p => p.model === "hqplayer") ? await this.rpc("", ["pref", "plugin.hqplayerbridge:addresses", "?"]).catch(() => ({})) : {};
+      this.playerModels = { at: Date.now(), list, addresses: String(pref?._p2 || "").split(/[\s,;]+/).filter(usableHost) };
+    }
+    return this.playerModels;
+  }
+  bridgeHost(models, address) {
+    const raw = String(address || "").trim(), own = /^[^:]+:\d+$/.test(raw) ? raw.replace(/:\d+$/, "") : raw;
+    const configured = models.addresses;
+    return configured.length === 1 ? configured[0] : configured.includes(own) ? own : !configured.length && usableHost(own) ? own : "";
   }
   async hqplayerFor(player, s) {
     if (!this.hqplayer) return null;
     try {
-      if (!this.playerModels || Date.now() - this.playerModels.at > 30000) {
-        const list = await this.players();
-        const pref = list.some(p => p.model === "hqplayer") ? await this.rpc("", ["pref", "plugin.hqplayerbridge:addresses", "?"]).catch(() => ({})) : {};
-        this.playerModels = { at: Date.now(), list, addresses: String(pref?._p2 || "").split(/[\s,;]+/).filter(usableHost) };
-      }
-      if (this.playerModels.list.find(p => p.id === player)?.model !== "hqplayer") return null;
-      const raw = String(s.player_ip || "").trim(), own = /^[^:]+:\d+$/.test(raw) ? raw.replace(/:\d+$/, "") : raw;
-      const configured = this.playerModels.addresses;
-      const host = configured.length === 1 ? configured[0] : configured.includes(own) ? own : !configured.length && usableHost(own) ? own : "";
+      const models = await this.bridgeModels();
+      if (models.list.find(p => p.id === player)?.model !== "hqplayer") return null;
+      const host = this.bridgeHost(models, s.player_ip);
       return host ? await this.hqplayer.status(host) : null;
     } catch { return null; }
+  }
+  async hqplayerWebHost() {
+    const models = await this.bridgeModels();
+    const hosts = [...new Set(models.list.filter(p => p.model === "hqplayer").map(p => this.bridgeHost(models, p.ip)).filter(Boolean))];
+    return hosts.length === 1 ? hosts[0] : "";
   }
   async requirePlayer(id) {
     if (!(await this.players()).some(p => p.id === id && p.connected)) throw new Error("Choose a connected Lyrion player first.");
