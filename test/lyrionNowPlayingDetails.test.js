@@ -91,3 +91,9 @@ test("the System chips in the Lyrion rail are a compact size, not the fullscreen
   assert.match(css, /#lyrionView \.lyrionTemps \.pcTempChip span \{[^}]*font-size:11px;/);
   assert.match(css, /#lyrionView \.lyrionTemps \.pcTempChip strong \{[^}]*font-size:20px;/);
 });
+
+test("the Now playing caption and the Playback and System headings are one heading size, larger than the rows they head", () => {
+  const css = fs.readFileSync(require.resolve("../public/lyrion.css"), "utf8");
+  assert.match(css, /\.lyrionStageBar > span,\.lyrionConnection h3 \{font-size:14px;font-weight:600;\}/);
+  assert.match(css, /\.lyrionDetails \{[^}]*font-size:13px;/);
+});

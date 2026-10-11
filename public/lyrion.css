@@ -163,3 +163,4 @@ body.lyrionFullscreenOpen {overflow:hidden;}
 #lyrionView .lyrionTemps .pcTempChip {min-height:36px;gap:8px;padding:0 14px;}
 #lyrionView .lyrionTemps .pcTempChip span {font-size:11px;}
 #lyrionView .lyrionTemps .pcTempChip strong {font-size:20px;line-height:1;}
+.lyrionStageBar > span,.lyrionConnection h3 {font-size:14px;font-weight:600;}
