@@ -27,7 +27,7 @@ test("the Roon HQPlayer route asks only the configured host of a mapped zone, an
 test("the server serves the route from ROON_HQPLAYER_ZONES, and .env.example documents it", () => {
   const server = read("src/server.js");
   assert.match(server, /pathname === "\/api\/roon\/hqplayer"\) \{\s*return sendJson\(res, 200, await roonHqplayerStatus\(url\.searchParams\.get\("zone"\)\)\);/);
-  assert.match(server, /createRoonHqplayerRoute\(\{ zones: parseRoonHqplayerZones\(config\.roonHqplayer\.zones\), control: createHqplayerControl\(\) \}\)/);
+  assert.match(server, /const roonHqplayerZones = parseRoonHqplayerZones\(config\.roonHqplayer\.zones\);\nconst roonHqplayerControl = createHqplayerControl\(\);\nconst roonHqplayerStatus = createRoonHqplayerRoute\(\{ zones: roonHqplayerZones, control: roonHqplayerControl \}\);/);
   assert.match(read("src/config.js"), /roonHqplayer: \{\s*zones: process\.env\.ROON_HQPLAYER_ZONES \|\| ""/);
   assert.match(read(".env.example"), /\nROON_HQPLAYER_ZONES=\n/);
 });

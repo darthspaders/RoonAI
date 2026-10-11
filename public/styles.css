@@ -12455,3 +12455,10 @@ body.playerFullWindow .player.player--fullscreen.isFullWindow .nowInfo .nowSourc
     width: min(100cqw, calc(100cqh - 72px));
   }
 }
+
+.sourceNote {
+  color: var(--muted);
+  font-size: 0.85em;
+  font-weight: 500;
+  white-space: nowrap;
+}
