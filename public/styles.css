@@ -11769,21 +11769,22 @@ body.playerFullWindow .player.player--fullscreen.isFullWindow ::placeholder,
   color: var(--accent) !important;
 }
 
-/* Static metadata window: reserve an eight-row maximum so the left rail does
-   not move the System section when a track has fewer fields or a tag row. */
+/* Metadata window: rows pack at the top. Maximized and full-window players
+   reserve an eight-row maximum so their System section does not move. */
 .player:is(.player--regular, .player--maximized, .player--fullscreen) .nowInfo .nowSourceFormat {
   flex: 0 0 auto;
   display: grid;
+  align-content: start;
   visibility: visible;
+}
+
+.player.player--regular:not(.isMaximized):not(.isFullWindow) .nowInfo .nowSourceFormat {
+  gap: 12px;
 }
 
 .player:is(.player--regular, .player--maximized, .player--fullscreen) .nowInfo .nowSourceFormat[hidden] {
   display: grid !important;
   visibility: hidden;
-}
-
-.player.player--regular:not(.isMaximized):not(.isFullWindow) .nowInfo .nowSourceFormat {
-  min-height: calc(8 * 1.3em + 7 * 7px);
 }
 
 body.playerMaximized .player.player--maximized.isMaximized:not(.player--fullscreen):not(.isFullWindow) .nowInfo .nowSourceFormat {
