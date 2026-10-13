@@ -188,6 +188,7 @@ const { mergeTrackLists } = require("./trackListMerge");
 const yearRangeUtil = require("./yearRange");
 
 const publicDir = path.join(__dirname, "..", "public");
+const uiThemes = require("./uiThemes").createThemes({ themesDir: path.join(__dirname, "themes"), defaultTheme: config.ui.defaultTheme });
 const MAX_JSON_BODY_BYTES = 5 * 1024 * 1024;
 const TIDAL_QUALITY_LOOKUP_TIMEOUT_MS = Math.max(
   8_000,
@@ -1355,13 +1356,14 @@ function serveStatic(req, res, pathname) {
     return sendJson(res, 403, { error: "Forbidden" });
   }
 
-  fs.readFile(filePath, (error, data) => {
+  const servedPath = uiThemes.assetPath(publicDir, safePath, req.headers.cookie) || filePath;
+  fs.readFile(servedPath, (error, data) => {
     if (error) return sendJson(res, 404, { error: "Not found" });
     res.writeHead(200, responseHeaders({
       ...noStoreHeaders,
       "content-type": mimeTypes[path.extname(filePath)] || "application/octet-stream",
     }));
-    res.end(data);
+    res.end(uiThemes.render(publicDir, filePath, data, req.headers.cookie));
   });
 }
 
@@ -3063,6 +3065,8 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res,404,{error:"Unknown SiriusXM connection action"});
     } else if (url.pathname === "/api/siriusxm/metadata" && req.method === "GET") {
       sendJson(res,200,await lyrionApi.siriusxm.getChannelMetadata(url.searchParams.get("channel")||""));
+    } else if (url.pathname === "/api/themes" && req.method === "GET") {
+      sendJson(res, 200, uiThemes.list());
     } else if (url.pathname.startsWith("/api/lyrion/")) {
       await lyrionApi.handle(req, res, url);
     } else if (url.pathname.startsWith("/api/soundcloud/")) {

@@ -357,6 +357,9 @@ module.exports = {
     jitter: envNumber("BEATPORT_MEMORY_BACKFILL_JITTER", 0.2),
     startDelayMs: envNumber("BEATPORT_MEMORY_BACKFILL_START_DELAY_MS", 30000)
   },
+  ui: {
+    defaultTheme: process.env.UI_THEME || "original"
+  },
   pcMonitor: {
     enabled: !/^(0|false|no)$/i.test(process.env.PC_MONITOR_ENABLED || "true"),
     baseUrl: process.env.PC_MONITOR_BASE_URL || "http://127.0.0.1:3088",

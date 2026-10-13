@@ -9979,6 +9979,51 @@ body.playerFullWindow .player.player--fullscreen.isFullWindow ::placeholder,
   width: 100%;
 }
 
+.settingsPanel > .topControls {
+  --settings-control-width: 340px;
+  --settings-label-width: 128px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px 14px;
+}
+
+.settingsPanel > .topControls .aiModeControls {
+  display: contents;
+}
+
+.settingsPanel > .topControls :is(.aiModeControls label, .zonePicker) {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  flex: 0 1 var(--settings-control-width);
+  width: var(--settings-control-width);
+  min-width: 0;
+  max-width: 100%;
+  padding: 5px;
+  box-sizing: border-box;
+}
+
+.settingsPanel > .topControls :is(.aiModeControls label, .zonePicker) span {
+  flex: 0 0 var(--settings-label-width);
+  padding-left: 9px;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
+body:not(.playerFullWindow):not(.playerMaximized) .settingsPanel > .topControls :is(.aiModeControls label, .zonePicker) :is(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),
+  select
+) {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  border-radius: 999px;
+  padding-inline: 16px 12px;
+}
+
 .settingsSection {
   display: grid;
   gap: 16px;

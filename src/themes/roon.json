@@ -1,0 +1,10 @@
+{
+  "id": "roon",
+  "label": "Roon Dark",
+  "rules": [
+    { "hue": [0, 360], "light": [0, 0.2], "set": { "maxSat": 0.03, "addLight": 0.05 } },
+    { "hue": [160, 345], "light": [0.7, 1], "set": { "maxSat": 0.04 } },
+    { "hue": [200, 345], "set": { "hue": 220, "maxSat": 0.7 } },
+    { "hue": [160, 200], "set": { "maxSat": 0.06 } }
+  ]
+}

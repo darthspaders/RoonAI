@@ -1,0 +1,12 @@
+Fonts bundled with the Graphite & Brass theme.
+
+manrope.woff2      Manrope - Copyright 2018 The Manrope Project Authors
+                   (https://github.com/sharanda/manrope)
+young-serif.woff2  Young Serif - Copyright 2023 The Young Serif Project Authors
+                   (https://github.com/noirblancrouge/YoungSerif)
+
+Both are licensed under the SIL Open Font License, Version 1.1:
+https://openfontlicense.org
+
+These files were taken from Rouen (https://github.com/meltface-80/Rouen,
+MIT), whose Graphite and Brass look this theme follows.

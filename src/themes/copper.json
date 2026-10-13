@@ -1,0 +1,9 @@
+{
+  "id": "copper",
+  "label": "Obsidian & Copper",
+  "rules": [
+    { "hue": [200, 345], "light": [0, 0.2], "set": { "hue": 28, "maxSat": 0.3 } },
+    { "hue": [200, 300], "set": { "hue": 38, "maxSat": 0.55 } },
+    { "hue": [300, 345], "set": { "hue": 46, "maxSat": 0.78 } }
+  ]
+}

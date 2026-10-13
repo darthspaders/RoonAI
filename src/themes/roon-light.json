@@ -1,0 +1,17 @@
+{
+  "id": "roon-light",
+  "label": "Roon Light",
+  "scheme": "light",
+  "greys": true,
+  "liftDarkening": { "below": 0.7, "brightness": 1.1 },
+  "rules": [
+    { "hue": [200, 345], "sat": [0.25, 1], "light": [0.2, 0.7], "set": { "hue": 220, "maxSat": 0.7, "invertLight": true, "minLight": 0.36, "maxLight": 0.42 } },
+    { "hue": [160, 345], "light": [0.7, 1], "set": { "maxSat": 0.03, "invertLight": true, "maxLight": 0.12 } },
+    { "hue": [160, 200], "sat": [0.25, 1], "light": [0.2, 0.7], "set": { "maxSat": 0.08, "invertLight": true, "maxLight": 0.4 } },
+    { "sat": [0.25, 1], "light": [0.2, 0.88], "set": { "invertLight": true, "minLight": 0.32, "maxLight": 0.4 } },
+    { "set": { "maxSat": 0.03, "invertLight": true } }
+  ],
+  "artRules": [
+    { "hue": [200, 345], "set": { "hue": 220, "maxSat": 0.7 } }
+  ]
+}

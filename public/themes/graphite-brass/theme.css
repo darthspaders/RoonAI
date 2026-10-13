@@ -1,0 +1,32 @@
+/* Graphite & Brass: Rouen's type, Manrope for text and Young Serif for headings. */
+@font-face { font-family: "Manrope"; src: url("/themes/graphite-brass/fonts/manrope.woff2") format("woff2"); font-weight: 200 800; font-display: swap; }
+@font-face { font-family: "Young Serif"; src: url("/themes/graphite-brass/fonts/young-serif.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+
+body {
+  font-family: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+button, input, select, textarea {
+  font-family: inherit;
+}
+
+h1, h2, .appIdentityName, #nowTitle, #lyrionTitle {
+  font-family: "Young Serif", Georgia, "Times New Roman", serif;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+@layer pills {
+  :is(.lyrionChoices, .lyrionTabs, .viewTabs, .secondaryNavItems, .lyrionCenterViews, .dbViewSwitch, .tidalLibraryFilters) button:is(.active, [aria-pressed="true"], [aria-current="page"], [aria-selected="true"]) {
+    background: #c9a45c !important;
+    border-color: #c9a45c !important;
+    box-shadow: none !important;
+    color: #17191c !important;
+    font-weight: 700 !important;
+  }
+
+  :is(.lyrionChoices, .lyrionTabs, .viewTabs, .secondaryNavItems, .lyrionCenterViews, .dbViewSwitch, .tidalLibraryFilters) button:is(.active, [aria-pressed="true"], [aria-current="page"], [aria-selected="true"]):hover {
+    background: #d6b46e !important;
+    border-color: #d6b46e !important;
+  }
+}
