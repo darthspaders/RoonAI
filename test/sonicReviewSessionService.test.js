@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const { MODEL, MODEL_VERSION } = require("../src/sonicCoverageIdentity");
 const { DatabaseSync } = require("node:sqlite");
 const { createSonicReviewSessionService } = require("../src/sonicReviewSessionService");
 
@@ -93,8 +94,8 @@ function candidate(identityKey, artist, title, similarity, extra = {}) {
       anchorIdentityKey: "tidal:anchor",
       rank: extra.rank || 1,
       similarity,
-      model: "discogs-effnet",
-      modelVersion: "1",
+      model: MODEL,
+      modelVersion: MODEL_VERSION,
       selectionScore: similarity + 0.01,
       positiveSimilarity: 0.8,
       negativeSimilarity: 0.1,
@@ -125,12 +126,13 @@ function createService(db, overrides = {}, serviceOverrides = {}) {
     findStoredSonicProfile(track) {
       return {
         identityKey: track.identityKey,
-        model: "discogs-effnet",
-        modelVersion: "1",
-        dimensions: 1280,
+        model: MODEL,
+        modelVersion: MODEL_VERSION,
+        track: { metadata: { identityRelation: "exact" } },
+        dimensions: 1024,
         sourceSha256: "test-sha",
         updatedAt: "2026-09-15T00:00:00.000Z",
-        vector: Array(1280).fill(0.5)
+        vector: Array(1024).fill(0.5)
       };
     },
     getSonicAnchorProfile() {
@@ -152,12 +154,65 @@ function createService(db, overrides = {}, serviceOverrides = {}) {
   });
 }
 
+test("Sonic Review rejects an unproven anchor before generating or saving a session", async t => {
+  const db = createDb();
+  t.after(() => db.close());
+  let generated = 0;
+  const service = createService(db, {
+    findStoredSonicProfile: track => ({ identityKey: track.identityKey, track: { metadata: { identityRelation: "version-proxy" } } }),
+    generateSonicNeighborCandidates: () => { generated++; return { candidates: [] }; }
+  });
+  await assert.rejects(() => service.startReviewSession({ anchor: { identityKey: "tidal:451599197", artist: "D-Nox", title: "Your Love" } }),
+    error => error.statusCode === 422 && /verified recording identity/.test(error.message));
+  assert.equal(generated, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sonic_review_session").get().n, 0);
+});
+
+test("Sonic Review filters unsafe candidates and revalidates persisted context and saves", async t => {
+  const db = createDb();
+  t.after(() => db.close());
+  const relation = new Map([["tidal:anchor", "exact"], ["tidal:proxy", "version-proxy"],
+    ["tidal:local", ""], ["tidal:equivalent", "equivalent-recording"]]);
+  let generationOptions, neighborOptions, saves = 0;
+  const service = createService(db, {
+    findStoredSonicProfile: (track, options) => {
+      assert.equal(options.allowVersionProxy, false);
+      const key = typeof track === "string" ? track : track.identityKey;
+      return { identityKey: key, model: MODEL, modelVersion: MODEL_VERSION, dimensions: 1024,
+        track: { metadata: { identityRelation: relation.get(key), sourceType: "beatport-preview-version-proxy" } } };
+    },
+    generateSonicNeighborCandidates: options => {
+      generationOptions = options;
+      return { candidates: [candidate("tidal:proxy", "Proxy", "Other Mix", 0.99),
+        candidate("tidal:local", "Local", "Unproven", 0.98), candidate("tidal:equivalent", "Safe", "Recording", 0.97)] };
+    },
+    findSonicNeighbors: (track, count, options) => {
+      neighborOptions = options;
+      return { neighbors: [ { identityKey: "tidal:proxy", track: { artist: "Proxy", title: "Other Mix" }, similarity: 0.99 },
+        { identityKey: "tidal:equivalent", track: { artist: "Safe", title: "Recording" }, similarity: 0.97 } ] };
+    },
+    saveSonicAnchorProfile: () => { saves++; return {}; }
+  });
+  const session = await service.startReviewSession({ anchor: { identityKey: "tidal:anchor", artist: "Anchor", title: "Recording" }, count: 1 });
+  assert.equal(generationOptions.allowVersionProxy, false);
+  assert.equal(session.candidateCount, 1);
+  assert.equal(session.diagnostics.rejectionReasons["unverified-sonic-identity"], 2);
+  const context = service.getAssistantReviewContext(session.sessionId);
+  assert.equal(context.candidate.identity, "tidal:equivalent");
+  assert.equal(neighborOptions.allowVersionProxy, false);
+  relation.set("tidal:equivalent", "version-proxy");
+  assert.throws(() => service.getAssistantReviewContext(session.sessionId), /verified recording identity/);
+  await assert.rejects(() => service.saveReviewItem({ sessionId: session.sessionId, decision: "KEEP", profile: {} }), /verified recording identity/);
+  assert.equal(saves, 0);
+  assert.equal(db.prepare("SELECT status FROM sonic_review_session_item WHERE session_id=?").get(session.sessionId).status, "PENDING");
+});
+
 test("starts a persisted read-only session, suppresses reviewed/duplicate rows, and returns the first item", async () => {
   const db = createDb();
   addMemoryTrack(db, 1, "tidal:anchor", "Anchor Artist", "Anchor Track", { genre: "Progressive House" });
   addMemoryTrack(db, 2, "tidal:fresh-a", "Fresh A", "One", { genre: "Progressive House", subgenre: "Dark Progressive" });
   addMemoryTrack(db, 3, "tidal:fresh-b", "Fresh B", "Two", { genre: "Progressive House" });
-  db.prepare(`INSERT INTO sonic_neighbor_feedback (anchor_identity_key, candidate_identity_key, rating, model, model_version) VALUES (?, ?, ?, ?, ?)`).run("tidal:anchor", "tidal:reviewed", "skip", "discogs-effnet", "1");
+  db.prepare(`INSERT INTO sonic_neighbor_feedback (anchor_identity_key, candidate_identity_key, rating, model, model_version) VALUES (?, ?, ?, ?, ?)`).run("tidal:anchor", "tidal:reviewed", "skip", MODEL, MODEL_VERSION);
 
   const service = createService(db);
   const result = await service.startReviewSession({
@@ -214,7 +269,7 @@ test("session generation uses asynchronous scoring and refreshes its standby sna
 
 test("session state survives a service restart and pause/resume keeps the pointer stable", async () => {
   const db = createDb();
-  db.prepare(`INSERT INTO sonic_neighbor_feedback (anchor_identity_key, candidate_identity_key, rating, model, model_version) VALUES (?, ?, ?, ?, ?)`).run("tidal:anchor", "tidal:reviewed", "skip", "discogs-effnet", "1");
+  db.prepare(`INSERT INTO sonic_neighbor_feedback (anchor_identity_key, candidate_identity_key, rating, model, model_version) VALUES (?, ?, ?, ?, ?)`).run("tidal:anchor", "tidal:reviewed", "skip", MODEL, MODEL_VERSION);
   const service = createService(db);
   const created = await service.startReviewSession({ anchor: "tidal:anchor", count: 2 });
   const paused = service.pauseReviewSession(created.sessionId);
@@ -248,7 +303,7 @@ test("assistant context is compact, evidence-labeled, and never returns the stor
   assert.equal(context.anchor.genre, "Progressive House");
   assert.equal(context.candidate.subgenre, "Dark Progressive");
   assert.equal(context.sonicRelationship.cosineSimilarity, 0.94);
-  assert.equal(context.candidate.existingSonicProfile.dimensions, 1280);
+  assert.equal(context.candidate.existingSonicProfile.dimensions, 1024);
   assert.equal(context.candidate.existingSonicProfile.vector, undefined);
   assert.equal(context.schemaHints.rawEmbeddingsReturned, false);
   assert.match(context.evidenceSummary.text, /Similarity: 0.94/);
@@ -268,7 +323,7 @@ test("review schema exposes canonical IDs and production remains shadow-only", (
 
 test("save, queue, rate, advance, and cancel stay session-scoped while preserving existing authorities", async () => {
   const db = createDb();
-  db.prepare(`INSERT INTO sonic_neighbor_feedback (anchor_identity_key, candidate_identity_key, rating, model, model_version) VALUES (?, ?, ?, ?, ?)`).run("tidal:anchor", "tidal:reviewed", "skip", "discogs-effnet", "1");
+  db.prepare(`INSERT INTO sonic_neighbor_feedback (anchor_identity_key, candidate_identity_key, rating, model, model_version) VALUES (?, ?, ?, ?, ?)`).run("tidal:anchor", "tidal:reviewed", "skip", MODEL, MODEL_VERSION);
   const queued = [];
   const rated = [];
   const service = createService(db, {}, {

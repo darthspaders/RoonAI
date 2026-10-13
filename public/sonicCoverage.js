@@ -14,11 +14,17 @@
     const paused = snapshot?.settings.paused;
     const unfinished = job && ["running", "paused"].includes(job.state);
     const status = error || (busy ? "Updating coverage…" : !snapshot ? "Loading coverage…"
+      : snapshot.availability === "unavailable" ? "MERT-v2 FullSong provider unavailable"
+      : snapshot.workerError ? `Blocked: ${snapshot.workerError}`
+      : job?.state === "cancelled" ? "Backfill canceled · prepared embeddings kept; resume to continue"
       : paused ? `Paused${snapshot.activeCount ? ` · ${number(snapshot.activeCount)} active preparation(s) finishing` : ""}`
       : unfinished && !job.inventoryComplete ? "Finding known tracks…"
       : job?.state === "running" ? "Preparing audio fingerprints"
       : job?.state === "paused" ? "Backfill paused · discovery fill can continue"
-      : job?.state === "completed" ? "Backfill finished"
+      : job?.state === "failed" || job?.failed || snapshot.queueCounts.failed ? "Backfill has failures · retry available"
+      : job?.state === "completed" && job.inventoryComplete && !job.remaining && !snapshot.queueDepth && !snapshot.activeCount && !snapshot.queueCounts.failed ? "Backfill complete"
+      : snapshot.workStates?.retrying ? "Retrying MERT-v2 preparation after recoverable failures"
+      : snapshot.queueDepth ? "Queued MERT-v2 preparation"
       : job?.state === "cancelled" ? "Backfill cancelled · completed fingerprints kept"
       : "Ready to prepare known tracks");
     query("#sonicCoverageStatus").textContent = job?.error && !error ? `${status} · ${job.error}` : status;
@@ -26,7 +32,7 @@
     for (const button of panel.querySelectorAll("button")) button.disabled = busy || (!snapshot && button.dataset.coverageAction !== "refresh");
     const disable = (action, condition) => { query(`[data-coverage-action="${action}"]`).disabled ||= Boolean(condition); };
     disable("start", unfinished); disable("pause", paused || !(unfinished || snapshot?.queueDepth || snapshot?.activeCount));
-    disable("resume", !paused && job?.state !== "paused"); disable("cancel", !unfinished);
+    disable("resume", !paused && !["paused", "cancelled", "failed"].includes(job?.state)); disable("cancel", !unfinished);
     disable("retry", !snapshot?.queueCounts.failed);
     const counts = query("#sonicCoverageCounts");
     counts.hidden = !job;
@@ -38,18 +44,18 @@
     progress.hidden = !job;
     if (job) {
       progress.max = Math.max(1,job.totalEligible);
-      if (job.inventoryComplete) progress.value = job.totalEligible - job.remaining;
+      if (job.inventoryComplete) progress.value = job.alreadyEmbedded + job.preparedSuccessfully;
       else progress.removeAttribute("value");
     }
-    query("#sonicCoverageQueue").textContent = snapshot ? `${number(snapshot.queueDepth)} queued or active · ${number(snapshot.activeCount)} active · Discovery fill ${snapshot.settings.lazyEnabled ? "on" : "off"}` : "";
+    query("#sonicCoverageQueue").textContent = snapshot ? `MERT-v2 FullSong · ${number(snapshot.queueDepth)} queued or active · ${number(snapshot.activeCount)} active · ${number(snapshot.workStates?.retrying)} retrying · ${number(snapshot.queueCounts.failed)} failed · ${number(snapshot.queueCounts.cancelled)} canceled · Discovery fill ${snapshot.settings.lazyEnabled ? "on" : "off"}` : "";
     if (snapshot && !dirty && !form.contains(document.activeElement)) {
       for (const [name,value] of Object.entries({ batchSize:snapshot.settings.batchSize, concurrency:snapshot.settings.concurrency, intervalSeconds:snapshot.settings.minIntervalMs/1000, batchPauseSeconds:snapshot.settings.batchPauseMs/1000 })) form.elements[name].value = value;
       form.elements.lazyEnabled.checked = snapshot.settings.lazyEnabled;
     }
     const failures = query("#sonicCoverageFailures");
-    failures.hidden = !snapshot?.recentFailures?.length;
-    failures.querySelector("ul").replaceChildren(...(snapshot?.recentFailures || []).map(item => {
-      const li = document.createElement("li"); li.textContent = `${item.identityKey}: ${item.error}`; return li;
+    failures.hidden = !(snapshot?.recentFailures?.length || snapshot?.retrying?.length);
+    failures.querySelector("ul").replaceChildren(...[...(snapshot?.recentFailures || []), ...(snapshot?.retrying || [])].map(item => {
+      const li = document.createElement("li"); li.textContent = `${item.identityKey}: ${item.error}${item.retryAt ? ` · retry after ${new Date(item.retryAt).toLocaleTimeString()}` : ""}`; return li;
     }));
   }
 

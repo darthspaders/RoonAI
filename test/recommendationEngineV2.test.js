@@ -285,6 +285,7 @@ test("Recommendation Engine v2 prepares a missing TIDAL anchor from a nested Bea
   assert.equal(first.prepared, true);
   assert.equal(first.source, "beatport-preview");
   assert.equal(requestedOptions.beatportTrackId, "bp-1");
+  assert.equal(requestedOptions.allowVersionProxy, true);
 
   const second = await engine.prepareSonicAnchor(reference, { model: "discogs-effnet", modelVersion: "1" });
   assert.equal(second.ready, true);
@@ -337,6 +338,7 @@ test("the ANUQRAM anchor prepares and reuses an exact partial-preview profile un
       findTrack: async (track, options) => {
         assert.equal(track.durationMs, 472000);
         assert.equal(options.beatportTrackId, beatport.id);
+        assert.equal(options.allowVersionProxy, false);
         return { ...beatport };
       },
       fetchPreviewBuffer: async () => {
@@ -362,6 +364,46 @@ test("the ANUQRAM anchor prepares and reuses an exact partial-preview profile un
     assert.ok(audio.every(byte => byte === 0), "preview bytes are cleared after analysis");
     assert.equal((await engine.prepareSonicAnchor(reference)).prepared, false);
     assert.equal(downloads, 1);
+  } finally {
+    engine.store.close();
+    cleanDb(dbFile);
+  }
+});
+
+test("prepareSonicAnchor forwards a strict proxy policy and rejects an unsafe returned version before download", async () => {
+  const dbFile = tempDbFile();
+  const tidalTrack = {
+    id: "123456789", tidalId: "123456789", artist: "Anchor Artist", title: "Dream On",
+    label: "Anchor Label", releaseDate: "2026-09-11", durationMs: 232000
+  };
+  let requestedOptions = null;
+  let downloads = 0;
+  const engine = new RecommendationEngineV2({
+    enabled: true, dbFile, logger: null,
+    tidalClient: { getTrack: async () => ({ ...tidalTrack }) },
+    beatportClient: {
+      findTrack: async (_track, options) => {
+        requestedOptions = options;
+        return {
+          id: "bp-proxy", artist: tidalTrack.artist, title: tidalTrack.title,
+          mixName: "Extended Mix", label: tidalTrack.label,
+          releaseDate: tidalTrack.releaseDate, durationMs: 410000
+        };
+      },
+      fetchPreviewBuffer: async () => {
+        downloads += 1;
+        throw new Error("a disallowed proxy must not be downloaded");
+      }
+    }
+  });
+  try {
+    await assert.rejects(
+      () => engine.prepareSonicAnchor(tidalTrack, { allowVersionProxy: false }),
+      error => error.statusCode === 422 && error.match?.matched === false
+    );
+    assert.equal(requestedOptions.allowVersionProxy, false);
+    assert.equal(downloads, 0);
+    assert.equal(engine.findStoredSonicProfile(tidalTrack), null);
   } finally {
     engine.store.close();
     cleanDb(dbFile);

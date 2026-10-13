@@ -21,7 +21,7 @@ test("startup migration keeps live Sonic history lookups off full table scans", 
     memory.rememberObservation(track, "library");
     memory.saveTasteFeedback(track, { rating: "love" });
     memory.saveBeatportEnrichment(track, { genre: "Progressive House", label: "Test Label" });
-    engine.store.upsertEmbedding({ track, vector: [1, 0.1], model: "discogs-effnet", modelVersion: "1" });
+    engine.store.upsertEmbedding({ track, vector: [1, 0.1], model: "discogs-effnet", modelVersion: "1", metadata: { identityRelation: "exact" } });
   }
   // Exercise an existing database being upgraded, not only a fresh schema.
   for (const name of ["idx_track_identity_artist_folded", "idx_beatport_enrichment_label_time", "idx_track_observation_track_source", "idx_taste_feedback_track_id_rating"]) {
@@ -44,7 +44,7 @@ test("startup migration keeps live Sonic history lookups off full table scans", 
   engine.store.db = db;
   try {
     const service = createSonicReviewSessionService({ db, recommendationEngine: engine, logger: null });
-    await service.startReviewSession({ anchor: { ...tracks[0], identityKey: "tidal:1" }, count: 1, noveltyPolicy: "ALLOW_KNOWN" });
+    await service.startReviewSession({ anchor: { ...tracks[0], identityKey: "tidal:1" }, count: 1, noveltyPolicy: "ALLOW_KNOWN", model: "discogs-effnet", modelVersion: "1" });
     const checks = [
       { match: /GROUP_CONCAT\(DISTINCT tf.rating\)/, searched: /SEARCH tf\b/, scanned: /SCAN tf\b/ },
       { match: /WHERE LOWER\(TRIM\(label\)\)/, searched: /SEARCH beatport_enrichment\b/, scanned: /SCAN beatport_enrichment\b/ },

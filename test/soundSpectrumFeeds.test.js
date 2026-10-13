@@ -14,7 +14,7 @@ const state = (overrides = {}) => ({ connected: true, zones: [{ zone_id: ZONE, d
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 function entry(id, options = {}) {
   return { id, integration: {
-    audioFeed: { inspect: async () => ({ id, name: id, kind: "music-feed", available: true }), snapshot: () => ({ state: "waiting", id }), validateStart: async () => {}, start: async () => {}, stop: async () => {}, ...options.audioFeed },
+    audioFeed: { inspect: async () => ({ id, name: id, kind: "music-feed", available: true }), snapshot: () => ({ state: "waiting", id }), setVisualDelayMs: () => {}, validateStart: async () => {}, start: async () => {}, stop: async () => {}, ...options.audioFeed },
     additionalInputProvider: { list: async () => [{ id, name: id, kind: "music-feed" }], resolve: async selected => ({ id: selected, name: "Stereo Out (SoundSpectrum Audio Cable)", kind: "music-feed" }), ...options.provider }
   } };
 }
@@ -37,11 +37,43 @@ test("HQPlayer guard rejects malformed or unconfigured IDs before reading transp
   assert.equal(reads, 0);
 });
 
-test("HQPlayer guard rejects stale display hints, grouped outputs, wrong output and paused playback", async () => {
+test("HQPlayer guard rejects stale display hints, grouped outputs, wrong output and inactive Start", async () => {
   const good = state().zones[0];
-  const invalid = [[], [{ ...good, outputs: [] }], [{ ...good, outputs: [good.outputs[0], { output_id: "another-output" }] }], [{ ...good, outputs: [{ output_id: "1701ffffffffffffffffffffffffffff", display_name: "HQPlayer", hqplayer: { active: true } }] }], [{ ...good, state: "paused" }], [{ ...good, state: "stopped" }]];
+  const invalid = [[], [{ ...good, outputs: [] }], [{ ...good, outputs: [good.outputs[0], { output_id: "another-output" }] }], [{ ...good, outputs: [{ output_id: "1701ffffffffffffffffffffffffffff", display_name: "HQPlayer", hqplayer: { active: true } }] }], ...["loading", "paused", "stopped"].map(playback => [{ ...good, state: playback }])];
   for (const zones of invalid) {
     await assert.rejects(createHQPlayerZoneGuard(() => state({ zones }))(ZONE, SETTINGS), /unavailable|grouped|Play music/);
+  }
+});
+
+test("runtime inactive permission accepts loading/paused/stopped only after the connected exact-output guard", async () => {
+  const good = state().zones[0];
+  for (const playback of ["loading", "paused", "stopped"]) {
+    const guard = createHQPlayerZoneGuard(() => state({ zones: [{ ...good, state: playback }] }));
+    assert.deepEqual(await guard(ZONE, SETTINGS, { allowInactive: true }), { zone_id: ZONE, state: playback, outputs: [{ output_id: OUTPUT }] });
+    await assert.rejects(guard(ZONE, SETTINGS), error => { assert.match(error.message, /Play music/); assert.equal(error.zoneState, playback); return true; });
+    await assert.rejects(guard(ZONE, SETTINGS, { allowInactive: "true" }), /Play music/);
+  }
+  for (const current of [
+    state({ connected: false }), state({ zones: [] }),
+    state({ zones: [{ ...good, state: "loading", outputs: [...good.outputs, { output_id: OUTPUT }] }] }),
+    state({ zones: [{ ...good, state: "loading", outputs: [{ output_id: "1701ffffffffffffffffffffffffffff" }] }] }),
+    ...["unknown", undefined, null, "Playing"].map(playback => state({ zones: [{ ...good, state: playback }] }))
+  ]) await assert.rejects(createHQPlayerZoneGuard(() => current)(ZONE, SETTINGS, { allowInactive: true }), /disconnected|unavailable|grouped|Play music/);
+  await assert.rejects(createHQPlayerZoneGuard(() => state())("display-name", SETTINGS, { allowInactive: true }), /configured Roon HQPlayer zone/);
+});
+
+test("rejected playback diagnostics expose only documented states or unknown", async () => {
+  const good = state().zones[0];
+  for (const playback of ["loading", "paused", "stopped", "unknown", undefined, null, "private-source?token=secret", { private: "secret" }]) {
+    const guard = createHQPlayerZoneGuard(() => state({ zones: [{ ...good, state: playback }] }));
+    await assert.rejects(guard(ZONE, SETTINGS), error => {
+      assert.equal(error.zoneState, ["loading", "paused", "stopped"].includes(playback) ? playback : "unknown");
+      assert.doesNotMatch(JSON.stringify(error), /private-source|private-queue|secret|token/);
+      return true;
+    });
+    if (!["loading", "paused", "stopped"].includes(playback)) {
+      await assert.rejects(guard(ZONE, SETTINGS, { allowInactive: true }), error => { assert.equal(error.zoneState, "unknown"); return true; });
+    }
   }
 });
 
@@ -105,14 +137,25 @@ test("default installation tolerates either optional folder being absent or brok
   const filename = path.resolve(__dirname, "../src/soundSpectrum.js"), source = fs.readFileSync(filename, "utf8");
   for (const available of [[], [LYRION], [HQP], [LYRION, HQP]]) {
     for (const broken of [null, HQP]) {
-      const loaded = [], module = { exports: {} }, raw = [{ id: "cable" }];
+      const loaded = [], module = { exports: {} }, raw = [{ id: "cable" }]; let hlsStarts = 0;
       const load = name => {
-        if (name === "node:fs") return { existsSync: target => available.includes(target.includes("soundspectrum-hqplayer-feed") ? HQP : LYRION) };
+        if (name === "node:fs") return { existsSync: target => {
+          if (target.includes("soundspectrum-obs-webrtc")) return false;
+          if (target.includes("soundspectrum-hls")) return true;
+          return available.includes(target.includes("soundspectrum-hqplayer-feed") ? HQP : LYRION);
+        } };
         if (name === "./soundSpectrumNative") return { createSoundSpectrumNative: options => ({ inspect: async () => ({ visualizers: [{ id: "aeon", available: true }], inputs: [{ id: "mic" }], musicInputs: await options?.additionalInputProvider?.list(raw) || [] }), stop: async () => {} }) };
         if (name === "../scripts/soundspectrum-capture.cjs") return { probeCaptureRuntime: async () => ({ available: true }) };
+        if (name.includes("integrations/soundspectrum-hls") || name.includes("integrations\\soundspectrum-hls")) return { createIntegration: () => ({
+          inspect: async () => ({ available: true }), start: async () => { hlsStarts++; }, stop: async () => {}
+        }) };
         if (name.includes("integrations")) { const id = name.includes("soundspectrum-hqplayer-feed") ? HQP : LYRION; loaded.push(id); if (id === broken) throw Error("Optional module missing dependency"); return { createIntegration: () => entry(id).integration }; }
         if (name === "./soundSpectrumFeeds") return require("../src/soundSpectrumFeeds");
-        return require(name);
+        if (name === "./soundSpectrumSrtExperiment") return require("../src/soundSpectrumSrtExperiment");
+        if (name === "./soundSpectrumDelay") return { SoundSpectrumDelay: class extends require("../src/soundSpectrumDelay").SoundSpectrumDelay {
+          constructor() { super({ readFile() { throw Object.assign(Error("not found"), { code: "ENOENT" }); } }); }
+        } };
+        return require(require("node:module").createRequire(filename).resolve(name));
       };
       vm.runInNewContext(source, { require: load, module, exports: module.exports, __dirname: path.dirname(filename), Buffer, TextDecoder, process, console: { warn() {} }, setInterval: () => 0, clearInterval() {}, setTimeout, clearTimeout });
       const api = module.exports.createSoundSpectrumApi({ readJson: async () => ({}), sendJson() {} });
@@ -120,8 +163,24 @@ test("default installation tolerates either optional folder being absent or brok
       assert.deepEqual(Array.from(inventory.musicInputs, input => input.id), available.filter(id => id !== broken));
       assert.equal(inventory.inputs[0].id, "mic");
       assert.equal(api.service.state, "idle");
+      assert.equal(api.service.visualDelay.snapshot().currentMs, 0);
+      assert.equal(api.service.visualDelay.snapshot().available, available.some(id => id !== broken));
       assert.deepEqual(loaded, available);
+      assert.equal(inventory.transports.find(value => value.id === "hls").available, true);
+      assert.equal(hlsStarts, 0);
       await api.service.close();
     }
   }
+});
+
+test("global delay setter updates both music adapters once and rejects unsupported adapters before changing either", () => {
+  const calls = [];
+  const mux = createFeedMux([entry(LYRION, { audioFeed: { setVisualDelayMs: ms => calls.push([LYRION, ms]) } }), entry(HQP, { audioFeed: { setVisualDelayMs: ms => calls.push([HQP, ms]) } })]);
+  mux.audioFeed.setVisualDelayMs(5000);
+  assert.deepEqual(calls, [[LYRION, 5000], [HQP, 5000]]);
+  assert.throws(() => mux.audioFeed.setVisualDelayMs(5001), RangeError);
+  assert.equal(calls.length, 2);
+  const unsupported = createFeedMux([entry(LYRION, { audioFeed: { setVisualDelayMs: () => calls.push("changed") } }), entry(HQP, { audioFeed: { setVisualDelayMs: undefined } })]);
+  assert.throws(() => unsupported.audioFeed.setVisualDelayMs(10), /unavailable/);
+  assert.equal(calls.length, 2);
 });

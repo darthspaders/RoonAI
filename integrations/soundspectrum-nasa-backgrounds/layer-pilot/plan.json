@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "enabled": false,
+  "images": [
+    {
+      "id": "nasa-science-904703",
+      "label": "Cosmic Cliffs",
+      "sha256": "da7cf9e36fad99e0df3470c979e8824dc0e7bee100349fd2c59c8f8eda5c72e9",
+      "cloud": true,
+      "points": [[0.17,0.48],[0.45,0.65],[0.78,0.73],[0.3,0.86],[0.17,0.2],[0.56,0.19],[0.8,0.25]],
+      "labels": [1,1,1,1,0,0,0],
+      "maxMotionPixels": [26,20]
+    },
+    {
+      "id": "nasa-science-1207184",
+      "label": "Horsehead Nebula",
+      "sha256": "c25754292b42c03372cae9e7aa6fc5960f3a23ad93b715125b01fe001de177ce",
+      "cloud": true,
+      "points": [[0.2,0.84],[0.47,0.8],[0.7,0.94],[0.25,0.3],[0.6,0.5],[0.8,0.7]],
+      "labels": [1,1,1,0,0,0],
+      "maxMotionPixels": [20,18]
+    },
+    {
+      "id": "nasa-science-904717",
+      "label": "Webb First Deep Field - control",
+      "sha256": "643da51c0fa65576e29b729a14783a1438c4991f9087e83fa2761f0d24730cbf",
+      "cloud": false,
+      "points": [],
+      "labels": [],
+      "maxMotionPixels": [0,0]
+    }
+  ]
+}

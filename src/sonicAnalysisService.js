@@ -79,6 +79,7 @@ class SonicAnalysisService {
   async prepare(track, key) {
     const spec = analysisSpec(key);
     const analyze = async (audio, canonical, provenance) => {
+      await require("./sonicAnalyzedAudio").retainSource(audio);
       const sourceHash = hash(audio), cached = this.store.artifact(spec, sourceHash);
       if (cached) return this.store.save(canonical, spec, sourceHash, cached, provenance);
       const directory = await fs.mkdtemp(path.join(os.tmpdir(), "rabbit-sonic-analysis-"));
@@ -141,6 +142,7 @@ class SonicAnalysisService {
       if (row.state === "running") counts.active += row.count;
     }
     return { ok: true, mode: "shadow", productionApplied: false, settings: { ...this.settings }, analyzers: specs,
+      bandcampDiagnostics: this.engine.bandcamp?.recent() || null,
       queue, counts, countUnit: "track-and-analysis-spec", latestPilot: this.db.prepare("SELECT id,created_at AS createdAt FROM sonic_analysis_pilot ORDER BY created_at DESC LIMIT 1").get() || null,
       stored: this.db.prepare("SELECT spec_key AS specKey,COUNT(*) count FROM sonic_analysis_link GROUP BY spec_key").all(),
       recentFailures: this.db.prepare("SELECT analyzer_key AS specKey,last_error AS error,updated_at AS updatedAt FROM sonic_coverage_work WHERE analyzer_key<>'' AND state='failed' ORDER BY updated_at DESC LIMIT 5").all() };

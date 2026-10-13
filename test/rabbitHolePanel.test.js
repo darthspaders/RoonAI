@@ -33,7 +33,7 @@ function fixture() {
     trackKeyFor: track => track.id,
     rabbitHoleContextTracks: () => [],
     rabbitHoleGraphHtml: graph => graph.html,
-    cleanRenderedArtifacts() {},
+    setNowPlayingHtmlIfChanged(node, html) { if (node) node.innerHTML = html; }, cleanRenderedArtifacts() {},
     escapeHtml: text => String(text).replace(/</g, '&lt;'),
     api: async () => ({ html: 'Graph loaded' }),
     findNowPlayingMatch: () => ({ index: -1, track: null, source: '' }),

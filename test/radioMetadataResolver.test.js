@@ -224,3 +224,19 @@ test("MusicBrainz public fallback can be disabled", async () => {
   assert.deepEqual(rows, []);
   assert.equal(publicCalls, 0);
 });
+
+test('MusicBrainz artwork rejects partial-title and wrong-artist search hits before any cover request',async()=>{
+ const requested={artist:'Ruben Karapetyan',title:'State of Progression (Original Mix)'};
+ const rows=[{title:'State',artist:'Polara'},{title:'State of Progression',artist:'Polara'},{title:'State of Progression (Other Remix)',artist:'Ruben Karapetyan'}].map((r,i)=>({id:String(i),title:r.title,'artist-credit':[{artist:{name:r.artist}}],releases:[{id:'wrong-release',title:'Wrong album'}]}));
+ let fetches=0,bridges=0;
+ const r=new RadioMetadataResolver({fetchJson:async()=>{fetches++;throw Error('unmatched cover requested');},albumArtProvider:{cachePublicUrl:async()=>{bridges++;}}});
+ r.lookupTidal=async()=>null;r.lookupSpotify=async()=>null;r.lookupDiscogs=async()=>null;r.searchRecordings=async()=>rows;
+ assert.equal(await r.lookup(requested,'radio-key'),null);assert.equal(fetches,0);assert.equal(bridges,0);
+});
+test('MusicBrainz artwork preserves actual matching credits and release provenance',async()=>{
+ const r=new RadioMetadataResolver({fetchJson:async url=>{assert.equal(url,'https://coverartarchive.org/release/right-release');return {images:[{front:true,image:'https://example.test/right.jpg'}]};}});
+ r.lookupTidal=async()=>null;r.lookupSpotify=async()=>null;r.lookupDiscogs=async()=>null;
+ r.searchRecordings=async()=>[{id:'recording',title:'State of Progression','artist-credit':[{artist:{name:'Ruben Karapetyan'}}],releases:[{id:'right-release',title:'State of Progression'}]}];
+ const result=await r.lookup({artist:'Ruben Karapetyan',title:'STATE OF PROGRESSION'},'radio-key');
+ assert.equal(result.title,'State of Progression');assert.equal(result.artist,'Ruben Karapetyan');assert.equal(result.source,'musicbrainz');assert.equal(result.releaseId,'right-release');assert.equal(result.recordingId,'recording');
+});

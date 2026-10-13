@@ -30,6 +30,7 @@ function createStandbyRefreshService({
   standbyFreshSourcePasses,
   standbyIdentityKeys,
   standbyStore,
+  sourceDiagnostics = null,
   summarizeStandbyFreshness,
   tasteFacetSeedProvider,
   tasteProfile,
@@ -570,6 +571,7 @@ function createStandbyRefreshService({
     });
     return {
       ...snapshot,
+      ...(sourceDiagnostics ? { bandcampDiagnostics: sourceDiagnostics(tracks) } : {}),
       tracks,
       count: tracks.length,
       ready: tracks.length >= STANDBY_TARGET_COUNT,

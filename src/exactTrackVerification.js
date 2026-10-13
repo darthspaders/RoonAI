@@ -1561,6 +1561,7 @@ function exactIdentityDiagnostics(request, selected = null, status = "NOT_FOUND"
     canonicalArtistCredits: evidence.canonicalArtistCredits || first?.legacyIdentityDiagnostics?.canonicalArtistCredits || [],
     artistCreditNormalizationRule: evidence.artistCreditNormalizationRule || first?.legacyIdentityDiagnostics?.artistCreditNormalizationRule || "",
     providerIdentityEvidence: evidence.providerIdentityEvidence || first?.legacyIdentityDiagnostics?.providerIdentityEvidence || null,
+    requestedRecordingEvidence: selected?.requestedRecordingEvidence || null,
     normalizedBaseTitleMatch: evidence.normalizedBaseTitleMatch ?? null,
     canonicalMainMixApplied: Boolean(evidence.canonicalMainMixApplied ?? first?.legacyIdentityDiagnostics?.canonicalMainMixApplied),
     canonicalMainMixReason: evidence.canonicalMainMixReason || first?.legacyIdentityDiagnostics?.canonicalMainMixReason || "",
@@ -1683,8 +1684,32 @@ async function verifyExactTracks(body, { tidal, roon, logger = () => {} }) {
   let next = 0;
   async function verify(index) {
     const request = requested[index];
+    const diagnostics = body.diagnostics === true;
+    const trace = entry => {
+      if (!diagnostics) return;
+      try { logger({ requestMode: "exact_track_verification", index, ...entry }); } catch {}
+    };
+    const candidateTrace = candidate => ({
+      id: String(candidate.id || candidate.tidalTrackId || ""),
+      tidalTrackId: String(candidate.tidalTrackId || candidate.id || ""),
+      artist: cleanText(candidate.artist), title: cleanText(candidate.title), album: cleanText(candidate.album),
+      version: typeof candidate.version === "object" ? candidate.version?.label || "" : versionInfo(candidate).label,
+      isrc: cleanText(candidate.isrc), durationMs: durationMsFor(candidate)
+    });
+    const traceSelection = (selection, searchStage) => trace({
+      event: "exact_verification_selection", searchStage, status: selection.status,
+      identityOutcome: selection.identityOutcome || selection.status,
+      selectedCandidate: selection.match ? candidateTrace(selection.match) : null,
+      candidates: (selection.candidateIdentities || []).map(candidate => ({
+        ...candidateTrace(candidate), identityOutcome: candidate.identityOutcome || "",
+        rejectionReason: candidate.rejectionReason || candidate.identityDiagnostics?.rejectionReason || "",
+        versionRelation: candidate.legacyIdentityDiagnostics?.canonicalVersionRelation || ""
+      }))
+    });
     const row = { index, input: request, requestedArtist: request.artist || "", requestedTitle: request.title || "", status: "NOT_FOUND", verdict: "unverified", usable: false, versionExact: false, queueable: null, confidence: 0, error: "", identityOutcome: "NOT_FOUND", identityDiagnostics: null, tidal: { verified: false }, roon: { checked: false, queueable: null } };
     const id = String(request.tidalTrackId || request.id || tidalTrackIdFromUrl(request.tidalUrl || request.url) || "");
+    trace({ event: "exact_verification_request", requestedIdentity: candidateTrace(request),
+      normalizedIdentity: { artist: artists(request.artist), title: normalize(request.title), baseTitle: baseTitle(request.title), version: versionInfo(request) } });
     if (!(request.artist && request.title) && !/^\d+$/.test(id)) {
       return { ...row, status: "INVALID", verdict: "invalid", reasons: ["Track needs artist/title or a TIDAL track URL/id."], identityDiagnostics: { failureType: "INVALID", candidateIdentities: [], identityRules: ["missing-artist-title-or-tidal-id"] } };
     }
@@ -1697,7 +1722,10 @@ async function verifyExactTracks(body, { tidal, roon, logger = () => {} }) {
         ? tidal.exactSearchPlans(request, { strict: false })
         : [];
       const initialPlan = searchPlans[0] || null;
-      const candidates = await abortable(tidal.searchExactCandidates(request, { id, searchPlan: initialPlan, signal: controller.signal, timeoutMs, logger }), controller.signal);
+      const candidates = await abortable(tidal.searchExactCandidates(request, { id, searchPlan: initialPlan, signal: controller.signal, timeoutMs, logger, diagnostics }), controller.signal);
+      const allCandidates = [...candidates];
+      trace({ event: "exact_verification_candidates", searchStage: initialPlan?.searchStage || (id ? "exact-tidal-id" : "exact-artist-title"),
+        query: id || initialPlan?.query || cleanText(`${request.artist || ""} ${request.title || ""}`), returnedCount: candidates.length, candidates: candidates.map(candidateTrace) });
       const retrievalPackets = [candidates?.legacySearchDiagnostics].filter(Boolean);
       const identityRequest = typeof tidal.requestedTrackForIdentity === "function"
         ? tidal.requestedTrackForIdentity(request)
@@ -1707,6 +1735,7 @@ async function verifyExactTracks(body, { tidal, roon, logger = () => {} }) {
         confidenceMargin: body.identityConfidenceMargin,
         alternateVersionThreshold: body.identityAlternateVersionThreshold
       }) : candidates.length === 1 ? { status: "VERIFIED_TIDAL_ONLY", identityOutcome: "VERIFIED_EXACT", confidenceScore: 1, match: candidates[0] } : { status: "NOT_FOUND", identityOutcome: "NOT_FOUND", candidateIdentities: candidates.slice(0, 12).map(candidateIdentitySummary) };
+      traceSelection(selected, "initial");
       row.searchVariants = [id ? "tidal_id" : "exact_artist_title"];
       let canonicalFallbackAttempted = false;
       const canonicalFallbackCandidates = [];
@@ -1718,15 +1747,18 @@ async function verifyExactTracks(body, { tidal, roon, logger = () => {} }) {
           { searchStage: "artist-era-base-title", query: `${request.artist || ""} ${baseTitle(request.title)} ${request.recordingYear || request.originalReleaseYear || request.year || ""}`, artistConstraintApplied: Boolean(request.artist), titleConstraintApplied: true, eraConstraintApplied: Boolean(request.recordingYear || request.originalReleaseYear || request.year) },
           { searchStage: "title-only-fallback", query: request.title, titleConstraintApplied: true, titleOnlyFallback: true }
         ];
-        const seenQueries = new Set();
+        // Plans already use the provider's search-query formatting. Recording
+        // identity normalization folds apostrophes and would suppress a distinct
+        // catalogue query such as Lovin Sun after Lovin' Sun.
+        const queryKey = value => cleanText(value).toLowerCase();
+        const seenQueries = new Set([queryKey(initialPlan?.query || `${request.artist || ""} ${request.title || ""}`)]);
         for (const plan of plans) {
           const label = plan.searchStage || "canonical-fallback";
           const queryOverride = cleanText(plan.query);
           if (!queryOverride) continue;
-          const query = normalizeCatalogText(queryOverride);
-          if (!query || seenQueries.has(query)) continue;
-          seenQueries.add(query);
-          if (query === normalizeCatalogText(`${request.artist || ""} ${request.title || ""}`)) continue;
+          const key = queryKey(queryOverride);
+          if (!key || seenQueries.has(key)) continue;
+          seenQueries.add(key);
           row.searchVariants.push(`canonical_fallback:${label}`);
           const fallbackTrack = { ...request, title: baseTitle(request.title) || request.title };
           const fallback = await abortable(tidal.searchExactCandidates(fallbackTrack, {
@@ -1735,16 +1767,41 @@ async function verifyExactTracks(body, { tidal, roon, logger = () => {} }) {
             requestedTrack: request,
             signal: controller.signal,
             timeoutMs,
+            diagnostics,
             logger: entry => logger({ ...entry, track: { artist: request.artist, title: request.title }, searchVariant: `canonical_fallback:${label}` })
           }), controller.signal);
+          trace({ event: "exact_verification_candidates", searchStage: label, query: queryOverride,
+            returnedCount: fallback.length, candidates: fallback.map(candidateTrace) });
           retrievalPackets.push(fallback?.legacySearchDiagnostics);
-          canonicalFallbackCandidates.push({ label, query, returnedCount: fallback.length, candidateIds: fallback.map(candidate => String(candidate.id || "")).filter(Boolean) });
-          selected = chooseExact(identityRequest, [...candidates, ...fallback], {
+          canonicalFallbackCandidates.push({ label, query: queryOverride, returnedCount: fallback.length, candidateIds: fallback.map(candidate => String(candidate.id || "")).filter(Boolean) });
+          // chooseExact deduplicates TIDAL IDs across all retrieved pages. Keep
+          // earlier candidates so a later empty search cannot erase a mismatch
+          // or ambiguity established by an earlier fallback.
+          allCandidates.push(...fallback);
+          selected = chooseExact(identityRequest, allCandidates, {
             highConfidenceThreshold: body.identityHighConfidenceThreshold,
             confidenceMargin: body.identityConfidenceMargin,
             alternateVersionThreshold: body.identityAlternateVersionThreshold
           });
+          traceSelection(selected, label);
           if (selected.match) break;
+        }
+      }
+      if (!id && !selected.match && ["NOT_FOUND", "VERSION_MISMATCH"].includes(selected.status)
+        && typeof tidal.findRequestedVersionMatch === "function") {
+        const recovery = await abortable(tidal.findRequestedVersionMatch(identityRequest, allCandidates, {
+          signal: controller.signal, timeoutMs, logger, diagnostics,
+          identityOptions: {
+            highConfidenceThreshold: body.identityHighConfidenceThreshold,
+            confidenceMargin: body.identityConfidenceMargin,
+            alternateVersionThreshold: body.identityAlternateVersionThreshold
+          }
+        }), controller.signal);
+        if (recovery) {
+          row.searchVariants.push("requested_recording_evidence:beatport");
+          if (recovery.diagnostics.isrcSearchAttempted) row.searchVariants.push("requested_recording_isrc:tidal");
+          selected = { ...(recovery.selection || selected), requestedRecordingEvidence: recovery.diagnostics };
+          traceSelection(selected, "requested-recording-evidence");
         }
       }
       if (!selected.match && typeof tidal.findValidatedIdentity === "function") {
@@ -1779,6 +1836,7 @@ async function verifyExactTracks(body, { tidal, roon, logger = () => {} }) {
         canonicalFallbackOutcome: selected.match ? "resolved" : selected.status,
         legacySearchDiagnostics: combineLegacySearchDiagnostics(request, retrievalPackets)
       };
+      traceSelection(selected, "final");
     } catch (error) {
       return { ...row, status: "API_ERROR", verdict: "tidal_error", error: controller.signal.aborted ? "TIDAL verification timed out." : error.message, reasons: [controller.signal.aborted ? "TIDAL verification timed out." : error.message], identityDiagnostics: { failureType: "API_ERROR", candidateIdentities: [], identityRules: [controller.signal.aborted ? "tidal-verification-timeout" : "tidal-catalog-request-failed"] } };
     } finally { clearTimeout(timer); }
@@ -1816,7 +1874,9 @@ function queueExactTracks(result, input = {}, roon, dependencies = {}) {
   return work;
 }
 async function queueExactBatch(result, input, roon, { save = () => {}, logger = () => {}, bridge } = {}) {
-  if (input.mode && input.mode !== "append") throw Object.assign(new Error("Exact verified queue currently supports append only."), { statusCode: 400 });
+  const mode = input.mode || "append";
+  if (!["append", "next"].includes(mode)) throw Object.assign(new Error("Exact verified queue mode must be append or next."), { statusCode: 400 });
+  logger({ event: "exact_queue_start", requestedMode: mode, effectiveMode: mode });
   let rows = result.tracks.filter(row => row.usable && row.tidal?.verified);
   if (Array.isArray(input.trackIds)) rows = rows.filter(row => input.trackIds.map(String).includes(String(row.tidalTrackId)));
   rows = rows.slice(0, bounded(input.count, 40, 1, 40));
@@ -1826,36 +1886,41 @@ async function queueExactBatch(result, input, roon, { save = () => {}, logger = 
   const pending = rows.filter(row => !row.queuedAt && !row.queueAttemptedAt);
   const zoneId = input.zoneId || pending[0]?.roon?.zoneId;
   const resolve = require("./roonExactResolution").resolveVerifiedTracksForRoon;
-  await resolve(result, { ...input, zoneId, trackIds: pending.map(row => String(row.tidalTrackId)), allowBridge: input.allowBridge !== false }, { roon, save, logger, bridge });
+  await resolve(result, { ...input, mode, requireNextAction: mode === "next", zoneId, trackIds: pending.map(row => String(row.tidalTrackId)), allowBridge: input.allowBridge !== false }, { roon, save, logger, bridge });
   const ready = pending.filter(row => row.queueable === true && row.roon?.queueToken);
+  const executionRows = mode === "next" ? ready.slice().reverse() : ready;
   const failed = [...pending.filter(row => !ready.includes(row)), ...uncertain].map(row => ({
     index: row.index, tidalTrackId: row.tidalTrackId, artist: row.matchedArtist, title: row.matchedTitle,
-    status: row.status, error: row.queueAttemptedAt ? "Previous queue action outcome is uncertain; inspect Roon before resending." : row.bridge?.reason || row.roon?.reason || row.status,
-    bridge: row.bridge || null
+    status: row.status, error: row.queueAttemptedAt ? "Previous queue action outcome is uncertain; inspect Roon before resending." : (row.status === "TIDAL_VERIFIED_BRIDGE_UNAVAILABLE" ? row.bridge?.reason : "") || row.roon?.reason || row.status,
+    bridge: row.bridge || null, queueAttemptedAt: row.queueAttemptedAt || "", queueOutcomeUncertain: Boolean(row.queueAttemptedAt && !row.queuedAt), reasons: row.reasons || [], identityOutcome: row.identityOutcome || "", identityDiagnostics: row.identityDiagnostics || null, versionExact: Boolean(row.versionExact), confidence: row.confidence || 0
   }));
   const queued = [];
+  let warning = "";
   if (ready.length) {
     const tracks = ready.map(row => ({ ...row.track, exactVerification: true, verifiedQueueToken: row.roon.queueToken }));
     const response = await roon.queueTracks(tracks, zoneId, {
-      mode: "append", targetCount: tracks.length, preferExtendedMixes: false,
-      onQueueStart: (_track, index) => { ready[index].queueAttemptedAt = new Date().toISOString(); save(result); },
+      mode, targetCount: tracks.length, preferExtendedMixes: false, requireNextAction: mode === "next",
+      onQueueStart: (_track, index) => { executionRows[index].queueAttemptedAt = new Date().toISOString(); save(result); },
       onQueueResult: (index, ok) => {
-        if (ok) { ready[index].queuedAt = new Date().toISOString(); ready[index].status = "ROON_QUEUED"; ready[index].queueable = false; }
+        if (ok) { executionRows[index].queuedAt = new Date().toISOString(); executionRows[index].status = "ROON_QUEUED"; executionRows[index].queueable = false; }
         save(result);
       }
     });
     for (const item of response.queued || []) {
-      const row = ready[item.index]; row.queuedAt ||= new Date().toISOString(); row.status = "ROON_QUEUED"; row.queueable = false;
+      const row = executionRows[item.index]; row.queuedAt ||= new Date().toISOString(); row.status = "ROON_QUEUED"; row.queueable = false;
       queued.push({ index: row.index, tidalTrackId: row.tidalTrackId, artist: row.matchedArtist, title: row.matchedTitle, action: item.action });
     }
     for (const item of response.failed || []) {
-      const row = ready[item.index]; failed.push({ index: row.index, tidalTrackId: row.tidalTrackId, artist: row.matchedArtist, title: row.matchedTitle, error: item.reason });
+      const row = executionRows[item.index]; failed.push({ index: row.index, tidalTrackId: row.tidalTrackId, artist: row.matchedArtist, title: row.matchedTitle, error: item.reason, status: row.status, queueAttemptedAt: row.queueAttemptedAt || "", queueOutcomeUncertain: Boolean(row.queueAttemptedAt && !row.queuedAt), reasons: row.reasons || [], identityOutcome: row.identityOutcome || "", identityDiagnostics: row.identityDiagnostics || null, versionExact: Boolean(row.versionExact), confidence: row.confidence || 0 });
     }
+    if (response.warning) { warning = response.warning; logger({ event: "exact_queue_warning", requestedMode: mode, effectiveMode: mode, warning }); }
   }
   result.roonQueueableCount = result.tracks.filter(row => row.queueable === true).length;
   save(result);
-  return { source: "exact_verification", requestedToQueue: rows.length, alreadyQueuedCount, queued: queued.length, failed: failed.length,
-    queuedCount: queued.length, failedCount: failed.length, queuedTracks: queued, failedTracks: failed };
+  queued.sort((a, b) => a.index - b.index); failed.sort((a, b) => a.index - b.index);
+  logger({ event: "exact_queue_complete", requestedMode: mode, effectiveMode: mode, roonResolvedCount: ready.length, queuedCount: queued.length, failedCount: failed.length });
+  return { source: "exact_verification", mode, requestedMode: mode, effectiveMode: mode, tidalVerifiedCount: rows.length, roonResolvedCount: ready.length, requestedToQueue: rows.length, alreadyQueuedCount, queued: queued.length, failed: failed.length,
+    queuedCount: queued.length, failedCount: failed.length, queuedTracks: queued, failedTracks: failed, warning };
 }
 
 module.exports = {

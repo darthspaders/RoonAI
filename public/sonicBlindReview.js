@@ -5,6 +5,7 @@
   let active=false,batch=null,position=0,busy=false,error="",requestedId="";
   const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const rows=()=>batch?.groups.flatMap(group=>group.items.map(item=>({group,item})))||[];
+  const groupStart=index=>batch.groups.slice(0,index).reduce((sum,group)=>sum+group.items.length,0);
   const current=()=>rows()[position];
   const pauseAudio=()=>root.querySelectorAll("audio").forEach(audio=>audio.pause());
   const draftKey=()=>{const row=current();return row?`rabbit-hole-blind:${batch.batchId}:${row.group.sessionId}:${row.item.index}`:"";};
@@ -23,15 +24,17 @@
   function render(focus=false) {
     if(!active)return;
     const row=current(),draft=readDraft(),saved=row?.item.review;
+    const coverage=batch?.kind==="catalog-reference-coverage";
+    const scout=batch?.kind==="catalog-scout-comparison";
     const note=draft.note??saved?.note??"",listened=draft.listened??saved?.listened??false;
     pauseAudio();
     root.innerHTML=`<div class="sonicBlind sonicReviewShell" aria-busy="${busy}">
-      <header class="sonicReviewHeader"><div><h2>Blind listening</h2><p class="muted">Listen to the anchor, then judge whether the candidate belongs beside it.</p></div><button type="button" data-blind-action="close" ${busy?"disabled":""}>Back to Sonic Review</button></header>
+      <header class="sonicReviewHeader"><div><h2>${coverage?"Candidate coverage check":"Blind listening"}</h2><p class="muted">${coverage?"Listen to the anchor, then judge whether these candidates fit its groove, energy and mood.":"Listen to the anchor, then judge whether the candidate belongs beside it."}</p></div><button type="button" data-blind-action="close" ${busy?"disabled":""}>Back to Sonic Review</button></header>
       <div class="sonicBlindStatus" role="status">${esc(error|| (busy?"Loading saved listening progress…":!batch?"No listening batch is prepared yet.":`${batch.completed} of ${batch.count} decisions saved${batch.remaining===0?" · Batch complete":""}`))}</div>
       ${error?'<button type="button" data-blind-action="reload">Reload saved progress</button>':""}
       ${batch&&row?`<progress max="${batch.count}" value="${batch.completed}" aria-label="Saved listening decisions"></progress>
-      <div class="sonicBlindToolbar"><label for="blindAnchor">Anchor</label><select id="blindAnchor" ${busy?"disabled":""}>${batch.groups.map((g,i)=>`<option value="${i*4}" ${g.sessionId===row.group.sessionId?"selected":""}>${i+1}. ${esc(g.anchor.artist)} · ${esc(g.anchor.title)}</option>`).join("")}</select><span>Candidate ${row.item.index+1} of 4</span></div>
-      <p class="muted">Anchor lane: ${esc(row.group.lane)}. Consider groove, energy, mood and the specific mix. Model names and scores stay hidden.</p>
+      <div class="sonicBlindToolbar"><label for="blindAnchor">Anchor</label><select id="blindAnchor" ${busy?"disabled":""}>${batch.groups.map((g,i)=>`<option value="${groupStart(i)}" ${g.sessionId===row.group.sessionId?"selected":""}>${i+1}. ${esc(g.anchor.artist)} · ${esc(g.anchor.title)}</option>`).join("")}</select><span>Candidate ${row.item.index+1} of ${row.group.items.length}</span></div>
+      <p class="muted">${!coverage&&row.group.lane?`Anchor lane: ${esc(row.group.lane)}. `:""}Consider groove, energy, mood and the specific mix. ${coverage?"Candidate sources and selection details stay hidden.":"Model names and scores stay hidden."}${scout?" Only candidates that differ between the final shortlists are included.":""}</p>
       <div class="sonicBlindPair">${audioPanel(row.group.anchor,row.group.anchorAudio,"Anchor","blindAnchorHeading")}${audioPanel(row.item.candidate,row.item.audio,"Candidate","blindCandidateHeading")}</div>
       <section class="panel sonicBlindDecision" aria-label="Listening decision">
         <label for="blindNote">Listening note <span class="muted">(optional)</span></label><textarea id="blindNote" maxlength="2000" rows="2" placeholder="What fits or differs in groove, energy, mood or version?" ${busy?"disabled":""}>${esc(note)}</textarea>
@@ -42,7 +45,7 @@
         </div><p class="muted">${saved?`Saved: ${esc(({KEEP:"Keep similar",SKIP:"Skip",WRONG_LANE:"Wrong lane",UNSURE:"Can’t judge"})[saved.decision]||saved.decision)}. You can revise this decision.`:"No decision saved for this pair."} Global ratings and discovery ranking stay unchanged.</p>
       </section>
       <nav class="sonicBlindFooter" aria-label="Listening batch navigation"><button type="button" data-blind-action="previous" ${busy||position===0?"disabled":""}>Previous pair</button><span>Pair ${position+1} of ${batch.count}</span><button type="button" data-blind-action="next" ${busy||position===batch.count-1?"disabled":""}>Next pair</button></nav>
-      ${batch.remaining===0?'<p role="status">Listening complete. Your judgments are saved for the model comparison; no model has been promoted.</p>':""}`:""}</div>`;
+      ${batch.remaining===0?`<p role="status">${coverage?"Listening complete. Your judgments are saved for the candidate coverage check.":"Listening complete. Your judgments are saved for the model comparison; no model has been promoted."}</p>`:""}`:""}</div>`;
     root.querySelectorAll("audio").forEach(audio=>{
       audio.addEventListener("play",()=>root.querySelectorAll("audio").forEach(other=>{if(other!==audio)other.pause();}));
       audio.addEventListener("error",()=>{audio.closest("section").querySelector(".sonicBlindAudioError").hidden=false;});

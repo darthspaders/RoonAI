@@ -136,6 +136,7 @@ function buildDiscoveryDiagnostics(options = {}, result = {}, { runId, completed
     returned: (result.tracks || []).length,
     alternateCount: (result.alternates || []).length,
     sonic: compactSonicRun(result),
+    bandcamp: result.bandcampDiagnostics || null,
     tracks: (result.tracks || []).slice(0, 40).map(reportTrack),
     alternates: (result.alternates || []).slice(0, 40).map(reportTrack)
   };
@@ -177,6 +178,8 @@ class DiscoveryDiagnosticsStore {
   }
 
   record(options, result) {
+    if (this.sourceDiagnostics) result = { ...result,
+      bandcampDiagnostics: this.sourceDiagnostics([...(result.tracks || []), ...(result.alternates || [])]) };
     const report = buildDiscoveryDiagnostics(options, result, {
       runId: crypto.randomUUID(), completedAt: new Date().toISOString()
     });
@@ -199,6 +202,7 @@ class DiscoveryDiagnosticsStore {
       discoveryCompletedAt: report.completedAt,
       discoveryDiagnosticsPersisted: persisted,
       sonicDiagnostics: report.sonic,
+      bandcampDiagnostics: report.bandcamp,
       mcpVerification: compactDiscoveryVerification(result.verification),
       tracks: (result.tracks || []).map(track => ({ ...track, sonic: compactSonicTrack(track) })),
       alternates: (result.alternates || []).map(track => ({ ...track, sonic: compactSonicTrack(track) }))

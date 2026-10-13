@@ -6,6 +6,19 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { RoonClient } = require("../src/roonClient");
 
+test("Bandcamp availability failure blocks ordinary and saved queue actions", async () => {
+  const client = new RoonClient();
+  const track = { tidalId: "123", artist: "Artist", title: "Track" };
+  client.getZone = () => ({ settings: {} });
+  client.bandcampAvailabilityGuard = async () => false;
+  client.performSearchAction = async () => { throw new Error("must not dispatch"); };
+  client.exactQueueActions = new Map([["saved", { track }]]);
+  const result = await client.queueTracks([track], "zone-1");
+  assert.equal(result.queued.length, 0);
+  assert.match(result.failed[0].reason, /TIDAL availability could not be reconfirmed/);
+  await assert.rejects(client.queueVerifiedTrack("saved", "zone-1"), /TIDAL availability could not be reconfirmed/);
+});
+
 test("Play from here dispatches the cached Roon queue item ID", async () => {
   const client = new RoonClient();
   const calls = [];

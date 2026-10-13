@@ -21,7 +21,7 @@ async function fixture(t) {
   }
   return { connect, transport, send: (value, generation = 1) => events.emit("video", { type: "frame", frame: frame(value), generation, capturedAt: 123456 }), expire: () => { valid = false; }, state: state => events.emit("video", { type: "state", state, generation: 2 }) };
 }
-test("acknowledged video keeps one in flight and sends only the newest capture after presentation", async t => {
+test("acknowledged video keeps one in flight and sends only the newest capture after acknowledgement", async t => {
   const f = await fixture(t), ws = await f.connect(), received = [];
   ws.on("message", bytes => received.push(bytes));
   f.send(1); await pause(20); assert.equal(received.length, 1);

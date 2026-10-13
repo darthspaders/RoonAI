@@ -8,12 +8,9 @@ const dgram = require("node:dgram");
 const { spawn, spawnSync } = require("node:child_process");
 const installer = require("./install-bridge.cjs");
 
-// Optional integration tests need reviewed third-party sources supplied locally.
-// They never read or change an installed plugin unless its fixture is explicitly selected.
-const livePlugin = process.env.RH_HQPLAYER_BRIDGE_TEST_PLUGIN_ROOT || "";
-const fixtureAppRoot = process.env.RH_HQPLAYER_BRIDGE_TEST_APP_ROOT || "";
-const perl = process.env.RH_HQPLAYER_BRIDGE_TEST_PERL || (process.platform === "win32" ? "C:/Program Files/Lyrion/Perl/perl/bin/perl.exe" : "perl");
-const available = !!livePlugin && (process.platform !== "win32" || fs.existsSync(perl)) && fs.existsSync(path.join(livePlugin, "Player.pm"));
+const livePlugin = "C:/ProgramData/Lyrion/Cache/InstalledPlugins/Plugins/HQPlayerBridge";
+const perl = "C:/Program Files/Lyrion/Perl/perl/bin/perl.exe";
+let available = fs.existsSync(perl) && fs.existsSync(path.join(livePlugin, "Player.pm"));
 const sha = installer.sha;
 function temporary(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rh-audio-feed-fixture-"));
@@ -22,7 +19,7 @@ function temporary(t) {
   return root;
 }
 function originals() {
-  const locations = installer.resolvePaths({ pluginRoot: livePlugin, ...(fixtureAppRoot ? { appRoot: fixtureAppRoot } : {}) });
+  const locations = installer.resolvePaths();
   const manifest = fs.existsSync(locations.manifestPath) ? JSON.parse(fs.readFileSync(locations.manifestPath)) : null;
   return Object.fromEntries(Object.keys(installer.EXPECTED).map(name => {
     let bytes = fs.readFileSync(path.join(livePlugin, name));
@@ -36,6 +33,8 @@ function originals() {
     return [name, bytes];
   }));
 }
+// A reviewed vendor fixture (including its original backup) is an external prerequisite.
+if (available) { try { originals(); } catch { available = false; } }
 function patched() { return installer.patchSources(originals()); }
 function setupHarness(t, { helper = true, port = 12345, demand = {} } = {}) {
   const root = temporary(t);
@@ -64,7 +63,7 @@ function runHarness(fixture, mode, audioPath = "") {
   return JSON.parse(result.stdout);
 }
 
-test("bridge install plan is read-only, exact version/source checked, and blocks remove byte-for-byte", { skip: !available }, t => {
+test("bridge install plan is read-only, exact version/source checked, and blocks remove byte-for-byte", { skip: !available && "Reviewed HQPlayerBridge originals and Perl are required" }, t => {
   const before = originals();
   const liveBefore = Object.fromEntries(["Player.pm", "Stream.pm"].map(name => [name, sha(fs.readFileSync(path.join(livePlugin, name)))]));
   const result = patched();
@@ -83,7 +82,7 @@ test("bridge install plan is read-only, exact version/source checked, and blocks
   assert.equal(fs.existsSync(path.join(privateRoot, "data")), false);
 });
 
-test("bridge uninstall preserves unrelated later source edits and rejects changed owned blocks", { skip: !available }, t => {
+test("bridge uninstall preserves unrelated later source edits and rejects changed owned blocks", { skip: !available && "Reviewed HQPlayerBridge originals and Perl are required" }, t => {
   const root = temporary(t);
   const pluginRoot = path.join(root, "plugin");
   fs.mkdirSync(pluginRoot);
@@ -106,7 +105,7 @@ test("bridge uninstall preserves unrelated later source edits and rejects change
 });
 
 for (const mode of ["absent", "normal", "throw", "udp-fail", "broken-load"]) {
-  test(`primary chunk remains identical when optional helper is ${mode}`, { skip: !available }, t => {
+  test(`primary chunk remains identical when optional helper is ${mode}`, { skip: !available && "Reviewed HQPlayerBridge originals and Perl are required" }, t => {
     const fixture = setupHarness(t, { helper: mode !== "absent" });
     if (mode === "broken-load") fs.writeFileSync(path.join(fixture.root, installer.MODULE_NAME), "die 'offline load failure';\n");
     let audioPath = "";
@@ -123,7 +122,7 @@ for (const mode of ["absent", "normal", "throw", "udp-fail", "broken-load"]) {
   });
 }
 
-test("Perl demand rejects expired, oversized, forged and out-of-range receiver configuration", { skip: !available }, t => {
+test("Perl demand rejects expired, oversized, forged and out-of-range receiver configuration", { skip: !available && "Reviewed HQPlayerBridge originals and Perl are required" }, t => {
   for (const demand of [
     { expiresAt: Date.now() - 1 }, { expiresAt: Date.now() + 60000 }, { version: 2 },
     { token: "wrong" }, { token: { injected: true } }, { playerId: "arbitrary-player" },
@@ -139,7 +138,7 @@ test("Perl demand rejects expired, oversized, forged and out-of-range receiver c
   assert.equal(runHarness(fixture, "normal").status.demand, 0);
 });
 
-test("only the explicitly demanded LMS player can send side-copy packets", { skip: !available }, async t => {
+test("only the explicitly demanded LMS player can send side-copy packets", { skip: !available && "Reviewed HQPlayerBridge originals and Perl are required" }, async t => {
   const socket = dgram.createSocket("udp4");
   t.after(() => socket.close());
   await new Promise(resolve => socket.bind(0, "127.0.0.1", resolve));
@@ -198,13 +197,13 @@ async function collectFixture(t, mode) {
   return { fixture, audioPath, packets, result };
 }
 
-test("UDP side copy matches every FLAC byte without a second playback read", { skip: !available }, async t => {
+test("UDP side copy matches every FLAC byte without a second playback read", { skip: !available && "Reviewed HQPlayerBridge originals and Perl are required" }, async t => {
   const { audioPath, packets } = await collectFixture(t, "udp");
   assert.equal(packets[0].payload.length, 0);
   assert.deepEqual(Buffer.concat(packets.filter(packet => packet.header.type === "data").map(packet => packet.payload)), fs.readFileSync(audioPath));
 });
 
-test("late demand gets valid streaming FLAC header and decoded PCM after frame resynchronization", { skip: !available }, async t => {
+test("late demand gets valid streaming FLAC header and decoded PCM after frame resynchronization", { skip: !available && "Reviewed HQPlayerBridge originals and Perl are required" }, async t => {
   const { packets, result } = await collectFixture(t, "midstream");
   assert.equal(packets[0].payload.length, 42);
   assert.equal(packets[0].payload.subarray(0, 4).toString(), "fLaC");

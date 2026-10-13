@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <title>SRT comparison · Rabbit Hole</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/srt-experiment.css?v=20261010-srt-600-1">
+  <script src="/srt-experiment.js?v=20261010-srt-flow-1" defer></script>
+</head>
+<body class="srtExperiment">
+  <a class="srtSkip" href="#experiment">Skip to controls</a>
+  <main id="experiment" class="srtShell">
+    <header class="srtHeader">
+      <div><h1>SRT comparison</h1><p>Try the same visualizer in a native player on your tablet.</p></div>
+      <a class="srtBack" href="/" target="_blank" rel="noopener">Open Rabbit Hole</a>
+    </header>
+    <section class="srtPanel" aria-labelledby="controlHeading">
+      <h2 id="controlHeading">Temporary stream</h2>
+      <p id="srtStatus" role="status" aria-live="polite">Checking the current visualizer…</p>
+      <p id="srtExpiry" class="srtExpiry">No SRT experiment is active from this page.</p>
+      <div class="srtTarget">
+        <label for="srtVideoBitrate">SRT video target</label>
+        <select id="srtVideoBitrate" aria-describedby="srtVideoTargetHelp">
+          <option value="600" selected>600 Mbps · independent SRT</option>
+          <option value="60">60 Mbps · shared baseline</option>
+        </select>
+        <p id="srtVideoTargetHelp" class="srtHint">Checking whether the selected SRT target is available…</p>
+      </div>
+      <div class="srtActions">
+        <button id="srtStart" type="button" disabled aria-describedby="srtStartHelp">Start SRT experiment</button>
+        <button id="srtStop" type="button" disabled>Stop experiment</button>
+        <button id="srtRefresh" type="button">Refresh status</button>
+      </div>
+      <p id="srtStartHelp" class="srtHint">First select OBS / WebRTC and Start visuals in the main player. Then explicitly Start the selected SRT test here. The WebRTC profile and audible playback stay unchanged.</p>
+      <dl class="srtFacts">
+        <div><dt>Current WebRTC profile</dt><dd id="srtProfile">Not checked</dd></div>
+        <div><dt>SRT requested target</dt><dd id="srtRequestedRate">600 Mbps</dd></div>
+        <div><dt>SRT encoder target</dt><dd id="srtConfiguredRate">Not confirmed</dd></div>
+        <div><dt>SRT video profile</dt><dd id="srtVideoProfile">Not confirmed</dd></div>
+        <div><dt>SRT encoder</dt><dd id="srtEncoderMode">Not confirmed</dd></div>
+        <div><dt>Measured encoded video</dt><dd id="srtEncodedRate">Unknown</dd></div>
+        <div><dt>Observed H.264 format</dt><dd id="srtObservedCodec">Unknown</dd></div>
+        <div><dt>Visual PCM delay</dt><dd id="srtVisualDelay">Not checked</dd></div>
+        <div><dt>SRT latency request</dt><dd>250 ms · actual delay may differ</dd></div>
+      </dl>
+      <div id="srtConnection" class="srtConnection" hidden>
+        <label for="srtConnectionUrl">Private native-player connection</label>
+        <input id="srtConnectionUrl" type="text" readonly autocomplete="off" spellcheck="false" aria-describedby="srtConnectionHelp">
+        <div class="srtActions"><button id="srtCopy" type="button">Copy connection</button><a id="srtNativeLink" class="srtButton" rel="noreferrer">Open native player</a></div>
+        <p id="srtCopyStatus" role="status" aria-live="polite"></p>
+        <p id="srtConnectionHelp" class="srtHint">Use Larix Player on the same home network. Paste this connection into its SRT input if the link does not open the app. Keep the private connection to yourself.</p>
+      </div>
+    </section>
+    <section class="srtPanel" aria-labelledby="comparisonHeading">
+      <h2 id="comparisonHeading">Compare one receiver at a time</h2>
+      <ol class="srtSteps">
+        <li>Start the visualizer in Rabbit Hole, then tap <strong>Start SRT experiment</strong> here once. Wait for its private connection and copy it.</li>
+        <li>In Rabbit Hole, tap <strong>Stop visuals</strong> only. Keep the music playing and leave the visualizer’s PC window open. The experiment keeps that visualizer running; leave <strong>Stop experiment</strong> untouched until finished.</li>
+        <li>Open the copied connection in Larix Player. This page only controls the experiment; it plays no video. Record Larix’s existing playback-buffer setting. Both tests retain 4K/60 fps; 60 Mbps is the shared baseline and 600 Mbps is a separate encoder stress test.</li>
+        <li>Tap <strong>Stop experiment</strong> here to finish. Start visuals in the main player to return to WebRTC.</li>
+      </ol>
+      <p class="srtHint">The 600 Mbps H.264 High / Level 6.1 stress test may exceed the tablet’s decoder limits; Larix compatibility has not been verified. If it fails, finish that experiment and explicitly choose 60 Mbps for a baseline comparison. The page never changes the target or falls back automatically.</p>
+      <p class="srtHint">Switching to the native app does not stop this experiment. It expires after 10 minutes even if this page closes. Reopen this exact address in the same browser to recover its Stop control; the private connection is never stored. Larix playback buffering is separate from the SRT latency request and the browser’s 250 ms setting. Audible playback and the saved visual delay are unchanged.</p>
+    </section>
+    <section class="srtPanel" aria-labelledby="metricsHeading">
+      <h2 id="metricsHeading">Receiver connection</h2>
+      <p id="srtMetricsStatus" class="srtHint">No receiver measurements yet.</p>
+      <dl class="srtFacts">
+        <div><dt>Native receiver</dt><dd id="srtConnected">Not connected</dd></div>
+        <div><dt>Negotiated sender delay</dt><dd id="srtNegotiatedDelay">Unknown until a receiver connects</dd></div>
+        <div><dt>Measured SRT send rate</dt><dd id="srtSendRate">Unknown</dd></div>
+        <div><dt>Tablet decoded frames</dt><dd>Unknown · native player not measured</dd></div>
+        <div><dt>Retransmitted packets</dt><dd id="srtRetransmits">Unknown</dd></div>
+        <div><dt>Packets dropped too late</dt><dd id="srtDropped">Unknown</dd></div>
+      </dl>
+      <p id="srtMeasurementNote" class="srtHint">Encoded video rate and native delivery counters are separate measurements. Start a test to see which observations are available. This page receives no video or audio and does not measure the tablet’s decoded frames or physical display timing.</p>
+    </section>
+  </main>
+</body>
+</html>

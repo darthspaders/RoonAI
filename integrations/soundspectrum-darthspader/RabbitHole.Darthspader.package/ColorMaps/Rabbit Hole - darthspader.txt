@@ -1,0 +1,5 @@
+// Original bounded purple/lilac palette; intensity 0 stays black.
+H=".76"
+S=".78 - .35 * i ^ 2"
+V="i"
+Vers=310

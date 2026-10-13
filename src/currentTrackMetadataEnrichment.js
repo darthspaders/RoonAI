@@ -168,7 +168,7 @@ function createCurrentTrackMetadataEnrichment({
     return !track.durationMs || !track.releaseYear || !track.label || !track.genre || !hasBeatportGenre;
   }
 
-  function attachMetadataEnrichment(state = {}) {
+  function attachMetadataEnrichment(state = {}, { bridgeArtwork = true } = {}) {
     if (!config.metadataEnrichment.enabled) return state;
     return {
       ...state,
@@ -176,7 +176,7 @@ function createCurrentTrackMetadataEnrichment({
         const lookup = metadataLookupTrackFromZone(zone);
         const cached = lookup ? metadataEnrichment.displayableCachedEntry(lookup) : null;
         if (!cached) return zone;
-        if (metadataEnrichment.shouldBridgeCachedArtwork(cached)) {
+        if (bridgeArtwork && metadataEnrichment.shouldBridgeCachedArtwork(cached)) {
           metadataEnrichment.bridgeCachedArtwork(lookup, cached)
             .then((updated) => {
               if (updated?.imageUrl && updated.imageUrl !== cached.imageUrl) scheduleBroadcast();

@@ -12363,6 +12363,18 @@ body.playerFullWindow .player.player--fullscreen.isFullWindow .nowInfo .nowSourc
   }
 }
 
+/* Source-bound Sonic Review listening controls; reuse the existing glass theme. */
+.sonicAnalyzedPreview { min-width: 0; margin-block: 16px; }
+.sonicAnalyzedPreview audio { display: block; width: 100%; min-width: 0; margin-block: 8px; }
+.sonicAnalyzedPreview button, .sonicAnalyzedPreview summary { min-height: 44px; }
+.sonicAnalyzedPreview pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; color: var(--muted); }
+.sonicReviewNeighbor .sonicAnalyzedPreview { grid-column: 1 / -1; width: 100%; }
+.sonicReviewQueueTools label { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+
+#sonicReviewApp [data-sonic-review-blind] { width: 22px; height: 22px; margin: 0; }
+#sonicReviewApp label:has([data-sonic-review-blind]) { display: inline-flex; align-items: center; gap: 12px; min-height: 44px; }
+.sonicReviewExtraTools > summary, .sonicReviewProfileDetails > summary { cursor: pointer; min-height: 44px; padding: 12px; }
+
 /* Rabbit Hole disclosure owns its placement independently of the player stage. */
 .player.player--regular:not(.isMaximized):not(.isFullWindow) > .rabbitHolePanel {
   grid-area: auto;

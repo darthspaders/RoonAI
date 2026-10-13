@@ -1,0 +1,12 @@
+CategoryTitle = "Rabbit Hole - darthspader"
+CategoryFlags = 0
+Version = 1
+Include.ConfigFlagMatchMask = 0
+Include.ConfigFlagSelectMask = 6
+Include.Pattern = ""
+Exclude.Pattern = ""
+Include.List = "
+Rabbit Hole - darthspader
+"
+Exclude.List = "
+"

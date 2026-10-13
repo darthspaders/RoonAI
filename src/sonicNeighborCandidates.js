@@ -321,6 +321,7 @@ function* sonicNeighborCandidateSteps({
         model,
         modelVersion,
         analyzeIfMissing: false,
+        allowVersionProxy: input.allowVersionProxy,
         includeVector: selectionEnabled,
         minSimilarity: input.minSimilarity,
         excludeIdentityKeys: [...excluded]

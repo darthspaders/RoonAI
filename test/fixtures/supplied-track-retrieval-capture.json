@@ -1,0 +1,474 @@
+{
+  "source": "TIDAL US catalogue responses captured 2026-10-09; only the five relevant recordings and related album/artist fields are retained. Empty packets mean no retained recording, not an empty original provider response.",
+  "capturedAt": "2026-10-09T11:29:11.038Z",
+  "countryCode": "US",
+  "queries": [
+    {
+      "query": "Budakid Lovin' Sun (Guy J Remix)",
+      "response": {
+        "data": [],
+        "included": []
+      }
+    },
+    {
+      "query": "Budakid Lovin' Sun",
+      "response": {
+        "data": [],
+        "included": []
+      }
+    },
+    {
+      "query": "Lovin' Sun (Guy J Remix)",
+      "response": {
+        "data": [],
+        "included": []
+      }
+    },
+    {
+      "query": "Lovin' Sun",
+      "response": {
+        "data": [],
+        "included": []
+      }
+    },
+    {
+      "query": "Budakid Lovin' Sun (Hernan Cattaneo Kevin Di Serna Remix)",
+      "response": {
+        "data": [],
+        "included": []
+      }
+    },
+    {
+      "query": "Lovin' Sun (Hernan Cattaneo Kevin Di Serna Remix)",
+      "response": {
+        "data": [],
+        "included": []
+      }
+    },
+    {
+      "query": "Makebo From Zero (Original Mix)",
+      "response": {
+        "data": [],
+        "included": []
+      }
+    },
+    {
+      "query": "Makebo From Zero",
+      "response": {
+        "data": [
+          {
+            "id": "565212426",
+            "type": "tracks"
+          }
+        ],
+        "included": [
+          {
+            "id": "565212426",
+            "type": "tracks",
+            "attributes": {
+              "title": "From Zero",
+              "version": null,
+              "isrc": "GBLV62602095",
+              "duration": "PT6M51S"
+            },
+            "relationships": {
+              "albums": {
+                "data": [
+                  {
+                    "id": "565212425",
+                    "type": "albums"
+                  }
+                ]
+              },
+              "artists": {
+                "data": [
+                  {
+                    "id": "10737093",
+                    "type": "artists"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "565212425",
+            "type": "albums",
+            "attributes": {
+              "title": "From Zero",
+              "releaseDate": "2026-10-08"
+            }
+          },
+          {
+            "id": "10737093",
+            "type": "artists",
+            "attributes": {
+              "name": "Makebo"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "query": "From Zero (Original Mix)",
+      "response": {
+        "data": [],
+        "included": []
+      }
+    },
+    {
+      "query": "From Zero",
+      "response": {
+        "data": [],
+        "included": []
+      }
+    },
+    {
+      "query": "NAKSHATRA Sunset at Lake Pichola (Extended Mix)",
+      "response": {
+        "data": [],
+        "included": []
+      }
+    },
+    {
+      "query": "NAKSHATRA Sunset at Lake Pichola",
+      "response": {
+        "data": [
+          {
+            "id": "565212415",
+            "type": "tracks"
+          }
+        ],
+        "included": [
+          {
+            "id": "565212415",
+            "type": "tracks",
+            "attributes": {
+              "title": "Sunset at Lake Pichola",
+              "version": null,
+              "isrc": "GBLV62601779",
+              "duration": "PT3M55S"
+            },
+            "relationships": {
+              "albums": {
+                "data": [
+                  {
+                    "id": "565212414",
+                    "type": "albums"
+                  }
+                ]
+              },
+              "artists": {
+                "data": [
+                  {
+                    "id": "52522859",
+                    "type": "artists"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "565212414",
+            "type": "albums",
+            "attributes": {
+              "title": "Sunset at Lake Pichola",
+              "releaseDate": "2026-10-08"
+            }
+          },
+          {
+            "id": "52522859",
+            "type": "artists",
+            "attributes": {
+              "name": "NAKSHATRA"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "query": "Sunset at Lake Pichola (Extended Mix)",
+      "response": {
+        "data": [],
+        "included": []
+      }
+    },
+    {
+      "query": "Sunset at Lake Pichola",
+      "response": {
+        "data": [
+          {
+            "id": "565212415",
+            "type": "tracks"
+          }
+        ],
+        "included": [
+          {
+            "id": "565212415",
+            "type": "tracks",
+            "attributes": {
+              "title": "Sunset at Lake Pichola",
+              "version": null,
+              "isrc": "GBLV62601779",
+              "duration": "PT3M55S"
+            },
+            "relationships": {
+              "albums": {
+                "data": [
+                  {
+                    "id": "565212414",
+                    "type": "albums"
+                  }
+                ]
+              },
+              "artists": {
+                "data": [
+                  {
+                    "id": "52522859",
+                    "type": "artists"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "565212414",
+            "type": "albums",
+            "attributes": {
+              "title": "Sunset at Lake Pichola",
+              "releaseDate": "2026-10-08"
+            }
+          },
+          {
+            "id": "52522859",
+            "type": "artists",
+            "attributes": {
+              "name": "NAKSHATRA"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "query": "Matthew Sona Prismatik (Original Mix)",
+      "response": {
+        "data": [],
+        "included": []
+      }
+    },
+    {
+      "query": "Matthew Sona Prismatik",
+      "response": {
+        "data": [
+          {
+            "id": "565769183",
+            "type": "tracks"
+          }
+        ],
+        "included": [
+          {
+            "id": "565769183",
+            "type": "tracks",
+            "attributes": {
+              "title": "Prismatik",
+              "version": null,
+              "isrc": "HUDWQ2600002",
+              "duration": "PT3M26S"
+            },
+            "relationships": {
+              "albums": {
+                "data": [
+                  {
+                    "id": "565769182",
+                    "type": "albums"
+                  }
+                ]
+              },
+              "artists": {
+                "data": [
+                  {
+                    "id": "42495346",
+                    "type": "artists"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "565769182",
+            "type": "albums",
+            "attributes": {
+              "title": "Prismatik",
+              "releaseDate": "2026-10-09"
+            }
+          },
+          {
+            "id": "42495346",
+            "type": "artists",
+            "attributes": {
+              "name": "Matthew Sona"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "query": "Prismatik (Original Mix)",
+      "response": {
+        "data": [],
+        "included": []
+      }
+    },
+    {
+      "query": "Prismatik",
+      "response": {
+        "data": [
+          {
+            "id": "565769183",
+            "type": "tracks"
+          }
+        ],
+        "included": [
+          {
+            "id": "565769183",
+            "type": "tracks",
+            "attributes": {
+              "title": "Prismatik",
+              "version": null,
+              "isrc": "HUDWQ2600002",
+              "duration": "PT3M26S"
+            },
+            "relationships": {
+              "albums": {
+                "data": [
+                  {
+                    "id": "565769182",
+                    "type": "albums"
+                  }
+                ]
+              },
+              "artists": {
+                "data": [
+                  {
+                    "id": "42495346",
+                    "type": "artists"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "565769182",
+            "type": "albums",
+            "attributes": {
+              "title": "Prismatik",
+              "releaseDate": "2026-10-09"
+            }
+          },
+          {
+            "id": "42495346",
+            "type": "artists",
+            "attributes": {
+              "name": "Matthew Sona"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "query": "Budakid Lovin Sun",
+      "response": {
+        "data": [
+          {
+            "id": "400774270",
+            "type": "tracks"
+          },
+          {
+            "id": "559345090",
+            "type": "tracks"
+          }
+        ],
+        "included": [
+          {
+            "id": "400774270",
+            "type": "tracks",
+            "attributes": {
+              "title": "Lovin' Sun (Hernan Cattaneo & Kevin Di Serna Remix)",
+              "version": null,
+              "isrc": "NLHR22401084",
+              "duration": "PT8M5S"
+            },
+            "relationships": {
+              "albums": {
+                "data": [
+                  {
+                    "id": "400774269",
+                    "type": "albums"
+                  }
+                ]
+              },
+              "artists": {
+                "data": [
+                  {
+                    "id": "3765330",
+                    "type": "artists"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "559345090",
+            "type": "tracks",
+            "attributes": {
+              "title": "Lovin' Sun (Guy J Remix)",
+              "version": null,
+              "isrc": "NLHR22601036",
+              "duration": "PT7M12S"
+            },
+            "relationships": {
+              "albums": {
+                "data": [
+                  {
+                    "id": "559345089",
+                    "type": "albums"
+                  }
+                ]
+              },
+              "artists": {
+                "data": [
+                  {
+                    "id": "3765330",
+                    "type": "artists"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "400774269",
+            "type": "albums",
+            "attributes": {
+              "title": "Lovin' Sun (Remix EP)",
+              "releaseDate": "2024-11-29"
+            }
+          },
+          {
+            "id": "559345089",
+            "type": "albums",
+            "attributes": {
+              "title": "Lovin' Sun (Guy J Remix)",
+              "releaseDate": "2024-11-29"
+            }
+          },
+          {
+            "id": "3765330",
+            "type": "artists",
+            "attributes": {
+              "name": "Budakid"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

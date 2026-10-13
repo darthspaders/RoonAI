@@ -64,6 +64,7 @@ function alternatesFromResult(result = {}, limit = 20) {
 function summarizeQueueResult(result = {}, requested = 0) {
   return {
     requested: result.requested || requested,
+    bandcampDiagnostics: result.bandcampDiagnostics || null,
     queuedCount: result.queuedCount || 0,
     failedCount: result.failedCount || 0,
     topOfQueue: Boolean(result.topOfQueue),
@@ -501,6 +502,7 @@ function createRabbitHoleMcpTools(options = {}) {
       runId: lastSearchResult.discoveryRunId || "",
       completedAt: lastSearchResult.discoveryCompletedAt || "",
       sonic: lastSearchResult.sonicDiagnostics || compactSonicRun(lastSearchResult),
+      bandcampDiagnostics: lastSearchResult.bandcampDiagnostics || null,
       tracks: tracksFromResult(lastSearchResult, 40),
       alternates: alternatesFromResult(lastSearchResult, 20),
       discardedCount: Array.isArray(lastSearchResult.discarded) ? lastSearchResult.discarded.length : 0,
@@ -884,7 +886,7 @@ function createRabbitHoleMcpTools(options = {}) {
     queue_supplied_tracks: {
       title: "Queue Supplied Tracks",
       description: "Legacy compatibility for supplied text lists. Prefer roon_queue_tracks with structured objects for new Synapse calls. Uses the existing bulk Roon path. Default queuePolicy fast: no pre-verification or discovery. Use strict only when the user requests verify first, exact versions only, availability confirmation or Roon queueability checks. Partial failures are returned separately; retryFailures retries only the last failed entries, optionally with strict policy. Requires user queue authorization.",
-      inputSchema: { type: "object", properties: { tracks: { oneOf: [{type:"string"},{type:"array",minItems:1,maxItems:500,items:{oneOf:[{type:"string"},{type:"object",additionalProperties:true}]}}] }, queuePolicy:{type:"string",enum:["fast","strict"],default:"fast"}, verifyBeforeQueue:{type:"boolean",default:false}, retryFailures:{type:"boolean"}, zoneId:{type:"string"} }, additionalProperties:false },
+      inputSchema: { type: "object", properties: { tracks: { oneOf: [{type:"string"},{type:"array",minItems:1,maxItems:500,items:{oneOf:[{type:"string"},{type:"object",additionalProperties:true}]}}] }, mode:{type:"string",enum:["append","next"],default:"append"}, allowBridge:{type:"boolean",default:true}, preferExtendedMixes:{type:"boolean",default:false}, queuePolicy:{type:"string",enum:["fast","strict"],default:"fast"}, verifyBeforeQueue:{type:"boolean",default:false}, retryFailures:{type:"boolean"}, zoneId:{type:"string"} }, additionalProperties:false },
       annotations: writeAction,
       handler: async (input={}) => { await getStatus(); const zone=activeZone(lastStatus); return requestJson("/api/tracks/supplied/queue", {body:{...input,zoneId:input.zoneId||zone?.zone_id||zone?.id},timeoutMs:Math.max(timeoutMs,3600000)}); }
     },
@@ -943,7 +945,7 @@ function createRabbitHoleMcpTools(options = {}) {
     },
     find_sonic_neighbors: {
       title: "Find Sonic Neighbors",
-      description: "Read-only Recommendation Engine v2 proof of concept. Return locally analyzed tracks nearest to a reference track by cosine similarity. This does not run production discovery, query TIDAL, or queue anything in Roon.",
+      description: "Return nearest tracks using compatible MERT-v2 FullSong embeddings by default. Missing anchors can resolve provider identity, acquire verified audio and persist an embedding unless analyzeIfMissing is false. Does not run Discovery or queue playback.",
       inputSchema: {
         type: "object",
         properties: {
@@ -955,7 +957,7 @@ function createRabbitHoleMcpTools(options = {}) {
           reference: { type: "string", description: "Alias for track." },
           filePath: { type: "string", description: "Local audio path. It is analyzed on demand when no stored embedding exists." },
           count: { type: "integer", minimum: 1, maximum: 500, default: 20 },
-          provider: { type: "string", description: "Embedding provider, such as discogs-effnet or spectral-baseline. Alias for model." },
+          provider: { type: "string", description: "Embedding model; defaults to pinned MERT-v2 FullSong. Explicit historical models are read separately. Alias for model." },
           model: { type: "string" },
           modelVersion: { type: "string" },
           analyzeIfMissing: { type: "boolean", default: true },
@@ -964,12 +966,12 @@ function createRabbitHoleMcpTools(options = {}) {
         },
         additionalProperties: false
       },
-      annotations: readOnly,
+      annotations: { ...readOnly, readOnlyHint: false },
       handler: findSonicNeighbors
     },
     generate_sonic_neighbor_candidates: {
       title: "Generate Sonic Neighbor Candidates",
-      description: "Read-only Recommendation Engine v2 shadow source. Generate a bounded, duplicate-suppressed candidate set from stored versioned sonic neighbors across one or more anchors. Candidates are review-only, never added to production discovery, queried on TIDAL, verified in Roon, or queued.",
+      description: "Generate a bounded review candidate set using compatible versioned Sonic embeddings. Missing production anchors may resolve provider identity and prepare verified audio. Does not add candidates to Discovery or queue playback.",
       inputSchema: {
         type: "object",
         properties: {
@@ -981,7 +983,7 @@ function createRabbitHoleMcpTools(options = {}) {
           ] } },
           count: { type: "integer", minimum: 1, maximum: 500, default: 20 },
           perAnchorCount: { type: "integer", minimum: 1, maximum: 500 },
-          provider: { type: "string", description: "Embedding provider/model, such as discogs-effnet." },
+          provider: { type: "string", description: "Embedding model; defaults to pinned MERT-v2 FullSong." },
           model: { type: "string" },
           modelVersion: { type: "string" },
           minSimilarity: { type: "number", minimum: -1, maximum: 1 },
@@ -997,7 +999,7 @@ function createRabbitHoleMcpTools(options = {}) {
         },
         additionalProperties: false
       },
-      annotations: readOnly,
+      annotations: { ...readOnly, readOnlyHint: false },
       handler: generateSonicNeighborCandidates
     },
     sonic_start_review_session: {

@@ -404,7 +404,7 @@ test('maximized and fullscreen keep their atmospheric artwork copies independent
 test('regular player keeps its text hierarchy purple without changing fullscreen color ownership', () => {
   assert.match(css, /Regular player color normalization:[\s\S]*?\.player\.player--regular:not\(\.isMaximized\):not\(\.isFullWindow\) \.nowInfo #nowTitle,[\s\S]*?\.nowInfo #nowSubtitle,[\s\S]*?\.nowSourceFormat,[\s\S]*?\.pcTempChip :is\(span, strong\),[\s\S]*?\.seekBlock \.playerMeta,[\s\S]*?color: var\(--accent\) !important;/);
   assert.match(css, /Regular player color normalization:[\s\S]*?\.fullscreenConnectionStatus \.statusPill,[\s\S]*?\.seekBlock \.seekTimes/);
-  assert.match(html, /href="\/styles\.css\?v=[^"]+"/);
+  assert.match(html, /styles\.css\?v=[a-z0-9-]+/);
 });
 
 test('all player modes reserve an eight-row metadata window', () => {

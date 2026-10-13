@@ -1,0 +1,5 @@
+// Neutral original mapping: no rotation or spatial smearing of the letters.
+Aspc=0
+srcX="x"
+srcY="y"
+Vers=310

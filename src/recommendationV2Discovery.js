@@ -427,13 +427,14 @@ function createRecommendationV2DiscoveryReranker({
     const coverageThresholdMet = available.length >= configuredMinScored && coverage >= configuredMinCoverage;
     const missing = scoredCandidates.filter(item => item.score.reason === "no-stored-learned-embedding").map(item => item.candidate);
     let lazyFill = {};
-    if (runtimeProductionMode === "blend" && configuredModel === "discogs-effnet" && configuredModelVersion === "1" && missing.length && coverageService) {
+    if (runtimeProductionMode === "blend" && configuredModel === coverageService?.engine?.provider?.name && configuredModelVersion === coverageService?.engine?.provider?.modelVersion && missing.length && coverageService) {
       try { lazyFill = coverageService.enqueueMissing(missing); }
       catch (error) {
         lazyFill = { lazyFillError: error.message };
         logger?.warn?.("Sonic coverage enqueue failed; current discovery scores are unchanged", { error: error.message });
       }
     }
+    // Production missing vectors use the one model-aware coverage queue above.
     const shouldApply = runtimeProductionMode === "blend" && coverageThresholdMet;
     const originalRanks = rankPositions(scoredCandidates, item => scoreValue(item.candidate));
     const scoredWithAdjustments = scoredCandidates.map(item => {

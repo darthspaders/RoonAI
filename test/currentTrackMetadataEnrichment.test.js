@@ -264,3 +264,14 @@ test("live-track observation still runs when display metadata enrichment is disa
   assert.equal(observed.artist, "Artist");
   assert.equal(observed.title, "Track");
 });
+
+test('read-only cached attachment does not schedule bridge work or broadcasts',()=>{
+  let bridges=0;
+  const cached={status:'found',imageUrl:'https://example.test/cover.jpg'};
+  const service=createService({metadataEnrichment:{displayableCachedEntry:()=>cached,
+    shouldBridgeCachedArtwork:()=>{bridges++;return true;},bridgeCachedArtwork:()=>{throw Error('must not fetch');}}});
+  const zone={now_playing:{radio_lookup:{title:'Track',artist:'Artist'}}};
+  const state=service.attachMetadataEnrichment({zones:[zone]},{bridgeArtwork:false});
+  assert.equal(state.zones[0].now_playing.metadata_enrichment,cached);assert.equal(bridges,0);
+  assert.equal(zone.now_playing.metadata_enrichment,undefined);
+});

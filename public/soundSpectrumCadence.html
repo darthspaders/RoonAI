@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rabbit Hole · Tablet frame clock</title>
+<style>
+:root{color-scheme:dark;font:16px/1.5 system-ui,sans-serif;background:#18141e;color:#f2eef6}
+body{margin:0;padding:24px}main{max-width:960px;margin:auto}h1{font-size:28px;letter-spacing:-.02em;margin:0}p{color:#c4bccd}button{font:inherit;min-height:48px;padding:8px 20px;border:1px solid #75657f;border-radius:8px;background:#241f2c;color:inherit;cursor:pointer}button:focus-visible{outline:3px solid #d6b5f2;outline-offset:3px}button:disabled{opacity:.5;cursor:default}.actions{display:flex;gap:12px;flex-wrap:wrap}#run{background:#d6b5f2;color:#18141e}#stage{margin:24px 0;aspect-ratio:16/9;background:#100d14;border-radius:12px;overflow:hidden}canvas{display:block;width:100%;height:100%}table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th,td{text-align:left;padding:12px 8px;border-bottom:1px solid #403747}th{color:#c4bccd;font-weight:500}.scroll{overflow-x:auto}textarea{box-sizing:border-box;width:100%;height:200px;margin-top:16px;background:#100d14;color:#c4bccd;border:1px solid #403747;border-radius:8px;padding:12px}#status{min-height:3em}small{color:#c4bccd}@media(max-width:540px){body{padding:16px}h1{font-size:24px}th,td{padding:8px 6px;font-size:14px}}
+</style>
+<main>
+<h1>Tablet frame clock</h1>
+<p>Compare browser presentation paths at 3840 × 2160. This 32-second test uses a simple moving marker, without video, audio or a connection to your visualizer stream.</p>
+<p>Keep this tab visible and leave the screen untouched during each run. Results measure browser callbacks, not physical display scanout. Opening another tab may pause your existing viewer while it is hidden.</p>
+<div class="actions"><button id="run">Run frame-clock test</button><button id="stop" disabled>Stop test</button><button id="copy" disabled>Copy results</button></div>
+<p id="status" role="status">Ready. No test is running.</p>
+<div id="stage" aria-label="Moving test marker" hidden></div>
+<div class="scroll"><table><thead><tr><th scope="col">4K path</th><th scope="col">Main Hz</th><th scope="col">Worker Hz</th><th scope="col">Frame gap p95</th></tr></thead><tbody id="results"></tbody></table></div>
+<p id="meaning">Each path gets two seconds to settle, followed by six seconds of measurement. The last two paths distinguish the low-latency canvas used by the current receiver from normal canvas and WebGL.</p>
+<details><summary>Report to share</summary><textarea id="report" readonly aria-label="Frame-clock diagnostic report"></textarea><small>The report stays in this tab. Copying does not upload it.</small></details>
+</main>
+<script src="/soundSpectrumCadence.js?v=1"></script>
+</html>

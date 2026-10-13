@@ -14,9 +14,10 @@ function packet(frame, sequence, generation, capturedAt) {
   return Buffer.concat([header, frame]);
 }
 
-// One JPEG may be in flight until the browser has decoded and presented it.
-// While it does so, only the newest capture is kept. This bounds latency at the
-// browser as well as at the socket; slow viewers cannot stall native capture.
+// One JPEG may be in flight until the browser acknowledges it. Current clients
+// acknowledge after decoding into a single replaceable presentation slot; older
+// clients acknowledge after painting. Only the newest capture is kept while
+// waiting. Slow viewers cannot stall native capture or build a frame queue.
 function attachSoundSpectrumVideo(server, { service, requestOrigin, clock = Date.now, ackTimeoutMs = 4000 } = {}) {
   const sockets = new Map();
   const wsServer = new WebSocket.Server({ noServer: true, clientTracking: false, perMessageDeflate: false, maxPayload: 64 });

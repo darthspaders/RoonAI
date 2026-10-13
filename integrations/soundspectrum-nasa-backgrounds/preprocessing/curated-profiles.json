@@ -1,0 +1,797 @@
+{
+  "nasa-science-1450400": {
+    "sourceSha256": "a90a34ca7be7ce80aa4df0270ea297d8d5dedcd32ddd7a8ebd522f782a9b6965",
+    "stars": [
+      [
+        440,
+        392
+      ],
+      [
+        659,
+        248
+      ],
+      [
+        1301,
+        857
+      ],
+      [
+        1439,
+        383
+      ],
+      [
+        497,
+        434
+      ],
+      [
+        1450,
+        990
+      ],
+      [
+        1384,
+        966
+      ],
+      [
+        922,
+        30
+      ],
+      [
+        1054,
+        226
+      ],
+      [
+        586,
+        1048
+      ],
+      [
+        1266,
+        169
+      ],
+      [
+        1499,
+        179
+      ]
+    ],
+    "regions": [
+      [
+        0.4,
+        0.57,
+        0.18,
+        0.3,
+        0,
+        0.35
+      ],
+      [
+        0.69,
+        0.56,
+        0.1,
+        0.13,
+        0,
+        0.25
+      ]
+    ],
+    "reason": "Keep isolated round cores; exclude red filament knots and intersections. Gold cloud and red emission region breathe slowly."
+  },
+  "nasa-science-892027": {
+    "sourceSha256": "a495eda4aca0f97cbe950375916edcee6aa46594793c44d296263ffa260daaac",
+    "stars": [
+      [
+        1292,
+        334
+      ],
+      [
+        433,
+        944
+      ],
+      [
+        1515,
+        271
+      ],
+      [
+        1227,
+        121
+      ],
+      [
+        1167,
+        950
+      ],
+      [
+        758,
+        422
+      ],
+      [
+        614,
+        944
+      ],
+      [
+        1492,
+        644
+      ],
+      [
+        559,
+        689
+      ],
+      [
+        1509,
+        330
+      ],
+      [
+        489,
+        843
+      ]
+    ],
+    "regions": [
+      [
+        0.51,
+        0.66,
+        0.17,
+        0.25,
+        15,
+        0.35
+      ],
+      [
+        0.53,
+        0.24,
+        0.12,
+        0.18,
+        0,
+        0.25
+      ]
+    ],
+    "reason": "Reject bright cloud knot and rim selections; retain sparse isolated sources. Two broad luminous cloud regions only."
+  },
+  "nasa-science-1206286": {
+    "sourceSha256": "0bafe38960f64c55987426f35c54b331941d34e443be307edc2a36a79b9cb639",
+    "stars": [
+      [
+        702,
+        739
+      ],
+      [
+        523,
+        36
+      ],
+      [
+        723,
+        201
+      ],
+      [
+        1132,
+        382
+      ],
+      [
+        1341,
+        303
+      ],
+      [
+        1073,
+        954
+      ],
+      [
+        401,
+        204
+      ],
+      [
+        1503,
+        244
+      ],
+      [
+        729,
+        764
+      ],
+      [
+        541,
+        345
+      ],
+      [
+        948,
+        42
+      ],
+      [
+        877,
+        221
+      ],
+      [
+        1101,
+        942
+      ],
+      [
+        1411,
+        370
+      ],
+      [
+        1504,
+        929
+      ],
+      [
+        1028,
+        50
+      ],
+      [
+        1070,
+        107
+      ],
+      [
+        1336,
+        975
+      ],
+      [
+        1325,
+        937
+      ]
+    ],
+    "regions": [
+      [
+        0.56,
+        0.35,
+        0.14,
+        0.22,
+        30,
+        0.3
+      ],
+      [
+        0.49,
+        0.67,
+        0.14,
+        0.27,
+        10,
+        0.3
+      ]
+    ],
+    "reason": "Remove pillar tips/ridges from star list. Broad feathered luminosity inside the pillars is low-frequency only."
+  },
+  "nasa-science-1207184": {
+    "sourceSha256": "c25754292b42c03372cae9e7aa6fc5960f3a23ad93b715125b01fe001de177ce",
+    "stars": [
+      [
+        464,
+        385
+      ]
+    ],
+    "regions": [
+      [
+        0.49,
+        0.87,
+        0.27,
+        0.22,
+        0,
+        0.3
+      ]
+    ],
+    "reason": "Most points are distant galaxies or spike fragments; keep only one unmistakable foreground star and the luminous cloud crest."
+  },
+  "nasa-science-1273153": {
+    "sourceSha256": "f26d494144b80014679646152b09dd9f52e2e949ca9b4e0ae660e377b3f8f458",
+    "stars": [
+      [
+        1017,
+        301
+      ],
+      [
+        1256,
+        579
+      ],
+      [
+        1509,
+        477
+      ],
+      [
+        1601,
+        922
+      ],
+      [
+        1421,
+        49
+      ],
+      [
+        1627,
+        593
+      ],
+      [
+        1552,
+        31
+      ],
+      [
+        1273,
+        164
+      ],
+      [
+        349,
+        250
+      ],
+      [
+        260,
+        259
+      ],
+      [
+        1302,
+        291
+      ],
+      [
+        990,
+        93
+      ],
+      [
+        577,
+        36
+      ]
+    ],
+    "regions": [
+      [
+        0.29,
+        0.65,
+        0.23,
+        0.26,
+        -15,
+        0.25
+      ],
+      [
+        0.69,
+        0.65,
+        0.2,
+        0.29,
+        0,
+        0.25
+      ]
+    ],
+    "reason": "Reject orange globule texture from stars; strongest stellar cores only, with broad cloud glow over selected knot fields."
+  },
+  "nasa-science-894677": {
+    "sourceSha256": "e1d142673aeb29df8470740056a259c1130d0a68e97208ec9e432b83a3e53da3",
+    "stars": [
+      [
+        1369,
+        206
+      ],
+      [
+        1281,
+        1026
+      ],
+      [
+        592,
+        124
+      ],
+      [
+        1247,
+        1049
+      ],
+      [
+        622,
+        793
+      ],
+      [
+        548,
+        144
+      ],
+      [
+        1173,
+        788
+      ],
+      [
+        1346,
+        827
+      ],
+      [
+        1456,
+        1003
+      ],
+      [
+        518,
+        418
+      ],
+      [
+        1327,
+        948
+      ],
+      [
+        1268,
+        980
+      ],
+      [
+        1301,
+        884
+      ],
+      [
+        1438,
+        624
+      ],
+      [
+        474,
+        90
+      ],
+      [
+        497,
+        1041
+      ]
+    ],
+    "regions": [
+      [
+        0.51,
+        0.5,
+        0.23,
+        0.32,
+        0,
+        0.3
+      ]
+    ],
+    "reason": "Nebula rim knots excluded from star layer; surrounding point sources retained. Broad ring luminosity only."
+  },
+  "nasa-science-903430": {
+    "sourceSha256": "2335b6214e602ecdb56fdfa38679beb959afc1ad9fa5794bf79eed421ee38b70",
+    "stars": [
+      [
+        599,
+        692
+      ]
+    ],
+    "regions": [
+      [
+        0.49,
+        0.35,
+        0.14,
+        0.23,
+        -10,
+        0.32
+      ],
+      [
+        0.52,
+        0.69,
+        0.14,
+        0.24,
+        0,
+        0.32
+      ]
+    ],
+    "reason": "Exclude ambiguous small background galaxies; hourglass lobes receive slow localized breathing."
+  },
+  "nasa-science-896873": {
+    "sourceSha256": "0ea57f4c9be95719094e73db6cb0858ed7f62aaccc7e7137e2dea208b4cf6d51",
+    "stars": [
+      [
+        312,
+        614
+      ],
+      [
+        1621,
+        786
+      ],
+      [
+        1284,
+        760
+      ],
+      [
+        382,
+        1026
+      ],
+      [
+        1797,
+        852
+      ],
+      [
+        591,
+        881
+      ],
+      [
+        1572,
+        175
+      ],
+      [
+        1082,
+        31
+      ],
+      [
+        468,
+        32
+      ]
+    ],
+    "regions": [
+      [
+        0.6,
+        0.58,
+        0.25,
+        0.28,
+        0,
+        0.3
+      ],
+      [
+        0.21,
+        0.18,
+        0.14,
+        0.18,
+        0,
+        0.25
+      ]
+    ],
+    "reason": "Conservative bright cores away from jet knots; selected blue and amber cloud regions breathe."
+  },
+  "nasa-science-892523": {
+    "sourceSha256": "5cfd100dde2e83d193e4c27d8a9c7f15e30c8d9fdcdd5f630dfdc066c720f846",
+    "stars": [
+      [
+        463,
+        329
+      ]
+    ],
+    "regions": [
+      [
+        0.52,
+        0.56,
+        0.24,
+        0.31,
+        0,
+        0.28
+      ]
+    ],
+    "reason": "Resolved clusters and compact gas are not treated as individual stars. One clear foreground star plus broad emission structure."
+  },
+  "nasa-science-891726": {
+    "sourceSha256": "16be8dd88f7a5bcdda662fa2ec73f01e27b082ec2ebc7e1c328ef2bdd4a53931",
+    "stars": [
+      [
+        873,
+        1027
+      ],
+      [
+        1143,
+        223
+      ],
+      [
+        1074,
+        852
+      ],
+      [
+        1312,
+        908
+      ],
+      [
+        785,
+        65
+      ],
+      [
+        1272,
+        443
+      ],
+      [
+        661,
+        415
+      ],
+      [
+        1306,
+        715
+      ],
+      [
+        1284,
+        213
+      ]
+    ],
+    "regions": [
+      [
+        0.52,
+        0.5,
+        0.14,
+        0.31,
+        0,
+        0.3
+      ]
+    ],
+    "reason": "Exclude filament knots and unresolved central clusters; sparse foreground stars and broad luminous arc."
+  },
+  "nasa-science-904717": {
+    "sourceSha256": "643da51c0fa65576e29b729a14783a1438c4991f9087e83fa2761f0d24730cbf",
+    "stars": [
+      [
+        1448,
+        965
+      ],
+      [
+        928,
+        915
+      ],
+      [
+        1360,
+        673
+      ]
+    ],
+    "regions": [],
+    "reason": "Only three clear diffraction-bearing foreground stars. All galaxies and diffuse light excluded from reactive masks."
+  },
+  "nasa-science-1017480": {
+    "sourceSha256": "cbb40648182fee28594fbd89d547cec85a933dc2781ba004f99e6a04fb7ebfd3",
+    "stars": [
+      [
+        620,
+        206
+      ],
+      [
+        502,
+        221
+      ]
+    ],
+    "regions": [
+      [
+        0.56,
+        0.34,
+        0.17,
+        0.23,
+        0,
+        0.3
+      ],
+      [
+        0.37,
+        0.76,
+        0.13,
+        0.21,
+        0,
+        0.3
+      ],
+      [
+        0.68,
+        0.75,
+        0.12,
+        0.17,
+        0,
+        0.25
+      ]
+    ],
+    "reason": "Only two unmistakable foreground stars; broad luminous cavity and lower cloud regions, no compact knot twinkle."
+  },
+  "nasa-science-891523": {
+    "sourceSha256": "6da16a4085c0ef4e7739fbf7cefebd253e6531f2890b2f5cbdda25bd9d55624d",
+    "stars": [
+      [
+        1387,
+        487
+      ]
+    ],
+    "regions": [
+      [
+        0.59,
+        0.54,
+        0.16,
+        0.31,
+        15,
+        0.28
+      ],
+      [
+        0.33,
+        0.29,
+        0.075,
+        0.095,
+        0,
+        0.22
+      ]
+    ],
+    "reason": "Single clear foreground star on ring edge; galaxy ring and companion luminosity breathe slowly, never star-classified."
+  },
+  "nasa-science-892681": {
+    "sourceSha256": "a2a86d2a983027f731d50b63058ee62f48eef2ab4262ad91d2d42579d2846c27",
+    "stars": [
+      [
+        1206,
+        201
+      ],
+      [
+        1143,
+        118
+      ]
+    ],
+    "regions": [
+      [
+        0.5,
+        0.5,
+        0.12,
+        0.24,
+        0,
+        0.28
+      ]
+    ],
+    "reason": "Two clear foreground stars only. Penguin/Egg broad luminosity is a slow diffuse layer; small galaxies excluded."
+  },
+  "nasa-science-1034731": {
+    "sourceSha256": "7e7431a0c5af9e912da289fb75d129b83d8ecbb8c8418b6ed6bc51a53a18ae7e",
+    "stars": [
+      [
+        578,
+        26
+      ]
+    ],
+    "regions": [
+      [
+        0.51,
+        0.53,
+        0.19,
+        0.38,
+        0,
+        0.26
+      ]
+    ],
+    "reason": "Exclude nebula knots from star classes. Broad luminous nebula interior plus isolated top-left foreground star."
+  },
+  "nasa-science-893126": {
+    "sourceSha256": "3d5fdf136872674d41632e4ca6bf289cc9215996e012ba0e4ea5652ff1333288",
+    "stars": [
+      [
+        1506,
+        988
+      ]
+    ],
+    "regions": [
+      [
+        0.5,
+        0.5,
+        0.24,
+        0.17,
+        20,
+        0.23
+      ]
+    ],
+    "reason": "Foreground star separated from galaxy. Very restrained broad halo luminosity; dust lane remains dark."
+  },
+  "nasa-science-1228603": {
+    "sourceSha256": "2d6cef04da2a8c5442361c30b72a069b0e8c693b45d8fe679c3be96f5742922b",
+    "stars": [
+      [
+        1367,
+        669
+      ]
+    ],
+    "regions": [
+      [
+        0.47,
+        0.51,
+        0.3,
+        0.2,
+        -8,
+        0.22
+      ],
+      [
+        0.48,
+        0.24,
+        0.13,
+        0.18,
+        0,
+        0.2
+      ],
+      [
+        0.5,
+        0.77,
+        0.13,
+        0.2,
+        0,
+        0.2
+      ]
+    ],
+    "reason": "Single clear foreground star; galaxy core and outflow luminosity breathe slowly, no galaxy twinkling."
+  },
+  "nasa-science-903438": {
+    "sourceSha256": "b058dce2d292a7a6c2e02caa96750f21478ecd0091a3ec37bf35b1cb267b43ce",
+    "stars": [
+      [
+        578,
+        417
+      ],
+      [
+        1385,
+        926
+      ]
+    ],
+    "regions": [
+      [
+        0.5,
+        0.46,
+        0.12,
+        0.23,
+        -15,
+        0.28
+      ],
+      [
+        0.6,
+        0.75,
+        0.12,
+        0.24,
+        -15,
+        0.28
+      ]
+    ],
+    "reason": "Exclude background galaxy and jet knots from star detection. Two isolated foreground stars plus broad jet glow."
+  }
+}

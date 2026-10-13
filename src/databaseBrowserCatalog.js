@@ -53,7 +53,10 @@ function readCatalog(db, sonicDb = db) {
   const identities = db.prepare("SELECT * FROM track_identity ORDER BY id").all();
   const identitiesById = new Map(identities.map(row => [row.id, row]));
   const aliases = new Map(readRows(db, "track_identity_alias", "SELECT alias_identity_id, canonical_identity_id FROM track_identity_alias").map(row => [row.alias_identity_id, row.canonical_identity_id]));
-  const preparedIdentities = new Map(readRows(db, "sonic_coverage_work", "SELECT identity_key, resolved_identity_key FROM sonic_coverage_work WHERE state IN ('embedded', 'prepared') AND resolved_identity_key IS NOT NULL").map(row => [row.identity_key, row.resolved_identity_key]));
+  const coverageColumns = hasTable(db, "sonic_coverage_work") ? db.prepare("PRAGMA table_info(sonic_coverage_work)").all() : [];
+  const preparedIdentities = new Map(readRows(db, "sonic_coverage_work", "SELECT * FROM sonic_coverage_work WHERE state IN ('embedded', 'prepared') AND resolved_identity_key IS NOT NULL")
+    .filter(row => !coverageColumns.some(column => column.name === "model_version") || (row.model === MODEL && row.model_version === MODEL_VERSION))
+    .map(row => [parse(row.track_json)?.identityKey || row.identity_key, row.resolved_identity_key]));
   const enrichments = new Map();
   const artworkHistory = new Map();
   const artworkRepairs = new Map(readRows(db, "canonical_artwork_repair", "SELECT * FROM canonical_artwork_repair WHERE revoked_at IS NULL ORDER BY created_at, id").map(row => [`${row.legacy_track_id}|${row.legacy_snapshot_id}|${row.original_url}`, row]));
@@ -284,7 +287,7 @@ function browseCatalog(snapshot, input = {}) {
   const offset = items.length ? Math.min(query.offset, Math.floor((items.length - 1) / query.limit) * query.limit) : 0;
   return {
     enabled: true, view: query.view, group: query.group, query, total: items.length, matchingTracks: matching.length,
-    catalogTracks: snapshot.records.length, sonicAvailable: snapshot.sonicAvailable, generatedAt: snapshot.generatedAt,
+    sonicModel: MODEL, sonicModelVersion: MODEL_VERSION, catalogTracks: snapshot.records.length, sonicAvailable: snapshot.sonicAvailable, generatedAt: snapshot.generatedAt,
     offset, limit: query.limit, items: items.slice(offset, offset + query.limit).map(publicRecord), facets,
     missingAlbumCount: matching.filter(record => !record.albumKey).length
   };

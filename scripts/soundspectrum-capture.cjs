@@ -107,7 +107,7 @@ function buildCaptureCommand(options = {}, env = process.env) {
   if (!/^\d{1,20}$/.test(handle) || BigInt(handle) <= 0n || BigInt(handle) > 18446744073709551615n) throw new Error('A valid nonzero windowHandle is required.');
   const width = boundedInteger(options.width, 800, 320, 960, 'width');
   const height = boundedInteger(options.height, 450, 180, 720, 'height');
-  const fps = boundedInteger(options.fps, 30, 1, 30, 'fps');
+  const fps = boundedInteger(options.fps, 30, 1, 60, 'fps');
   const quality = boundedInteger(options.quality, 65, 30, 85, 'quality');
   const executable = options.executable || resolveGStreamer(env);
   if (!executable) throw new Error('SoundSpectrum capture runtime is missing. Run scripts/soundspectrum-setup.ps1.');

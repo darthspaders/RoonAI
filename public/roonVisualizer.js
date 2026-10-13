@@ -5,6 +5,7 @@
   if (!stage || !view || !target || !window.createSoundSpectrumStage) return;
   window.createSoundSpectrumStage({
     stage, lane: stage.querySelector(".artStack"), bar: stage.querySelector(".playerViewControls"),
+    settingsAnchor: stage,
     prefix: "roon", artworkId: "cover", immersiveClass: "roonVisualFullscreen", stopOnTargetChange: true, restoreNativeFullscreen: true, resetImmersiveScroll: true,
     sourceVisible: () => view.classList.contains("isActive") && document.body.dataset.playbackSystem !== "lyrion",
     selectedTarget: () => target.value || "", targetSelect: target, targetParam: "zoneId",
@@ -20,4 +21,12 @@
     observe: [{ target: view, attributes: ["class", "hidden"] },
       { target: document.body, attributes: ["data-playback-system"] }]
   });
+  // Use the empty left header cell on wide players. Phones keep the button
+  // inside their stacked Now Playing rail, with the exact same dialog/control.
+  if (typeof window.matchMedia === "function") {
+    const phone = window.matchMedia("(max-width: 699px)"), rail = stage.querySelector(".nowInfo");
+    const settings = document.getElementById("roonVisualSettings");
+    const placeSettings = () => { if (settings && rail) (phone.matches ? rail : stage).prepend(settings); };
+    placeSettings(); phone.addEventListener?.("change", placeSettings);
+  }
 })();

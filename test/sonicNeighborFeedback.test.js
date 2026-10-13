@@ -205,3 +205,22 @@ test("sonic anchor profiles save, update, and resume without touching global tas
     cleanDb(dbFile);
   }
 });
+
+
+test("MERT review ratings persist and calibration never borrows legacy-model decisions", () => {
+  const {MODEL,MODEL_VERSION}=require("../src/sonicCoverageIdentity");
+  const dbFile=tempDbFile(), memory=new MusicMemoryStore({dbFile,logger:null});
+  const engine=new RecommendationEngineV2({enabled:true,dbFile,discoveryModel:MODEL,discoveryModelVersion:MODEL_VERSION,logger:null});
+  try {
+    const track={tidalId:"101",artist:"Candidate",title:"Recording"};
+    for(const [model,modelVersion] of [[MODEL,MODEL_VERSION],["discogs-effnet","1"]]) engine.store.upsertEmbedding({track,model,modelVersion,vector:[1,.1]});
+    engine.recordSonicNeighborFeedback({anchor:"tidal:102",candidate:track,rating:"wrong_genre",model:"discogs-effnet",modelVersion:"1",sourceEventId:"legacy-test"});
+    assert.equal(readSonicNeighborFeedbackEmbeddings(engine.store.db,{model:MODEL,modelVersion:MODEL_VERSION}).length,0);
+    const result=engine.recordSonicNeighborFeedback({anchor:"tidal:102",candidate:track,rating:"keep",sourceEventId:"mert-test"});
+    assert.equal(result.inserted,1);assert.equal(result.globalTasteProfileUpdated,false);
+    const mert=readSonicNeighborFeedbackEmbeddings(engine.store.db,{model:MODEL,modelVersion:MODEL_VERSION});
+    assert.equal(mert.length,1);assert.equal(mert[0].label,"positive");assert.equal(mert[0].reviewCount,1);
+    assert.equal(readSonicNeighborFeedbackEmbeddings(engine.store.db,{model:"discogs-effnet",modelVersion:"1"})[0].label,"negative");
+    assert.equal(memory.db.prepare("SELECT COUNT(*) n FROM taste_feedback").get().n,0);
+  } finally {engine.store.close();memory.close();cleanDb(dbFile);}
+});

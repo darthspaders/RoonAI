@@ -6,6 +6,7 @@ function createPcMonitorStatus({ config, fetchJsonWithTimeout }) {
   }
 
   function pcMonitorNumber(value, digits = 0) {
+    if (value === null || value === undefined || (typeof value === "string" && !value.trim())) return null;
     const number = Number(value);
     return Number.isFinite(number) ? Number(number.toFixed(digits)) : null;
   }

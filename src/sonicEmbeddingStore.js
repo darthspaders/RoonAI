@@ -1,4 +1,5 @@
 "use strict";
+const { storedSonicIdentityMatches } = require("./sonicProfileIdentity");
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -554,10 +555,12 @@ class SonicEmbeddingStore {
     count = 20,
     excludeIdentityKeys = [],
     minSimilarity = -1,
-    includeVector = false
+    includeVector = false,
+    allowVersionProxy = true
   } = {}) {
     const source = vector === null || vector === undefined ? [] : finiteVector(vector);
-    const storedReference = track && (!source.length || !model || !modelVersion) ? this.getEmbedding(track, { model, modelVersion }) : null;
+    const storedReference = track && (allowVersionProxy === false || !source.length || !model || !modelVersion) ? this.getEmbedding(track, { model, modelVersion }) : null;
+    if (allowVersionProxy === false && storedReference && !storedSonicIdentityMatches(storedReference, track)) return [];
     model = cleanText(model) || storedReference?.model || "";
     modelVersion = cleanText(modelVersion) || storedReference?.modelVersion || "";
     if (!model || !modelVersion) return []; // A naked vector cannot identify its embedding space.
@@ -570,6 +573,7 @@ class SonicEmbeddingStore {
     const rows = this.listEmbeddings({ model, modelVersion, limit: 100000 });
     return rows
       .filter((entry) => !excluded.has(entry.identityKey))
+      .filter((entry) => allowVersionProxy !== false || storedSonicIdentityMatches(entry))
       .map((entry) => ({
         ...entry,
         similarity: cosineSimilarity(reference, entry.vector)

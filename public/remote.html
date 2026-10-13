@@ -5,10 +5,28 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#08070f">
     <title>Rabbit Hole Ratings Remote</title>
-    <link rel="stylesheet" href="/remote.css?v=20260912-feedback-vocab-01">
+    <link rel="stylesheet" href="/remote.css?v=20261011-clock-settings-1">
   </head>
   <body class="rabbitRemotePage">
     <main class="rabbitRemoteShell">
+      <div class="rabbitRemoteUtilities">
+        <canvas id="remoteMatrixClock" class="rabbitRemoteMatrixCanvas" aria-hidden="true" hidden></canvas>
+        <time id="remoteClock" class="rabbitRemoteClock" title="Your device's local time"></time>
+        <button id="remoteFullscreenToggle" class="rabbitRemoteFullscreenToggle" type="button" aria-label="Enter fullscreen" aria-pressed="false" aria-describedby="remoteFullscreenStatus remoteWakeLockStatus" title="Enter fullscreen">Enter fullscreen</button>
+        <div class="rabbitRemoteClockDetails">
+          <time id="remoteDate" class="rabbitRemoteDate"></time>
+          <details id="remoteWeather" class="rabbitRemoteWeather">
+            <summary id="remoteWeatherSummary">Enable weather</summary>
+            <div class="rabbitRemoteWeatherSettings">
+              <p id="remoteWeatherStatus" role="status">Use your phone's location for weather in °F. An approximate location is sent to Open-Meteo; Rabbit Hole does not store it.</p>
+              <button id="remoteWeatherToggle" type="button">Use phone location</button>
+              <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Weather by Open-Meteo</a>
+            </div>
+          </details>
+        </div>
+        <p id="remoteFullscreenStatus" class="rabbitRemoteFullscreenStatus" role="status" aria-live="polite" hidden></p>
+        <p id="remoteWakeLockStatus" class="rabbitRemoteWakeLockStatus" role="status" aria-live="polite" aria-atomic="true" hidden></p>
+      </div>
       <section class="rabbitRemoteStage" aria-live="polite">
         <div id="remoteBadge" class="rabbitRemoteBadge">Unscored now playing</div>
 
@@ -64,6 +82,9 @@
       </div>
     </section>
 
-    <script src="/remote.js?v=20261004-status-live-1" defer></script>
+    <script src="/remoteClock.js?v=20261011-green-clock-1" defer></script>
+    <script src="/remoteClockStyle.js?v=20261011-clock-settings-1" defer></script>
+    <script src="/remoteMatrixClock.js?v=20261011-clock-settings-1" defer></script>
+    <script src="/remote.js?v=20261011-quiet-wake-1" defer></script>
   </body>
 </html>

@@ -91,12 +91,12 @@ test('stop removes only its own demand and leaves no owned child or buffer', asy
   await q.f.stop(); assert.equal(JSON.parse(await fs.readFile(q.demandPath, 'utf8')).token, 'another-owner');
   assert.ok(q.children.every(child => child.killed)); assert.equal(q.sockets[0].closed, true); assert.equal(q.f.pcmSize + q.f.encodedSize, 0);
 });
-test('configured visual delay affects only the copy pacing and never adds a URL input', async t => {
-  const q = await fixture(t); await fs.writeFile(q.settingsPath, JSON.stringify({ version: 1, enabled: true, delayMs: 1000 }));
+test('global visual delay affects only writer PCM, supersedes legacy readiness delay and never adds a URL input', async t => {
+  const q = await fixture(t, { visualDelayMs: 1000 }); await fs.writeFile(q.settingsPath, JSON.stringify({ version: 1, enabled: true, delayMs: 1000 }));
   await q.f.start({ playerId: PLAYER }); q.send('begin', 0, FLAC); q.children[1].stdout.write(Buffer.from([1, 0, 2, 0]));
-  q.advance(20); q.f.tick(q.f.epoch); assert.equal(q.f.pcmSize, 4); assert.ok(q.children[0].stdin.read().every(value => value === 0));
+  q.advance(20); q.f.tick(q.f.epoch); assert.equal(q.f.pcmSize, 0); assert.ok(q.children[0].stdin.read().every(value => value === 0));
   for (let i = 0; i < 49; i++) { q.advance(20); q.f.tick(q.f.epoch); q.children[0].stdin.read(); }
-  assert.equal(q.f.pcmSize, 4);
+  assert.equal(q.f.pcmSize, 0);
   q.advance(20); q.f.tick(q.f.epoch); assert.deepEqual(q.children[0].stdin.read().subarray(0, 4), Buffer.from([1, 0, 2, 0]));
   assert.equal(buildDecodeCommand({}).args.includes('44100'), true);
 });
@@ -168,13 +168,13 @@ test('copy pacing bounds catch-up writes and drops only buffered copy PCM after 
   assert.equal(q.f.state, 'receiving'); assert.ok(q.children.every(child => !child.killed));
 });
 
-test('a new source resets old pacing debt and a delay crossing consumes only post-delay PCM', async t => {
-  const q = await fixture(t); await fs.writeFile(q.settingsPath, JSON.stringify({ version: 1, enabled: true, delayMs: 15 }));
+test('a new source retains output pacing and excludes fresh PCM from elapsed pre-boundary time', async t => {
+  const q = await fixture(t, { visualDelayMs: 15 }); await fs.writeFile(q.settingsPath, JSON.stringify({ version: 1, enabled: true, delayMs: 15 }));
   await q.f.start({ playerId: PLAYER }); q.send('begin', 0, FLAC); q.f.offerPcm(Buffer.alloc(10000, 1));
   q.advance(20); q.f.tick(q.f.epoch); const value = q.children[0].stdin.read();
   assert.ok(value.subarray(0, 662 * 4).every(byte => byte === 0)); assert.ok(value.subarray(662 * 4).every(byte => byte === 1));
   q.advance(400); q.send('begin', 0, FLAC, 'stream-2'); q.f.offerPcm(Buffer.alloc(10000, 2));
-  q.f.tick(q.f.epoch); assert.equal(q.children[0].stdin.read(), null); assert.equal(q.f.pcmSize, 10000);
+  q.f.tick(q.f.epoch); assert.equal(q.children[0].stdin.read().length, 17640); assert.equal(q.f.pcmSize, 10000);
 });
 
 test('decoded signal measures signed PCM amplitude and clipping, rather than counting bytes as music', async t => {
@@ -191,7 +191,7 @@ test('decoded signal measures signed PCM amplitude and clipping, rather than cou
 });
 
 test('submitted signal includes actual delay silence and distinguishes it from decoded music', async t => {
-  const q = await fixture(t); await fs.writeFile(q.settingsPath, JSON.stringify({ version: 1, enabled: true, delayMs: 1000 }));
+  const q = await fixture(t, { visualDelayMs: 1000 }); await fs.writeFile(q.settingsPath, JSON.stringify({ version: 1, enabled: true, delayMs: 1000 }));
   await q.f.start({ playerId: PLAYER }); q.send('begin', 0, FLAC);
   const pcm = Buffer.alloc(44100 * 4); for (let offset = 0; offset < pcm.length; offset += 2) pcm.writeInt16LE(16384, offset);
   q.f.offerPcm(pcm);

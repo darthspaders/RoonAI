@@ -18,13 +18,13 @@ test('pairing, source validation, expiry and channel isolation',()=>{
  assert.throws(()=>relay.ingest({url,channelNumber:53,label:'stale',observedAt:now-100000}));
  assert.ok(!JSON.stringify(relay.status()).includes(relay.key));now+=90000;assert.equal(relay.get(53),null);
 });
-test('browser title stays channel-scoped display evidence and cannot overwrite unaligned playback metadata',async()=>{
+test('browser title stays diagnostic without a playback-aligned timestamp and expires',async()=>{
  let now=1000;const relay=new SiriusXmBrowserRelay({file:null,clock:()=>now});
- const service=new SiriusXmMetadata({clock:()=>now,readPlaybackClock:()=>({time:null,reason:'No aligned stream timestamp'})});service.browserRelay=relay;
+ const service=new SiriusXmMetadata({clock:()=>now});service.browserRelay=relay;
  service.getPublicChannelMetadata=async()=>({metadata:{channelNumber:53,channelName:"Diplo's Revolution",currentShow:'Scheduled show'},diagnostics:{}});
  relay.ingest({url,channelNumber:53,label:'@walkerandroyce - #RulesDontApply',observedAt:now});
  const raw={nowPlaying:{source:'SiriusXM',url:'sxm:9472',title:'Old title',artist:'Old artist'},queue:[{id:'exact'}]};
- const result=await service.overlay(raw);assert.equal(result.displayPlaybackState.nowPlaying.title,'Old title');assert.equal(raw.nowPlaying.title,'Old title');assert.equal(result.queue,raw.queue);assert.equal(result.siriusxmMetadata.currentShow,'Scheduled show');assert.equal(result.siriusxmMetadata.liveNowTitle,'@walkerandroyce - #RulesDontApply');
+ const result=await service.overlay(raw);assert.equal(result.displayPlaybackState.nowPlaying.title,'Old title');assert.equal(result.siriusxmMetadata.liveNowTitle,'@walkerandroyce - #RulesDontApply');assert.equal(raw.nowPlaying.title,'Old title');assert.equal(result.queue,raw.queue);assert.equal(result.siriusxmMetadata.currentShow,'Scheduled show');
  assert.equal((await service.getChannelMetadata(52)).metadata.liveNowTitle,undefined);
  now+=90000;assert.equal((await service.overlay(raw)).displayPlaybackState.nowPlaying.title,'Old title');
  const other={nowPlaying:{source:'SoundCloud',title:'Unchanged'}};assert.equal((await service.overlay(other)).displayPlaybackState,other);

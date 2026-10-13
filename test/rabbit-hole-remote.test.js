@@ -21,7 +21,9 @@ test("Rabbit Hole ratings remote is isolated from the main browser interface", (
   assert.doesNotMatch(html, /rabbitRemoteHeader/);
   assert.doesNotMatch(html, /styles\.css/);
   assert.doesNotMatch(html, /app\.js/);
-  assert.doesNotMatch(html, /zoneSelect|<select/i);
+  assert.doesNotMatch(html, /zoneSelect/i);
+  assert.doesNotMatch(html, /<select\b/i);
+  assert.match(html, /remoteClockStyle\.js/);
   assert.match(html, /remoteBadge/);
   assert.match(html, /remoteArtwork/);
   assert.match(html, /remoteMetadata/);

@@ -1,4 +1,6 @@
 "use strict";
+const bridgeOrigin = process.env.ALBUM_ART_PUBLIC_BASE_URL ? new URL(process.env.ALBUM_ART_PUBLIC_BASE_URL).origin : "http://127.0.0.1:3780";
+const bridgeHost = new URL(bridgeOrigin).hostname;
 // Presentation-only repair. No MusicMemoryStore, search, queue or feedback writes.
 const fs=require('node:fs'),path=require('node:path'),{randomUUID}=require('node:crypto');
 const {DatabaseSync}=require('node:sqlite');
@@ -34,7 +36,7 @@ async function main(){
     }catch(e){db.exec('ROLLBACK');throw e;}finally{db.close();}return;
   }
   const db=new DatabaseSync(dbFile,{readOnly:true}),tidal=new TidalVerifier({...require('../src/config').tidal,timeoutMs:8000});
-  const catalog=readCatalog(db,null).records.filter(r=>r.artworkSource==='tidal'&&r.imageUrl.startsWith('https://art.darthspader.com/art/'));
+  const catalog=readCatalog(db,null).records.filter(r=>r.artworkSource==='tidal'&&r.imageUrl.startsWith(bridgeOrigin + '/art/'));
   const items=[];
   for(const row of catalog){
     const latest=db.prepare("SELECT * FROM provider_enrichment WHERE track_identity_id=? AND provider='tidal' ORDER BY fetched_at DESC,id DESC LIMIT 1").get(row.id),old=JSON.parse(latest.raw_json||'{}');

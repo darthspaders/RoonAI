@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const { analysisSpec } = require("../src/sonicAnalysisSpec");
 const {
   candidateIdentityKeys,
   createRecommendationV2DiscoveryReranker,
@@ -38,6 +39,30 @@ function engineWithEmbeddings(entries) {
     }
   };
 }
+
+test("FullSong production blends only its own vectors and queues only FullSong for missing candidates", () => {
+  const spec = analysisSpec("mert-fullsong"), calls = [];
+  const reranker = createRecommendationV2DiscoveryReranker({
+    enabled: true, model: spec.repo, modelVersion: spec.key, productionMode: "blend", minScored: 1,
+    recommendationEngine: { store: { enabled: true, getEmbedding(identity, options) {
+      assert.deepEqual(options, { model: spec.repo, modelVersion: spec.key });
+      return identity === "tidal:1" ? { vector: [1, 0], dimensions: 2 } : null;
+    } } },
+    profilesProvider: () => [profile("metadata:house", [1, 0], { model: spec.repo, modelVersion: spec.key })],
+    coverageService: { engine: { provider: { name: spec.repo, modelVersion: spec.key } }, settings: { lazyEnabled: true }, enqueueMissing(tracks) { calls.push({ tracks }); return { lazyFillQueuedCount: 1 }; } },
+    analysisService: { settings: { enabled: true, paused: false }, enqueue(tracks, options) {
+      assert.fail("Production must not also enqueue optional analysis");
+    }, observe() { return { mode: "shadow" }; } }, logger: null
+  });
+  const candidates = [{ tidalId: "1", score: 50 }, { tidalId: "2", score: 51 }];
+  const scored = reranker.rerankCandidates(candidates, { options: { genre: "House" } });
+  assert.equal(scored.diagnostics.applied, true);
+  assert.equal(scored.diagnostics.model, spec.repo);
+  assert.equal(scored.candidates.find(x => x.tidalId === "2").score, 51);
+  assert.ok(Math.abs(scored.candidates.find(x => x.tidalId === "1").score - 50) <= 8);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].tracks[0].tidalId, "2");
+});
 
 test("candidate identity resolution prefers the TIDAL identity used by stored profiles", () => {
   assert.deepEqual(

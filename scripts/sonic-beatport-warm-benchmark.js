@@ -121,7 +121,7 @@ function summarizeEmbedding(items) {
 
 function runBatch({ wrapperPath, manifestPath, venv, device, modelPath }) {
   const startedAt = process.hrtime.bigint();
-  const result = spawnSync(process.platform === "win32" ? "wsl.exe" : "env", [
+  const result = spawnSync("wsl.exe", [
     "env",
     `RABBIT_HOLE_SONIC_ESSENTIA_DEVICE=${device}`,
     `RABBIT_HOLE_SONIC_ESSENTIA_VENV=${venv}`,
@@ -143,14 +143,9 @@ function runBatch({ wrapperPath, manifestPath, venv, device, modelPath }) {
 async function main() {
   const input = argsFrom(process.argv.slice(2));
   if (input.help) {
-    console.log("node scripts/sonic-beatport-warm-benchmark.js [--limit 20] [--output .codex-verify/sonic-beatport-warm-benchmark.json] [--cpu-venv PATH] [--gpu-venv PATH] [--model-path PATH]");
+    console.log("node scripts/sonic-beatport-warm-benchmark.js [--limit 20] [--output .codex-verify/sonic-beatport-warm-benchmark.json]");
     return;
   }
-  const cpuVenv = cleanText(input["cpu-venv"] || process.env.RABBIT_HOLE_SONIC_CPU_VENV) ||
-    (process.platform === "win32" ? "" : path.join(os.homedir(), "rabbit-hole-sonic-venv"));
-  const gpuVenv = cleanText(input["gpu-venv"] || process.env.RABBIT_HOLE_SONIC_GPU_VENV) ||
-    (process.platform === "win32" ? "" : path.join(os.homedir(), "micromamba-root", "envs", "rabbit-hole-effnet-gpu"));
-  if (!gpuVenv) throw new Error("Set --gpu-venv or RABBIT_HOLE_SONIC_GPU_VENV to your WSL Essentia environment before running this benchmark.");
   const limit = Math.max(20, Math.min(100, Number(input.limit) || 20));
   const querySpecs = parseQuerySpecs(input.queries || "D-Nox|Progressive House,Alix Perez|Wubs & Dubs,Chris Lorenzo|Tech House,Astrix|Psytrance");
   const outputPath = path.resolve(input.output || path.join(".codex-verify", "sonic-beatport-warm-benchmark.json"));
@@ -195,19 +190,18 @@ async function main() {
     const manifestPath = path.join(tempDir, "manifest.json");
     fs.writeFileSync(manifestPath, JSON.stringify(rows, null, 2), "utf8");
     const wrapperPath = path.join(__dirname, "sonic-essentia-batch-wsl.sh");
-    const modelPath = cleanText(input["model-path"] || process.env.RABBIT_HOLE_SONIC_ESSENTIA_MODEL_PATH) ||
-      (process.platform === "win32" ? "" : path.join(os.homedir(), "rabbit-hole-sonic-models", "discogs_track_embeddings-effnet-bs64-1.pb"));
+    const modelPath = "/home/darth/rabbit-hole-sonic-models/discogs_track_embeddings-effnet-bs64-1.pb";
     const cpu = runBatch({
       wrapperPath,
       manifestPath,
-      venv: cpuVenv,
+      venv: "/home/darth/rabbit-hole-sonic-venv",
       device: "cpu",
       modelPath
     });
     const gpu = runBatch({
       wrapperPath,
       manifestPath,
-      venv: gpuVenv,
+      venv: "/home/darth/micromamba-root/envs/rabbit-hole-effnet-gpu",
       device: "cuda",
       modelPath
     });

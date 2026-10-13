@@ -8,6 +8,7 @@ const { SonicAnalysisService } = require("../src/sonicAnalysisService");
 const { analysisSpec, hash } = require("../src/sonicAnalysisSpec");
 const { createRecommendationV2DiscoveryReranker } = require("../src/recommendationV2Discovery");
 const { SonicEmbeddingEngine } = require("../src/sonicEmbeddingEngine");
+const { MODEL, MODEL_VERSION } = require("../src/sonicCoverageIdentity");
 const track = id => ({ identityKey: `tidal:${id}`, tidalId: String(id), artist: "Test artist", title: `Track ${id}`, score: 50 });
 const result = spec => ({ specKey: spec.key, revision: spec.revision, sampleRate: spec.sampleRate,
   audioDurationSeconds: 60, analyzedSeconds: 30, sourceCoverage: .5,
@@ -17,14 +18,14 @@ function fixture(t, handler = async (_, spec) => result(spec)) {
   const embeddings = new SonicEmbeddingStore({ enabled: false });
   Object.assign(embeddings, { enabled: true, db }); embeddings.migrate();
   let now = 100000, calls = 0;
-  const engine = { enabled: true, store: embeddings, provider: { name: "discogs-effnet", modelVersion: "1" },
+  const engine = { enabled: true, store: embeddings, provider: { name: MODEL, modelVersion: MODEL_VERSION },
     resolveTidalTrackReference: async x => x,
     analyzeBeatportPreviewForTidalTrack: async (value, options) => {
       assert.equal(options.allowVersionProxy, false);
       return options.analysisHandler(Buffer.from("verified-audio"), value, { sourceType: "beatport-preview", metadata: { partialPreview: true } });
     },
     prepareSonicAnchor: async value => {
-      embeddings.upsertEmbedding({ track: value, model: "discogs-effnet", modelVersion: "1", vector: Array.from({length:1280},(_,i)=>Number(i===0)) });
+      embeddings.upsertEmbedding({ track: value, model: MODEL, modelVersion: MODEL_VERSION, vector: Array.from({length:1024},(_,i)=>Number(i===0)) });
       return { ready: true, prepared: true, identityKey: value.identityKey };
     } };
   const coverage = new SonicCoverageService({ db, recommendationEngine: engine, autoStart: false, clock: () => now, inventory: async function* () { yield track(90); } });
@@ -64,7 +65,7 @@ test("optional analysis shares scheduler limits, pauses independently, and produ
   f.analysis.configure({ paused: true });
   f.coverage.enqueueMissing([track(3)]); f.advance(); await f.coverage.pump();
   release(); await Promise.all(f.coverage.active.values());
-  assert.ok(f.embeddings.getEmbedding(track(3), { model: "discogs-effnet", modelVersion: "1" }));
+  assert.ok(f.embeddings.getEmbedding(track(3), { model: MODEL, modelVersion: MODEL_VERSION }));
   assert.equal(f.calls(), 1);
   f.analysis.cancel();
   assert.ok([track(1), track(2)].some(value => f.analysis.existing(value, analysisSpec("mert-fullsong").key)));

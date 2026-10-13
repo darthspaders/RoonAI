@@ -3,7 +3,7 @@ set -euo pipefail
 # Isolated from the existing EffNet runtime. Requires the user's micromamba.
 root="$(cd "$(dirname "$0")/.." && pwd)"
 manager="${SONIC_MICROMAMBA:-$HOME/.local/bin/micromamba}"
-env_root="${SONIC_ANALYSIS_ENV_ROOT:-$HOME/micromamba-root/envs/rabbit-hole-mert2}"
+env_root="${SONIC_ANALYSIS_ENV_ROOT:-/home/darth/micromamba-root/envs/rabbit-hole-mert2}"
 if [[ ! -x "$env_root/bin/python" ]]; then
   "$manager" create -y -p "$env_root" -c conda-forge python=3.11 ffmpeg=6.1 pip
 fi

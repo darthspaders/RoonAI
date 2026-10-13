@@ -19,6 +19,21 @@ function track() {
   return { artist: "D-Nox", title: "Dream On", roonIdentity: "roon-item-1", durationMs: 463000 };
 }
 
+test("cached Bandcamp profile retains its source without downloading again", async () => {
+  const memory = new MusicMemoryStore({ dbFile: tempDbFile(), logger: null });
+  try {
+    const service = new LiveSonicAnalysisService({ enabled: true, autoAnalyze: true, musicMemory: memory,
+      recommendationEngine: { enabled: true, bandcamp: {},
+        findStoredSonicProfile: () => ({ identityKey: "tidal:123", track: { metadata: { sourceProvider: "bandcamp" } } }),
+        analyzeBeatportPreviewForTidalTrack: async () => { throw Error("must not download"); }
+      }, logger: null });
+    const result = await service.handleEnrichment({ ...track(), tidalId: "123" });
+    assert.equal(result.status, SONIC_STATUS.ANALYZED_BANDCAMP_STREAM);
+    assert.equal(result.sourceAudioType, "bandcamp_stream");
+    assert.equal(result.cached, true);
+  } finally { memory.close(); }
+});
+
 test("sonic source decision requires a high-confidence Beatport match", () => {
   assert.equal(sonicSourceDecision({ beatport: { id: "bp-1", confidence: 90 } }).status, SONIC_STATUS.READY_BEATPORT_PREVIEW);
   assert.equal(sonicSourceDecision({ beatport: { id: "bp-1", confidence: 70 } }).status, SONIC_STATUS.NEEDS_LOCAL_FILE);

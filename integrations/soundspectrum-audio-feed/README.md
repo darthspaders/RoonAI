@@ -5,7 +5,7 @@ already sending to HQPlayer. An independent decoder converts the copy to PCM
 and sends it only to the verified SoundSpectrum Audio Cable. Aeon, G-Force and
 WhiteCap can then respond to the selected player's music without a microphone.
 The playback branch still sends the original bytes to HQPlayer and its existing
-configured audio output. There is no second reader of `/stream.mp3` or `/hqp/`,
+Dreamus ASIO/DSD512 output. There is no second reader of `/stream.mp3` or `/hqp/`,
 ASIO proxy, default-device change, playback command or queue change.
 
 The feed is **off by default**. Enabling its local setting makes the input
@@ -18,7 +18,7 @@ the feed. Saved selections never start it automatically.
 
 The tap supports HQPlayerBridge's **tier-4 FLAC player stream**, including the
 current native SiriusXM channel route, before HQPlayer processes that signal.
-Source format is determined by the existing player stream. The visualization copy is
+The current observed source is 44.1 kHz / 24-bit FLAC. The visualization copy is
 44.1 kHz stereo PCM; that conversion does not replace the playback signal.
 
 Roon playback, music started directly in HQPlayer, local-file download tiers
@@ -69,15 +69,16 @@ identity, a missing device or unsafe Listen settings leave the feed unavailable.
 The tool does not alter Windows settings to pass these checks.
 
 Refresh the player and audio-input inventory, then start the music feed through
-the UI. For a measured visual timing adjustment, save a delay in milliseconds:
+the UI. Use the shared **Visuals & audio** 0–5000 ms control for timing: Current
+previews, Save persists, and Reset to 0 previews until saved. Default is zero;
+preserve the user's selection rather than applying a universal preset.
 
-```powershell
-node integrations/soundspectrum-audio-feed/manage.cjs --delay 2000
-```
-
-The supported range is 0–30000 ms; default is 0. Apply the new value on the next
-explicit **Start visuals**. Start with a small measured adjustment: the needed
-delay varies with buffering, and a delay can only move visuals later.
+The former private 0–30000 ms decoder-onset setting remains readable for
+compatibility but is superseded. The shared PCM stage applies once after pacing
+and before the visual cable. Native visuals and main-browser visualization video
+therefore share the delay; the video transport adds no second delay. `/remote`
+is the separate ratings page, with no delay editor. Audible playback remains unchanged. See the
+global delay reference (private installation record; [published status and operating limits](../../docs/october-2026-update.md)).
 
 ## Failure and shutdown
 
@@ -158,3 +159,37 @@ plugin file. Plugin updates may require reviewing a new integration version;
 the installer never patches an unreviewed update automatically.
 
 For transport details and the offline Perl fixture, see [lyrion/README.md](lyrion/README.md).
+
+## Recorded validation
+
+The initial deployment passed 97 focused tests, 343 main JavaScript syntax checks and
+explicit syntax checks for seven optional CJS files. The optional feed/output
+tests live inside this removable folder; their relocated 24-test scope passed.
+All three visualizers received copied/decoded bytes during bounded live
+checks: G-Force for over two minutes, WhiteCap for about 45 seconds and Aeon for
+about two minutes. Copy buffers stayed roughly 142–350 KB; desktop stalls
+recorded visualization PCM drops while the feed kept running.
+Those checks established transport activity; they did not establish nonzero
+cable output or visible reaction to music. Later endpoint testing identified
+the timestamp-gap issue described above.
+
+Stopping the last viewer was verified to release copy buffers, owner/demand
+files and owned decoder/writer children. Original SiriusXM playback retained
+its one queue item and HQPlayer DSD512 output. CLI disable/re-enable was checked
+while idle: availability went false then true with no autostart. That check
+did not establish CLI shutdown during an active feed. That initial run left the feature enabled
+and available with zero viewers; explicit Start visuals is still required.
+These checks do not establish long-session performance or exact synchronization.
+
+The subsequent silence correction passed 100 focused tests, the same 343 main
+syntax checks and seven optional CJS checks. A controlled 700 ms output gap
+reproduced the silent cable with `sync=true` and retained signal with `sync=false`.
+After a clean Rabbit Hole/MCP reload, all three native visualizers opened the
+exact recording endpoint and received measurable music. Capture endpoint peaks
+were 0.707 for Aeon, 0.543 for G-Force and 0.181 for WhiteCap, with active,
+unmuted native capture sessions and twelve distinct video frames each. Aeon and
+WhiteCap retained signal after startup pacing drops. An independent eight-second
+cable PCM capture measured RMS -23.28 dBFS; another capture of the user's resumed
+session measured -16.01 dBFS. No captured PCM was saved. HQPlayer remained in
+playing state at DSD512 with the same one-item Lyrion queue. QA leases were
+released, and the user's subsequently resumed music-feed viewer was preserved.

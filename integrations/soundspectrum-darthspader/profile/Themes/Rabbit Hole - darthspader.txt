@@ -1,0 +1,10 @@
+About = "Original audio-reactive lowercase letter outlines. Separate removable Rabbit Hole add-on."
+ThemeName = "Rabbit Hole - darthspader"
+Version = 1
+Locked = 0
+WaveShape.CategoryExpr = "+Rabbit Hole - darthspader"
+ColorMap.CategoryExpr = "+Rabbit Hole - darthspader"
+FlowField.CategoryExpr = "+Rabbit Hole - darthspader"
+"FlowField Union.CategoryExpr" = "-(All)"
+Particle.CategoryExpr = "+Rabbit Hole - darthspader"
+Sprite.CategoryExpr = "-(All)"

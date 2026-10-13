@@ -7,6 +7,7 @@ const { spawn, execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 
 const execFileAsync = promisify(execFile);
+const { whitecapThemeSelection, whitecapThemes } = require("./soundSpectrumThemes");
 const PRODUCTS = Object.freeze([
   { id: "aeon", name: "Aeon", folder: "Aeon", executable: "Aeon Standalone.x64.exe" },
   { id: "g-force", name: "G-Force", folder: "G-Force", executable: "G-Force Standalone.x64.exe" },
@@ -31,7 +32,8 @@ function microphoneInputs(inputs = []) {
     .map(input => ({ id: input.id, name: input.name }));
 }
 
-function patchStandalonePreferences(original, inputName, visualizer) {
+function patchStandalonePreferences(original, inputName, visualizer, targetFrameRate) {
+  if (targetFrameRate !== undefined && targetFrameRate !== 120) throw new Error("The optional native capture frame target must be 120.");
   if (typeof inputName !== "string" || !inputName.trim() || /[\r\n\0]/.test(inputName)) throw new Error("An exact SoundSpectrum input name is required.");
   let encoding = "utf8", offset = 0;
   if (original[0] === 0xff && original[1] === 0xfe) { encoding = "utf16le"; offset = 2; }
@@ -46,6 +48,8 @@ function patchStandalonePreferences(original, inputName, visualizer) {
     "Audio.AutoDetect.Enabled": "0"
   };
   if (visualizer === "g-force") values["G-Force.AutoOpenToolbar"] = "0";
+  // HLS requests capture headroom; the original Standalone file is restored on Stop.
+  if (targetFrameRate === 120) values["Graphics.TargetFrameRate"] = "120";
   for (const [key, value] of Object.entries(values)) {
     const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const expression = new RegExp(`^[ \\t]*${escaped}[ \\t]*=[^\\r\\n]*`, "gm");
@@ -64,7 +68,9 @@ function createSoundSpectrumNative(options = {}) {
   const backupRoot = options.backupRoot || path.join(__dirname, "..", "data", "soundspectrum-native");
   const helperPath = options.helperPath || path.join(__dirname, "..", "scripts", "soundspectrum-window.ps1");
   const spawnImpl = options.spawnImpl || spawn;
+  const onDiagnostic = typeof options.onDiagnostic === "function" ? options.onDiagnostic : record => console.warn(`[soundspectrum-native] ${JSON.stringify(record)}`);
   const additionalInputProvider = options.additionalInputProvider || null;
+  const themeInventory = options.themeInventory || (details => whitecapThemes({ directory: path.join(installRoot, "WhiteCap/Packages/RabbitHole.NasaLayers.package"), ...details }));
   if (additionalInputProvider && (typeof additionalInputProvider.list !== "function" || typeof additionalInputProvider.resolve !== "function")) throw new Error("A canonical SoundSpectrum music input provider is required.");
   const sleep = options.sleep || (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
   const windowTimeoutMs = options.windowTimeoutMs || 12000;
@@ -78,6 +84,7 @@ function createSoundSpectrumNative(options = {}) {
   let operation = Promise.resolve();
   let lastError = null;
   let ownerIdentity = null;
+  let lastNativeExit = null;
 
   const executablePath = product => path.join(installRoot, product.folder, product.executable);
   const preferencePath = product => {
@@ -105,10 +112,45 @@ function createSoundSpectrumNative(options = {}) {
   };
   const status = () => owned ? {
     state: owned.exited ? "cleanup-needed" : owned.ready ? "running" : "starting", visualizer: owned.product.id,
-    pid: owned.child.pid, owned: true, audioInput: owned.input,
+    pid: owned.child.pid, owned: true, audioInput: owned.input, whitecapTheme: owned.whitecapTheme,
     windowHandle: owned.window?.windowHandle || null, windowTitle: owned.window?.windowTitle || null,
-    width: owned.window?.width || null, height: owned.window?.height || null
+    width: owned.window?.width || null, height: owned.window?.height || null,
+    ...(owned.windowMode === "borderless-fullscreen" ? { windowMode: owned.windowMode } : {}),
+    ...(owned.window?.windowClass ? { windowClass: owned.window.windowClass } : {})
   } : { state: "stopped", error: lastError };
+
+  // Internal transport identity; never include executable paths/start ticks in
+  // the public session snapshot. OBS needs to fence its exact owned window.
+  function captureIdentity() {
+    const session = owned;
+    if (!session?.ready || session.exited || session.stopRequested) throw new Error("The owned SoundSpectrum renderer is unavailable for capture.");
+    return Object.freeze({ pid: session.child.pid, executable: session.executable,
+      startTimeTicks: session.startTimeTicks, windowHandle: session.window.windowHandle,
+      windowTitle: session.window.windowTitle, windowClass: session.window.windowClass || null });
+  }
+
+  async function captureWindow() {
+    const session = owned;
+    if (!session?.ready || session.exited || session.stopRequested || !Number.isInteger(session.child?.pid) || session.child.pid <= 0 ||
+        !/^\d{10,22}$/.test(String(session.startTimeTicks || ""))) throw new Error("The owned SoundSpectrum renderer is unavailable for capture.");
+    // Reconnecting video only observes the exact existing renderer. It never
+    // restores, resizes, launches or reselects its input.
+    const result = await runWindowCommand("window", {
+      ProcessId: session.child.pid, ExpectedExecutable: session.executable, StartTimeTicks: session.startTimeTicks
+    });
+    if (owned !== session || session.exited || session.stopRequested || !session.ready) throw new Error("The SoundSpectrum renderer changed while reconnecting video.");
+    if (!result || result.exited || result.pid !== session.child.pid || String(result.startTimeTicks || "") !== session.startTimeTicks) {
+      throw new Error("The owned SoundSpectrum renderer is no longer available for capture.");
+    }
+    const window = result.window;
+    const handle = String(window?.windowHandle || "");
+    if (!/^\d{1,20}$/.test(handle) || BigInt(handle) <= 0n || BigInt(handle) > 18446744073709551615n || window.minimized !== false ||
+        !Number.isInteger(window.width) || window.width <= 0 || !Number.isInteger(window.height) || window.height <= 0) {
+      throw new Error("The native visualizer window is unavailable for capture.");
+    }
+    session.window = window;
+    return status();
+  }
 
   async function writeManifest(session) {
     if (!ownerIdentity) {
@@ -205,7 +247,7 @@ function createSoundSpectrumNative(options = {}) {
     const native = await runWindowCommand("inspect");
     if (native.profile) resolvePreferenceRoot(native);
     const musicInputs = await musicInputInventory(native.inputs || []);
-    return { visualizers: visualizers.map(product => ({ ...product, alreadyRunning: (native.processes || []).some(candidate => isProductProcess(candidate, PRODUCTS.find(value => value.id === product.id))) })), inputs: microphoneInputs(native.inputs), musicInputs, noMicInputs: noMicInputs(), ...status(), supported: true, recoveryError };
+    return { visualizers: visualizers.map(product => ({ ...product, alreadyRunning: (native.processes || []).some(candidate => isProductProcess(candidate, PRODUCTS.find(value => value.id === product.id))) })), inputs: microphoneInputs(native.inputs), musicInputs, noMicInputs: noMicInputs(), ...status(), whitecapThemes: await themeInventory(), supported: true, recoveryError };
   }
 
   async function listAudioInputs() {
@@ -249,6 +291,7 @@ function createSoundSpectrumNative(options = {}) {
   async function stopOwned() {
     const session = owned;
     if (!session) return status();
+    session.stopRequested = true;
     if (!session.child?.pid) {
       await restoreSession(session);
       return status();
@@ -257,6 +300,9 @@ function createSoundSpectrumNative(options = {}) {
     if (session.startTimeTicks) identity.StartTimeTicks = session.startTimeTicks;
     const current = await runWindowCommand("window", identity);
     if (!current.exited && !session.exited) {
+      if (session.captureTitle && current.window?.windowTitle === session.captureTitle && typeof session.originalWindowTitle === "string") {
+        await runWindowCommand("title", { ...identity, WindowAlias: session.originalWindowTitle });
+      }
       await runWindowCommand("close", identity);
       await waitForExit(identity, 2500);
       if (!session.exited) {
@@ -270,12 +316,21 @@ function createSoundSpectrumNative(options = {}) {
     return status();
   }
 
-  async function startSession({ visualizer, inputId } = {}) {
+  async function startSession({ visualizer, inputId, width = 800, height = 450, uniqueCaptureTitle = false, windowMode = "windowed", targetFrameRate, whitecapTheme = "current" } = {}) {
     if (platform !== "win32") throw new Error("SoundSpectrum requires the Windows player PC.");
     const product = PRODUCTS.find(value => value.id === visualizer);
     if (!product) throw new Error("Choose Aeon, G-Force, or WhiteCap.");
+    whitecapTheme = whitecapThemeSelection(whitecapTheme, visualizer);
+    if (whitecapTheme !== "current" && !(await themeInventory({ verifyHashes: true })).some(theme => theme.id === whitecapTheme && theme.available)) throw new Error("The NASA layer collection is unavailable on the PC.");
+    if (targetFrameRate !== undefined && targetFrameRate !== 120) throw new Error("The optional native capture frame target must be 120.");
     if (typeof inputId !== "string" || !inputId) throw new Error("Choose an exact PC microphone or SoundSpectrum no-mic preset.");
-    if (owned?.ready && !owned.exited && owned.product.id === visualizer && owned.input.id === inputId) {
+    if (!["windowed", "borderless-fullscreen"].includes(windowMode)) throw new Error("Choose a supported visualizer window mode.");
+    const fullscreen = windowMode === "borderless-fullscreen";
+    if (fullscreen && uniqueCaptureTitle !== true) throw new Error("Borderless fullscreen requires an exact owned SoundSpectrum capture identity.");
+    if (!Number.isSafeInteger(width) || width < 320 || width > (fullscreen ? 3840 : 1920) || !Number.isSafeInteger(height) || height < 180 || height > (fullscreen ? 2160 : 1080) ||
+        typeof uniqueCaptureTitle !== "boolean") throw new Error("Visualizer window dimensions are outside supported bounds.");
+    if (owned?.ready && !owned.exited && !owned.stopRequested && owned.product.id === visualizer && owned.input.id === inputId &&
+        owned.requestedWidth === width && owned.requestedHeight === height && !!owned.captureTitle === uniqueCaptureTitle && owned.windowMode === windowMode && owned.targetFrameRate === targetFrameRate && owned.whitecapTheme === whitecapTheme) {
       if (MUSIC_FEED_INPUT_IDS.has(inputId)) await resolveMusicInput(inputId, (await runWindowCommand("inputs")).inputs || []);
       return status();
     }
@@ -292,11 +347,12 @@ function createSoundSpectrumNative(options = {}) {
     let original;
     try { original = await fs.readFile(preferencesPath); }
     catch { throw new Error(`Open ${product.name} Standalone once to initialize its local preferences.`); }
-    const patched = patchStandalonePreferences(original, input.name, visualizer);
+    const patched = patchStandalonePreferences(original, input.name, visualizer, targetFrameRate);
     await fs.mkdir(backupRoot, { recursive: true });
     const backupPath = path.join(backupRoot, `${visualizer}-${crypto.randomUUID()}.preferences.backup`);
     await fs.writeFile(backupPath, original, { flag: "wx" });
-    const session = { product, input, executable, preferencesPath, original, backupPath, exited: false, restored: false, ready: false };
+    const session = { product, input, executable, preferencesPath, original, backupPath, exited: false, restored: false, ready: false, stopRequested: false,
+      requestedWidth: width, requestedHeight: height, windowMode, targetFrameRate, whitecapTheme, captureTitle: uniqueCaptureTitle ? `Rabbit Hole ${product.name} RH-${crypto.randomUUID()}` : null };
     try {
       // Reserving the manifest before changing preferences also covers a crash before spawn.
       await writeManifest(session);
@@ -311,12 +367,21 @@ function createSoundSpectrumNative(options = {}) {
     lastError = null;
     try {
       // A native GUI window is deliberately visible for window-only video capture.
-      session.child = spawnImpl(executable, [], { cwd: path.dirname(executable), windowsHide: false, stdio: "ignore" });
+      session.child = spawnImpl(executable, [], { cwd: path.dirname(executable), windowsHide: false, stdio: "ignore",
+        env: { ...process.env, RABBIT_HOLE_WHITECAP_THEME: whitecapTheme } });
       let resolveExit;
       session.exitPromise = new Promise(resolve => { resolveExit = resolve; });
-      session.child.once("exit", () => {
+      session.child.once("exit", (code, signal) => {
         session.exited = true; resolveExit();
-        serialize(() => restoreSession(session)).catch(error => { lastError = error.message; });
+        if (owned === session) {
+          // Retain one safe private outcome through preference restoration.
+          // Retired children cannot replace a newer session's diagnostic.
+          lastNativeExit = Object.freeze({ event: "native-exit", at: new Date().toISOString(), visualizer: session.product.id, pid: session.child.pid,
+            code: Number.isInteger(code) ? code : null, signal: typeof signal === "string" && /^[A-Z0-9_-]{1,32}$/.test(signal) ? signal : null,
+            stopRequested: session.stopRequested === true });
+          try { onDiagnostic({ ...lastNativeExit }); } catch {}
+        }
+        serialize(() => restoreSession(session)).catch(error => { if (owned === session) lastError = error.message; });
       });
       session.child.once("error", error => { session.spawnError = error; session.exited = true; resolveExit(); });
       await writeManifest(session);
@@ -330,8 +395,26 @@ function createSoundSpectrumNative(options = {}) {
           await writeManifest(session);
         }
         if (result.window) {
-          const prepared = await runWindowCommand("prepare", { ProcessId: session.child.pid, ExpectedExecutable: executable, StartTimeTicks: session.startTimeTicks, Width: 800, Height: 450 });
+          if (fullscreen && (result.pid !== session.child.pid || !/^\d{10,22}$/.test(String(session.startTimeTicks || "")) || String(result.startTimeTicks || "") !== session.startTimeTicks ||
+              !/^\d{1,20}$/.test(String(result.window.windowHandle || "")) || BigInt(result.window.windowHandle) <= 0n ||
+              BigInt(result.window.windowHandle) > 18446744073709551615n ||
+              typeof result.window.windowClass !== "string" || !result.window.windowClass || result.window.windowClass.length > 256 || /[\x00-\x1f\x7f]/.test(result.window.windowClass) ||
+              typeof result.window.windowTitle !== "string" || !result.window.windowTitle || result.window.windowTitle.length > 1024 || /[\x00-\x1f\x7f]/.test(result.window.windowTitle))) {
+            throw new Error(`The exact owned ${product.name} window is required for borderless fullscreen.`);
+          }
+          session.originalWindowTitle = result.window.windowTitle;
+          const prepared = await runWindowCommand("prepare", { ProcessId: session.child.pid, ExpectedExecutable: executable, StartTimeTicks: session.startTimeTicks, Width: width, Height: height,
+            ...(session.captureTitle ? { WindowAlias: session.captureTitle } : {}),
+            ...(fullscreen ? { WindowMode: windowMode, ExpectedWindowHandle: String(result.window.windowHandle),
+              ExpectedWindowClass: result.window.windowClass, ExpectedWindowTitle: result.window.windowTitle } : {}) });
           if (!prepared.window?.windowHandle || prepared.window.minimized) throw new Error("The native visualizer window is unavailable for capture.");
+          if (fullscreen && (prepared.pid !== session.child.pid || String(prepared.startTimeTicks || "") !== session.startTimeTicks ||
+              String(prepared.window.windowHandle) !== String(result.window.windowHandle) || prepared.window.windowClass !== result.window.windowClass)) {
+            throw new Error(`The owned ${product.name} window changed during fullscreen preparation.`);
+          }
+          if (session.captureTitle && (prepared.window.windowTitle !== session.captureTitle || prepared.window.width !== width || prepared.window.height !== height)) {
+            throw new Error(`The ${product.name} capture window did not reach the requested title and resolution.`);
+          }
           session.window = prepared.window;
           session.ready = true;
           return status();
@@ -346,7 +429,7 @@ function createSoundSpectrumNative(options = {}) {
     }
   }
 
-  return { inspect, listAudioInputs, listMusicInputs, status, start: options => serialize(() => startSession(options)), stop: () => serialize(stopOwned) };
+  return { inspect, listAudioInputs, listMusicInputs, status, captureWindow, captureIdentity, start: options => serialize(() => startSession(options)), stop: () => serialize(stopOwned) };
 }
 
 module.exports = { createSoundSpectrumNative, microphoneInputs, patchStandalonePreferences, PRODUCTS, NO_MIC_INPUTS };

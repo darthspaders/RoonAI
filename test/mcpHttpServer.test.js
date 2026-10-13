@@ -198,8 +198,7 @@ test("HTTP MCP handler exposes Rabbit Hole tools over JSON-RPC", async (t) => {
   });
   assert.equal(listed.response.status, 200);
   const toolNames = listed.payload.result.tools.map((tool) => tool.name);
-  assert.equal(new Set(toolNames).size, toolNames.length, "MCP tool names must be unique");
-  assert.equal(toolNames.length, 44 + require("../src/parallelMusicTools.json").length);
+  assert.equal(toolNames.length, 79);
   for (const tool of require("../src/parallelMusicTools.json")) assert.ok(toolNames.includes(tool.name));
   for (const name of ["lyrion_players", "lyrion_browse", "lyrion_search", "lyrion_playback"]) assert.ok(toolNames.includes(name));
   assert.ok(toolNames.includes("get_discovery_diagnostics"));

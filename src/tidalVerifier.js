@@ -3,6 +3,7 @@ const { captureTidalEvidence } = require("./providerSourceEvidence");
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("node:crypto");
 const USER_AGENT = "RoonLocalAI/0.1.0";
 const TIDAL_TOKEN_URL = "https://auth.tidal.com/v1/oauth2/token";
 const { createSearchUrl, searchRelationForUrl, toLegacySearchShape } = require("./tidalSearchCompat");
@@ -23,11 +24,13 @@ const {
 const { normalizeTidalTrackUrl } = require("./tidalIdentity");
 const {
   chooseExact,
+  versionInfo,
   scoreTidalIdentity,
   canonicalTwelveInchClubEvidence,
   normalizeDisambiguationOptions,
   IDENTITY_DISAMBIGUATION_DEFAULTS
 } = require("./exactTrackVerification");
+const { buildRequestedVersionEvidenceRequest } = require("./requestedVersionEvidence");
 const {
   foldUnicode,
   normalizeCatalogText,
@@ -551,6 +554,13 @@ function buildExactSearchPlans(track = {}, { strict = false, aliasRecords = [] }
 
   if (requestedArtist && fullTitle) add("exact-artist-title", `${requestedArtist} ${fullTitle}`, { artistConstraintApplied: true, titleConstraintApplied: true });
   if (requestedArtist && baseTitle && baseTitle !== fullTitle) add("exact-artist-base-title", `${requestedArtist} ${baseTitle}`, { artistConstraintApplied: true, titleConstraintApplied: true });
+
+  // Apostrophes can hide provider search hits. Broaden retrieval only;
+  // the original artist and named remix remain strict identity constraints.
+  const apostropheSpacedBaseTitle = cleanText(baseTitle.replace(/['\u2018\u2019\u02bc]/g, " "));
+  if (requestedArtist && apostropheSpacedBaseTitle && apostropheSpacedBaseTitle !== baseTitle) {
+    add("exact-artist-base-title-apostrophe-fallback", `${requestedArtist} ${apostropheSpacedBaseTitle}`, { artistConstraintApplied: true, titleConstraintApplied: true });
+  }
 
   const alternateArtists = artistContext.aliases.filter(name => normalizeMatchText(name) !== artistContext.requestedKey);
   for (const artist of alternateArtists) {
@@ -1808,6 +1818,27 @@ function chooseExactArtist(searchJson, artistName) {
   return getIncluded(searchJson, "artists").find((artist) => normalizeMatchText(artist?.attributes?.name || artist?.name) === wanted) || null;
 }
 
+function identityCacheFingerprint(track = {}) {
+  // Recording facts are part of the request. A title-only miss must not hide
+  // stronger evidence, and a prior hit must not satisfy a conflicting ISRC.
+  const stable = value => Array.isArray(value) ? value.map(stable)
+    : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
+  // Fingerprint all supplied facts, including nested/alternate field names.
+  // A digest keeps large provider rows and private metadata out of cache keys.
+  return crypto.createHash("sha256").update(JSON.stringify(stable(track))).digest("hex");
+}
+
+function awaitWithSignal(promise, signal) {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const abort = () => { cleanup(); reject(signal.reason || new Error("Recording evidence lookup aborted")); };
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    signal.addEventListener("abort", abort, { once: true });
+    Promise.resolve(promise).then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+    if (signal.aborted) abort();
+  });
+}
+
 class TidalVerifier {
   constructor(config = {}) {
     this.enabled = !!config.enabled;
@@ -1831,6 +1862,10 @@ class TidalVerifier {
     });
     this.token = null;
     this.cache = new Map();
+    this.identityNegativeCacheExpiry = new Map();
+    this.requestedRecordingEvidenceRevision = 0;
+    this.requestedRecordingEvidenceLookup = typeof config.requestedRecordingEvidenceLookup === "function" ? config.requestedRecordingEvidenceLookup : null;
+    this.requestedRecordingEvidenceTimeoutMs = positiveNumber(config.requestedRecordingEvidenceTimeoutMs, 8000, { min: 50, max: 12000 });
     this.exactIdentityDiagnosticsCache = new Map();
     this.lastExactIdentityDiagnostics = null;
     this.catalogCache = new Map();
@@ -1866,6 +1901,110 @@ class TidalVerifier {
   setValidatedIdentityLookup(lookup) {
     this.validatedIdentityLookup = typeof lookup === "function" ? lookup : null;
     return this;
+  }
+
+  setRequestedRecordingEvidenceLookup(lookup) {
+    this.requestedRecordingEvidenceLookup = typeof lookup === "function" ? lookup : null;
+    this.requestedRecordingEvidenceRevision += 1;
+    return this;
+  }
+
+  hasIdentityCache(key) {
+    const expiry = this.identityNegativeCacheExpiry.get(key);
+    if (expiry !== undefined && expiry <= this.clock()) {
+      this.identityNegativeCacheExpiry.delete(key);
+      this.cache.delete(key);
+      this.exactIdentityDiagnosticsCache.delete(key);
+    }
+    return this.cache.has(key);
+  }
+
+  setIdentityCache(key, result) {
+    this.cache.set(key, result);
+    this.identityNegativeCacheExpiry.delete(key);
+    if (result !== null) return;
+    while (this.identityNegativeCacheExpiry.size >= 256) {
+      const oldest = this.identityNegativeCacheExpiry.keys().next().value;
+      this.identityNegativeCacheExpiry.delete(oldest);
+      this.cache.delete(oldest);
+      this.exactIdentityDiagnosticsCache.delete(oldest);
+    }
+    this.identityNegativeCacheExpiry.set(key, this.clock() + 60000);
+  }
+
+  async findRequestedVersionMatch(track, candidates = [], { signal, timeoutMs, logger = () => {}, diagnostics = false, identityOptions = this.identityDisambiguation } = {}) {
+    const version = versionInfo(track);
+    if (!this.requestedRecordingEvidenceLookup || !version.explicit || !["original", "extended"].includes(version.kind)
+      || !track.artist || !track.title || track.id || track.tidalTrackId || track.tidalId || track.tidal_id || getTrackIdFromUrl(track.tidalUrl || track.url)) return null;
+    signal?.throwIfAborted();
+    const controller = new AbortController();
+    const forwardAbort = () => controller.abort(signal.reason);
+    signal?.addEventListener("abort", forwardAbort, { once: true });
+    const budget = Math.min(this.requestedRecordingEvidenceTimeoutMs, positiveNumber(timeoutMs, this.requestedRecordingEvidenceTimeoutMs, { min: 50, max: 30000 }));
+    const timer = setTimeout(() => controller.abort(), budget);
+    const proof = { attempted: true, provider: "beatport", outcome: "unavailable", countryCode: this.countryCode, isrcSearchAttempted: false };
+    const trace = () => { if (diagnostics) { try { logger({ event: "requested_version_recording_evidence", artist: track.artist, title: track.title, ...proof }); } catch {} } };
+    try {
+      const envelope = await awaitWithSignal(this.requestedRecordingEvidenceLookup(track, { signal: controller.signal }), controller.signal);
+      controller.signal.throwIfAborted();
+      const requestedTrack = buildRequestedVersionEvidenceRequest(track, envelope);
+      if (!requestedTrack) { trace(); return { selection: null, requestedTrack: track, candidates, diagnostics: proof }; }
+      Object.assign(proof, { outcome: "requested-recording-confirmed", sourceUrl: envelope.sourceUrl, checkedAt: envelope.checkedAt,
+        beatportTrackId: envelope.track.id, requestedIsrc: requestedTrack.isrc || requestedTrack.ISRC, requestedDurationMs: envelope.track.durationMs });
+      const pool = [...candidates];
+      let selection = chooseExact(requestedTrack, pool, identityOptions);
+      if (!selection.match && selection.status !== "AMBIGUOUS") {
+        proof.isrcSearchAttempted = true;
+        const found = await awaitWithSignal(this.searchTracksByIsrc(requestedTrack.isrc || requestedTrack.ISRC, {
+          requestedTrack, signal: controller.signal, timeoutMs: budget
+        }), controller.signal);
+        controller.signal.throwIfAborted();
+        proof.isrcCandidateCount = found.length;
+        pool.push(...found);
+        selection = chooseExact(requestedTrack, pool, identityOptions);
+      }
+      proof.outcome = selection.match ? "verified-equivalent-tidal-recording" : "requested-recording-not-verified-in-tidal";
+      proof.selectedTidalId = selection.match ? String(selection.match.id || "") : null;
+      selection = { ...selection, requestedRecordingEvidence: proof };
+      trace();
+      return { selection, requestedTrack, candidates: pool, diagnostics: proof };
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      proof.outcome = controller.signal.aborted ? "timeout" : "provider-error";
+      trace();
+      return { selection: null, requestedTrack: track, candidates, diagnostics: proof };
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", forwardAbort);
+    }
+  }
+
+  async searchTracksByIsrc(isrc, { requestedTrack = {}, signal, timeoutMs = 8000 } = {}) {
+    const normalized = String(isrc || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+    if (!/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(normalized)) return [];
+    signal?.throwIfAborted();
+    const slot = Math.max(Date.now(), this.nextExactRequestAt || 0);
+    this.nextExactRequestAt = slot + 400;
+    if (slot > Date.now()) await require("node:timers/promises").setTimeout(slot - Date.now(), undefined, { signal });
+    const token = await awaitWithSignal(this.getAccessToken(), signal);
+    signal?.throwIfAborted();
+    const url = new URL(TIDAL_TRACK_ROOT);
+    url.searchParams.set("countryCode", this.countryCode);
+    url.searchParams.set("filter[isrc]", normalized);
+    url.searchParams.set("include", "artists,albums");
+    this.circuitBreaker.assertCanRequest();
+    const response = await fetchWithTimeout(url.toString(), { signal, headers: {
+      accept: "application/vnd.api+json", authorization: `Bearer ${token}`
+    } }, { fetchImpl: this.fetchImpl, timeoutMs, dnsRetries: 0, label: "TIDAL requested recording ISRC" });
+    signal?.throwIfAborted();
+    if (response.status === 404) return [];
+    if (!response.ok) throw httpStatusError("TIDAL requested recording ISRC", response.status);
+    const json = await awaitWithSignal(response.json(), signal);
+    const items = getItems(json).slice(0, 20).map(item => withCatalogVersion(buildResult(item, json, normalized), item));
+    return this.prepareExactCandidates(requestedTrack, items, json, {
+      searchStage: "requested-recording-isrc", candidateSourceQuery: normalized,
+      artistConstraintApplied: true, titleConstraintApplied: true
+    }).candidates.filter(item => item.artist && item.title && item.id);
   }
 
   async validatedIdentityCandidates(track = {}) {
@@ -2503,11 +2642,11 @@ class TidalVerifier {
     const plans = searchPlans.slice(0, Math.max(1, Math.min(12, Number(maxQueries || 6))));
     const queries = plans.map(plan => plan.query);
     if (!plans.length) return null;
-    const identityTrack = this.requestedTrackForIdentity(searchTrack);
+    let identityTrack = this.requestedTrackForIdentity(searchTrack);
 
     const normalizedLimit = Math.max(1, Math.min(20, Number(limit || 6)));
-    const cacheKey = `exact:${strict ? "strict" : "loose"}:${normalizeMatchText(track.artist)}|${normalizeMatchText(track.title)}:${normalizedLimit}:${queries.length}:${includePageYear ? "page" : "detail"}:${this.identityDisambiguation.highConfidenceThreshold}:${this.identityDisambiguation.minimumConfidenceMargin}:${this.identityDisambiguation.alternateVersionThreshold}:${this.identityDisambiguation.legacyEraGapYears}:${this.identityDisambiguation.legacyOriginalYearCutoff}`;
-    if (this.cache.has(cacheKey)) {
+    const cacheKey = `exact:${strict ? "strict" : "loose"}:${identityCacheFingerprint(identityTrack)}:${this.requestedRecordingEvidenceRevision}:${normalizedLimit}:${queries.length}:${includePageYear ? "page" : "detail"}:${this.identityDisambiguation.highConfidenceThreshold}:${this.identityDisambiguation.minimumConfidenceMargin}:${this.identityDisambiguation.alternateVersionThreshold}:${this.identityDisambiguation.legacyEraGapYears}:${this.identityDisambiguation.legacyOriginalYearCutoff}`;
+    if (this.hasIdentityCache(cacheKey)) {
       this.lastExactIdentityDiagnostics = this.exactIdentityDiagnosticsCache.get(cacheKey) || null;
       return this.cache.get(cacheKey);
     }
@@ -2586,13 +2725,26 @@ class TidalVerifier {
       }
     }
 
-    const combinedExactSelection = exactCandidates.length
+    let combinedExactSelection = exactCandidates.length
       ? chooseExact(identityTrack, exactCandidates, this.identityDisambiguation) : null;
+    let requestedRecordingEvidence = null;
+    if (!bestResult && !ambiguousSelection && (!combinedExactSelection || ["NOT_FOUND", "VERSION_MISMATCH"].includes(combinedExactSelection.status))) {
+      const recovery = await this.findRequestedVersionMatch(identityTrack, exactCandidates);
+      if (recovery) {
+        requestedRecordingEvidence = recovery.diagnostics;
+        if (recovery.selection) {
+          identityTrack = recovery.requestedTrack;
+          combinedExactSelection = recovery.selection;
+          addExactCandidates(recovery.candidates);
+        }
+      }
+    }
     if (combinedExactSelection?.status === "AMBIGUOUS") ambiguousSelection = combinedExactSelection;
     else if (combinedExactSelection?.match) {
-      const candidate = { entry: combinedExactSelection.match, index: 0, score: candidateMatchScore(combinedExactSelection.match, track, {}, { strict }) };
+      const candidate = { entry: combinedExactSelection.match, index: 0, score: candidateMatchScore(combinedExactSelection.match, identityTrack, {}, { strict }) };
       const result = resultFromCandidate(candidate, { data: [], included: [] }, "canonical", identityTrack);
       if (result) {
+        if (requestedRecordingEvidence) result.identityDiagnostics.requestedRecordingEvidence = requestedRecordingEvidence;
         bestResult = result;
         bestExactSelection = combinedExactSelection;
         result.legacySearchDiagnostics = legacySearchDiagnostics;
@@ -2631,7 +2783,7 @@ class TidalVerifier {
         finalIdentityOutcome: "AMBIGUOUS"
       };
       this.exactIdentityDiagnosticsCache.set(cacheKey, this.lastExactIdentityDiagnostics);
-      this.cache.set(cacheKey, null);
+      this.setIdentityCache(cacheKey, null);
       return null;
     }
 
@@ -2664,7 +2816,7 @@ class TidalVerifier {
           finalIdentityOutcome: validatedSelection.finalIdentityOutcome || validatedSelection.identityOutcome
         };
         this.exactIdentityDiagnosticsCache.set(cacheKey, this.lastExactIdentityDiagnostics);
-        this.cache.set(cacheKey, reused);
+        this.setIdentityCache(cacheKey, reused);
         return reused;
       }
     }
@@ -2690,6 +2842,7 @@ class TidalVerifier {
         confidenceScore: finalResult.identityConfidence ?? null
       }],
       identityRules: finalResult.identityDiagnostics.reasons || [],
+      requestedRecordingEvidence,
       legacyIdentityDiagnostics: finalResult.identityDiagnostics.legacyIdentityDiagnostics || null,
       candidatesCollapsedAsSameRecording: Boolean(bestExactSelection?.candidatesCollapsedAsSameRecording),
       collapsedRecordingCount: Number(bestExactSelection?.collapsedRecordingCount || 0),
@@ -2714,10 +2867,11 @@ class TidalVerifier {
       validatedIdentityReuseDiagnostics: this.lastValidatedIdentityReuseDiagnostics,
       finalIdentityOutcome: bestExactSelection?.finalIdentityOutcome || finalResult.identityOutcome || "VERIFIED_EXACT"
     } : {
-      failureType: "NOT_FOUND",
-      identityOutcome: "NOT_FOUND",
-      candidateIdentities: [],
+      failureType: combinedExactSelection?.status || "NOT_FOUND",
+      identityOutcome: combinedExactSelection?.identityOutcome || "NOT_FOUND",
+      candidateIdentities: combinedExactSelection?.candidateIdentities || [],
       identityRules: ["no-safe-tidal-catalogue-candidate"],
+      requestedRecordingEvidence,
       legacyIdentityDiagnostics: null,
       canonicalCandidateGroups: [],
       canonicalCandidateSelected: null,
@@ -2738,10 +2892,10 @@ class TidalVerifier {
       canonicalFallbackOutcome: canonicalFallbackAttempted ? "not-found" : "not-needed",
       validatedIdentityLookup: this.lastValidatedIdentityLookup,
       validatedIdentityReuseDiagnostics: this.lastValidatedIdentityReuseDiagnostics,
-      finalIdentityOutcome: "NOT_FOUND"
+      finalIdentityOutcome: combinedExactSelection?.finalIdentityOutcome || combinedExactSelection?.identityOutcome || "NOT_FOUND"
     };
     this.exactIdentityDiagnosticsCache.set(cacheKey, this.lastExactIdentityDiagnostics);
-    this.cache.set(cacheKey, finalResult || null);
+    this.setIdentityCache(cacheKey, finalResult || null);
     return finalResult || null;
   }
 
@@ -2773,8 +2927,8 @@ class TidalVerifier {
 
   async verify(track, { strict = false } = {}) {
     if (!this.isConfigured()) return null;
-    const cacheKey = `${strict ? "strict" : "loose"}:${normalizeMatchText(track.artist)}|${normalizeMatchText(track.title)}`;
-    if (this.cache.has(cacheKey)) return this.cache.get(cacheKey);
+    const cacheKey = `${strict ? "strict" : "loose"}:${identityCacheFingerprint(this.requestedTrackForIdentity(track))}:${this.requestedRecordingEvidenceRevision}`;
+    if (this.hasIdentityCache(cacheKey)) return this.cache.get(cacheKey);
 
     let lastError = null;
     let fallbackResult = null;
@@ -2785,7 +2939,7 @@ class TidalVerifier {
       if (exactCandidate) {
         if (Number(exactCandidate.matchScore || 0) >= highConfidenceScore) {
           const verified = await this.withPageYear(exactCandidate);
-          this.cache.set(cacheKey, verified);
+          this.setIdentityCache(cacheKey, verified);
           return verified;
         }
         fallbackResult = exactCandidate;
@@ -2813,7 +2967,7 @@ class TidalVerifier {
       if (result) {
         if (Number(result.matchScore || 0) >= highConfidenceScore) {
           const verified = await this.withPageYear(await this.withDetailYear(result));
-          this.cache.set(cacheKey, verified);
+          this.setIdentityCache(cacheKey, verified);
           return verified;
         }
         if (!fallbackResult || Number(result.matchScore || 0) > Number(fallbackResult.matchScore || 0)) {
@@ -2824,7 +2978,7 @@ class TidalVerifier {
 
     if (fallbackResult) {
       const verified = await this.withPageYear(await this.withDetailYear(fallbackResult));
-      this.cache.set(cacheKey, verified);
+      this.setIdentityCache(cacheKey, verified);
       return verified;
     }
 
@@ -2834,13 +2988,16 @@ class TidalVerifier {
       throw error;
     }
 
-    this.cache.set(cacheKey, null);
+    this.setIdentityCache(cacheKey, null);
     return null;
   }
 
-  async searchExactCandidates(track, { id = "", queryOverride = "", searchPlan = null, requestedTrack = null, signal, timeoutMs = 12000, logger = () => {} } = {}) {
+  async searchExactCandidates(track, { id = "", queryOverride = "", searchPlan = null, requestedTrack = null, signal, timeoutMs = 12000, logger = () => {}, diagnostics = false } = {}) {
     const identityTrack = requestedTrack || track;
     const query = normalizeExactSearchQuery(queryOverride || `${track.artist || ""} ${track.title || ""}`);
+    const trace = entry => { if (diagnostics === true) { try { logger(entry); } catch {} } };
+    trace({ event: "tidal_exact_request", rawArtist: identityTrack.artist || "", rawTitle: identityTrack.title || "",
+      normalizedQuery: query, requestedTidalId: id || null, endpointType: id ? "track" : "search_tracks" });
     const url = id ? new URL(`${TIDAL_TRACK_ROOT}/${encodeURIComponent(id)}`)
       : createSearchUrl(query, "tracks");
     url.searchParams.set("countryCode", this.countryCode);
@@ -2870,6 +3027,7 @@ class TidalVerifier {
           accept: "application/vnd.api+json", authorization: `Bearer ${token}`
         } }, { fetchImpl: this.fetchImpl, timeoutMs, dnsRetries: 0, label: "TIDAL exact verification" });
         if (response.status === 404) {
+          trace({ event: "tidal_exact_candidates", normalizedQuery: query, httpStatus: 404, candidates: [] });
           const empty = [];
           Object.defineProperty(empty, "legacySearchDiagnostics", { value: emptyLegacySearchDiagnostics(identityTrack), enumerable: false });
           return empty;
@@ -2883,7 +3041,7 @@ class TidalVerifier {
           if (response.status === 401 && attempt === 0 && (this.invalidateRejectedAccessToken(token) || await this.enableProfileAccessTokenFallback(token))) continue;
           throw error;
         }
-        const json = toLegacySearchShape(await response.json(), id ? "" : "tracks");
+        const json = toLegacySearchShape(await response.json(), searchRelationForUrl(url));
         const rawItems = id ? [json.data].filter(Boolean) : getItems(json).slice(0, 20);
         const mappedItems = rawItems
           .map(item => {
@@ -2895,6 +3053,10 @@ class TidalVerifier {
           })
           .filter(item => item.artist && item.title && item.id);
         const packet = this.prepareExactCandidates(identityTrack, mappedItems, json, plan);
+        trace({ event: "tidal_exact_candidates", normalizedQuery: query, httpStatus: response.status,
+          candidates: packet.evaluated.map(candidate => ({ id: String(candidate.id || ""),
+            artist: candidate.artist || "", title: candidate.title || "", version: candidate.version || "",
+            preFilterAccepted: candidate.preFilterAccepted, rejectionReason: candidate.rejectionReason || "" })) });
         const candidates = packet.candidates.sort((left, right) => right.retrievalScore - left.retrievalScore || String(left.id).localeCompare(String(right.id)));
         const diagnostics = emptyLegacySearchDiagnostics(identityTrack);
         recordLegacySearchQuery(diagnostics, packet.retrieval);
@@ -2923,13 +3085,13 @@ class TidalVerifier {
     if (!this.isConfigured()) return [];
     const normalizedLimit = Math.max(1, Math.min(20, Number(limit || 10)));
     const normalizedDetailLimit = Math.max(0, Math.min(normalizedLimit, Number(detailLimit || 0)));
-    const include = "tracks.artists,tracks.albums";
+    const include = "tracks,tracks.artists,tracks.albums";
     // TIDAL chooses its page size; `limit` does not bound the returned page.
     // A cursor must never advance past rows discarded by a local slice.
     const consumeFullPage = fullPage || rotateCatalog || Number(pageCount) > 1;
     const searchUrl = createSearchUrl(query, "tracks");
     searchUrl.searchParams.set("countryCode", this.countryCode);
-    searchUrl.searchParams.set("include", `tracks,${include}`);
+    searchUrl.searchParams.set("include", include);
 
     return this.fetchCatalogPages({
       pageCount,
@@ -3073,6 +3235,18 @@ class TidalVerifier {
     });
   }
 
+  async streamingAvailability(trackId) {
+    const id = cleanText(trackId);
+    if (!/^\d+$/.test(id)) return { available: false, reason: "invalid-id" };
+    // Fresh regional evidence; metadata cache hits are not playability proof.
+    const url = new URL(`${TIDAL_TRACK_ROOT}/${id}`);
+    url.searchParams.set("countryCode", this.countryCode);
+    const result = await this.fetchTidalJson(url.href);
+    const values = result?.data?.attributes?.availability;
+    return { available: String(result?.data?.id) === id && Array.isArray(values) && values.includes("STREAM"),
+      countryCode: this.countryCode, reason: Array.isArray(values) ? "catalog-response" : "unknown" };
+  }
+
   async getTrack(trackId, query = "") {
     const id = cleanText(trackId);
     if (!id) return null;
@@ -3131,7 +3305,7 @@ class TidalVerifier {
 
   async withDetailYear(result) {
     const evidence = result.releaseEvidence || {};
-    if (result.year && result.releaseDate && result.artist && result.album && result.durationMs && (evidence.albumYear || evidence.trackYear || evidence.isrcYear)) {
+    if (result.year && result.releaseDate && result.artist && result.album && result.durationMs && result.imageUrl && (evidence.albumYear || evidence.trackYear || evidence.isrcYear)) {
       return result;
     }
 

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+const crypto = require('node:crypto');
 const { discoverOutput, probeOutput, buildOutputCommand, validateOutput, watchOutput, createInputProvider, CAPTURE_NAME } = require('./audio-output.cjs');
 
 const renderGuid = '11111111-1111-1111-1111-111111111111';
@@ -15,17 +16,29 @@ const cable = {
 };
 
 async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'soundspectrum-output-'));
+  const base = path.resolve(os.tmpdir());
+  const root = await fs.mkdtemp(path.join(base, 'soundspectrum-output-'));
   const settingsPath = path.join(root, 'settings.json');
   let devices = structuredClone(cable);
   let calls = 0;
-  const options = { platform: 'win32', settingsPath, runDeviceProbe: async () => { calls++; return structuredClone(devices); }, probeRuntime: async () => ({ executable: path.join(root, 'bin', 'gst-launch-1.0.exe') }) };
+  const executable = path.join(root, 'bin', 'gst-launch-1.0.exe');
+  const runtimeIdentity = crypto.createHash('sha256').update(root).digest('hex');
+  const isolatedEnv = Object.freeze({ PATH: path.join(root, 'bin'), GST_PLUGIN_PATH_1_0: path.join(root, 'audio-only'),
+    GST_PLUGIN_SYSTEM_PATH_1_0: '', GST_REGISTRY_1_0: path.join(root, 'audio-only.registry.bin'), PRIVATE_TEST_SECRET: 'private runtime secret' });
+  const options = { platform: 'win32', settingsPath, runDeviceProbe: async () => { calls++; return structuredClone(devices); },
+    probeRuntime: async () => ({ executable }),
+    prepareAudioRuntime: async selected => { assert.equal(selected, executable); return { executable, identity: runtimeIdentity, env: isolatedEnv }; } };
   const discovered = await discoverOutput(options);
   assert.equal(discovered.available, true);
   const settings = { version: 1, enabled: true, route: discovered.route };
   await fs.writeFile(settingsPath, JSON.stringify(settings));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  return { options, settingsPath, settings, setDevices: value => { devices = structuredClone(value); }, calls: () => calls };
+  t.after(async () => {
+    assert.equal(path.dirname(path.resolve(root)), base);
+    assert.ok(path.basename(root).startsWith('soundspectrum-output-'));
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  return { options, settingsPath, settings, executable, runtimeIdentity, isolatedEnv,
+    setDevices: value => { devices = structuredClone(value); }, calls: () => calls };
 }
 
 test('read-only discovery fingerprints the one exact SoundSpectrum cable pair without enabling settings', async t => {
@@ -83,6 +96,10 @@ test('shared WASAPI PCM command uses only the fresh verified immutable route and
   assert.equal(command.args.includes('sync=true'), false);
   assert.equal(command.args.some(value => /asio|autoaudiosink|directsoundsink|device=default/i.test(value)), false);
   assert.deepEqual(command.inputFormat, { format: 'S16LE', sampleRate: 44100, channels: 2 });
+  assert.deepEqual(command.env, f.isolatedEnv);
+  assert.equal(Object.hasOwn(probe, 'env'), false);
+  assert.equal(Object.hasOwn(probe, 'identity'), false);
+  assert.doesNotMatch(JSON.stringify(probe), /private runtime secret|GST_PLUGIN|GST_REGISTRY/);
   assert.throws(() => buildOutputCommand({ probe: { ...probe } }), /fresh verified/);
   assert.throws(() => { probe.route.renderId = 'default'; }, TypeError);
   assert.throws(() => buildOutputCommand(), /fresh verified/);
@@ -125,4 +142,89 @@ test('unavailable device probes and audio runtimes return safe reasons without c
   assert.equal((await probeOutput({ ...f.options, runDeviceProbe: async () => { throw new Error('Registry permission denied'); } })).reason, 'device-probe-unavailable');
   assert.equal((await probeOutput({ ...f.options, probeRuntime: async () => { throw new Error('runtime-unavailable'); } })).reason, 'runtime-unavailable');
   assert.equal((await probeOutput({ ...f.options, platform: 'linux' })).reason, 'windows-required');
+});
+
+test('six audio-only inspectors run sequentially and simultaneous probes share the validated runtime checks', async t => {
+  const f = await fixture(t), inspected = []; let preparing = 0, inFlight = 0, peak = 0;
+  const options = { ...f.options, probeRuntime: undefined, resolveGStreamer: () => f.executable,
+    prepareAudioRuntime: async executable => { preparing++; return f.options.prepareAudioRuntime(executable); },
+    runRuntimeInspection: async (executable, args, childOptions) => {
+      assert.equal(executable, path.join(path.dirname(f.executable), 'gst-inspect-1.0.exe'));
+      assert.deepEqual(childOptions.env, f.isolatedEnv);
+      assert.equal(childOptions.windowsHide, true); assert.equal(childOptions.timeout, 8000);
+      inspected.push(args[0]); inFlight++; peak = Math.max(peak, inFlight);
+      await new Promise(resolve => setImmediate(resolve)); inFlight--;
+      return { stdout: 'device : exact endpoint\nexclusive : false' };
+    } };
+  const probes = await Promise.all([probeOutput(options), probeOutput(options)]);
+  assert.ok(probes.every(probe => probe.available)); assert.equal(preparing, 2); assert.equal(peak, 1);
+  assert.deepEqual(inspected, ['fdsrc', 'rawaudioparse', 'queue', 'audioconvert', 'audioresample', 'wasapisink']);
+  await probeOutput(options); assert.equal(preparing, 3); assert.equal(inspected.length, 6);
+});
+
+test('prepared runtime identity changes invalidate checks and preparation still validates every warm probe', async t => {
+  const f = await fixture(t); let identity = f.runtimeIdentity, inspections = 0, preparationFails = false;
+  const options = { ...f.options, probeRuntime: undefined, resolveGStreamer: () => f.executable,
+    prepareAudioRuntime: async executable => {
+      if (preparationFails) throw Error('runtime-plugin-membership-invalid');
+      return { ...(await f.options.prepareAudioRuntime(executable)), identity };
+    }, runRuntimeInspection: async () => { inspections++; return { stdout: 'device : endpoint\nexclusive : false' }; } };
+  assert.equal((await probeOutput(options)).available, true); assert.equal(inspections, 6);
+  assert.equal((await probeOutput(options)).available, true); assert.equal(inspections, 6);
+  identity = 'b'.repeat(64);
+  assert.equal((await probeOutput(options)).available, true); assert.equal(inspections, 12);
+  preparationFails = true;
+  const unavailable = await probeOutput(options);
+  assert.equal(unavailable.available, false); assert.equal(unavailable.reason, 'runtime-plugin-membership-invalid'); assert.equal(inspections, 12);
+  assert.throws(() => buildOutputCommand({ probe: unavailable }), /fresh verified/);
+});
+
+test('writer remains bound to its private isolated environment even with ambient and explicit broad plugin overrides', async t => {
+  const f = await fixture(t), mutablePreparedEnv = { ...f.isolatedEnv };
+  const broadEnv = { GST_PLUGIN_PATH_1_0: 'unsafe-video-directory', GST_PLUGIN_SYSTEM_PATH_1_0: 'unsafe-system-directory',
+    GST_REGISTRY_1_0: 'unsafe-video-registry', PRIVATE_TEST_SECRET: 'ambient secret' };
+  const probe = await probeOutput({ ...f.options, env: broadEnv, prepareAudioRuntime: async (executable, env) => {
+    assert.equal(env, broadEnv); return { executable, identity: f.runtimeIdentity, env: mutablePreparedEnv };
+  } });
+  assert.equal(probe.available, true); mutablePreparedEnv.GST_PLUGIN_PATH_1_0 = 'mutated-video-directory';
+  const command = buildOutputCommand({ probe, env: broadEnv });
+  assert.equal(command.env.GST_PLUGIN_PATH_1_0, f.isolatedEnv.GST_PLUGIN_PATH_1_0);
+  assert.equal(command.env.GST_PLUGIN_SYSTEM_PATH_1_0, ''); assert.equal(command.env.GST_REGISTRY_1_0, f.isolatedEnv.GST_REGISTRY_1_0);
+  assert.equal(command.env.PRIVATE_TEST_SECRET, 'private runtime secret');
+  assert.throws(() => { command.env.GST_PLUGIN_PATH_1_0 = 'unsafe-video-directory'; }, TypeError);
+  assert.doesNotMatch(JSON.stringify(probe), /ambient secret|private runtime secret|unsafe|GST_/);
+});
+
+test('warm runtime checks retain each fresh probe environment privately instead of reusing the first child environment', async t => {
+  const f = await fixture(t); let envVersion = 1, inspections = 0;
+  const options = { ...f.options, probeRuntime: undefined, resolveGStreamer: () => f.executable,
+    prepareAudioRuntime: async executable => ({ executable, identity: f.runtimeIdentity, env: { ...f.isolatedEnv, TEST_ENV_VERSION: String(envVersion) } }),
+    runRuntimeInspection: async () => { inspections++; return { stdout: 'device : endpoint\nexclusive : false' }; } };
+  const first = await probeOutput(options); envVersion = 2; const second = await probeOutput(options);
+  assert.equal(inspections, 6); assert.equal(buildOutputCommand({ probe: first }).env.TEST_ENV_VERSION, '1');
+  assert.equal(buildOutputCommand({ probe: second }).env.TEST_ENV_VERSION, '2');
+  assert.equal(Object.hasOwn(first, 'env'), false); assert.equal(Object.hasOwn(second, 'env'), false);
+});
+
+test('failed inspector checks stop the sequence safely and can be retried after cache eviction', async t => {
+  const f = await fixture(t); let fail = true, inspections = 0;
+  const options = { ...f.options, probeRuntime: undefined, resolveGStreamer: () => f.executable,
+    runRuntimeInspection: async () => {
+      inspections++; if (fail) throw Error('private child failure with a path');
+      return { stdout: 'device : endpoint\nexclusive : false' };
+    } };
+  assert.equal((await probeOutput(options)).reason, 'runtime-unavailable'); assert.equal(inspections, 1);
+  fail = false; assert.equal((await probeOutput(options)).available, true); assert.equal(inspections, 7);
+});
+
+test('missing shared WASAPI properties and invalid prepared identities fail closed before writer construction', async t => {
+  const f = await fixture(t); let inspections = 0;
+  const options = { ...f.options, probeRuntime: undefined, resolveGStreamer: () => f.executable,
+    runRuntimeInspection: async () => { inspections++; return { stdout: 'exclusive : false' }; } };
+  const unavailable = await probeOutput(options); assert.equal(unavailable.reason, 'shared-wasapi-unavailable'); assert.equal(inspections, 6);
+  assert.throws(() => buildOutputCommand({ probe: unavailable }), /fresh verified/);
+  for (const changed of [{ identity: 'bad' }, { executable: 'relative-gst-launch.exe' }, { env: null }]) {
+    assert.equal((await probeOutput({ ...f.options, prepareAudioRuntime: async executable => ({
+      ...(await f.options.prepareAudioRuntime(executable)), ...changed }) })).reason, 'runtime-unavailable');
+  }
 });

@@ -1,4 +1,5 @@
 "use strict";
+const { storedSonicIdentityMatches } = require("./sonicProfileIdentity");
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -783,7 +784,7 @@ class SonicEmbeddingEngine {
   }
 
   async analyzeBufferAsync(audioBuffer, track = {}, options = {}) {
-    if (!(this.provider instanceof EssentiaDiscogsEffNetProvider)) throw new Error("Background extraction requires the existing Discogs-EffNet provider.");
+    if (!(this.provider instanceof EssentiaDiscogsEffNetProvider) && typeof this.provider.extractBufferAsync !== "function") throw new Error("Background extraction requires a supported asynchronous provider.");
     if (!(Buffer.isBuffer(audioBuffer) || audioBuffer instanceof Uint8Array) || !audioBuffer.length) {
       throw new Error("A non-empty audio buffer is required.");
     }
@@ -809,6 +810,16 @@ class SonicEmbeddingEngine {
     }
     this.backgroundExtractionActive = true;
     try {
+      if (typeof this.provider.extractBufferAsync === "function") {
+        const extraction = await this.provider.extractBufferAsync(audioBuffer);
+        if (extraction.model !== this.provider.name || extraction.modelVersion !== this.provider.modelVersion
+          || extraction.vector?.length !== this.provider.expectedDimensions
+          || !extraction.vector.every(Number.isFinite) || !normalizeVector(extraction.vector).length) {
+          throw new Error("Asynchronous provider returned an invalid fingerprint for the configured model.");
+        }
+        return this.storeExtraction({ track, identityKey, extraction, sourceSha256,
+          metadata: options.metadata || {}, sourceType: options.sourceType || "transient-audio-buffer" });
+      }
       const { Worker } = require("node:worker_threads");
       const message = await new Promise((resolve, reject) => {
         const worker = new Worker(path.join(__dirname, "sonicExtractionWorker.js"), {
@@ -854,10 +865,17 @@ class SonicEmbeddingEngine {
       referenceText && !/^(?:tidal|roon|isrc|text|file|beatport):/i.test(referenceText) ? referenceText : ""
     ));
     let queryEmbedding = this.store.getEmbedding(reference, { model, modelVersion });
+    const allowVersionProxy = input.allowVersionProxy !== false && options.allowVersionProxy !== false;
+    if (!allowVersionProxy && queryEmbedding && !storedSonicIdentityMatches(queryEmbedding, reference)) {
+      throw new Error("Stored sonic embedding has no verified recording identity. Prepare verified audio before a strict sonic review.");
+    }
     let analyzed = null;
     if (!queryEmbedding && filePath && input.analyzeIfMissing !== false && options.analyzeIfMissing !== false) {
       analyzed = this.analyzeFile(filePath, typeof reference === "object" ? reference : {});
       queryEmbedding = this.store.getEmbedding(analyzed.identityKey, { model: analyzed.model, modelVersion: analyzed.modelVersion });
+    }
+    if (!allowVersionProxy && queryEmbedding && !storedSonicIdentityMatches(queryEmbedding, reference)) {
+      throw new Error("Stored sonic embedding has no verified recording identity. Prepare verified audio before a strict sonic review.");
     }
     if (!queryEmbedding) {
       throw new Error("No stored sonic embedding exists for the requested track. Analyze a local audio file first.");
@@ -870,7 +888,8 @@ class SonicEmbeddingEngine {
       count: safeCount,
       excludeIdentityKeys: input.excludeIdentityKeys || options.excludeIdentityKeys || [],
       minSimilarity: input.minSimilarity ?? options.minSimilarity ?? -1,
-      includeVector: input.includeVector === true || options.includeVector === true
+      includeVector: input.includeVector === true || options.includeVector === true,
+      allowVersionProxy
     });
     const includeVector = input.includeVector === true || options.includeVector === true;
     return {

@@ -1,0 +1,11 @@
+# Dedicated offline worker only; never installed into Rabbit Hole/WhiteCap runtime.
+astropy==8.0.1
+astropy-iers-data==0.2026.10.5.1.0.7
+numpy==2.5.4
+opencv-python-headless==5.0.0.93
+packaging==26.3
+photutils==3.0.0
+pillow==12.3.0
+pyerfa==2.0.1.5
+PyYAML==6.0.3
+scipy==1.18.1

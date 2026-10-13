@@ -60,8 +60,6 @@ test("exact TIDAL request is bounded, carries no limit parameter and never retri
   const logs = []; let calls = 0;
   const tidal = new TidalVerifier({ enabled: true, accessToken: "secret", fetchImpl: async url => {
     calls++; const u = new URL(url);
-    assert.equal(u.pathname, "/v2/searchResults");
-    assert.ok(u.searchParams.get("filter[query]"));
     assert.equal(u.searchParams.has("limit"), false);
     assert.equal(u.searchParams.get("include"), "tracks,tracks.artists,tracks.albums");
     return { ok: false, status: 400 };

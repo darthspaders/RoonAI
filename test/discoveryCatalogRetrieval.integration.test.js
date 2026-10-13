@@ -24,7 +24,7 @@ function catalogDocument(rows, next = null) {
       } },
       { type: "artists", id: `artist-${row.id}`, attributes: { name: row.artist || "Solarstone" } },
       { type: "albums", id: `album-${row.id}`, attributes: {
-        title: row.album || row.title || `Signal ${row.id}`, releaseDate: "2026-01-01", copyright: "Pure Trance"
+        title: row.album || row.title || `Signal ${row.id}`, releaseDate: "2026-01-01", copyright: "Pure Trance", imageLinks: [{href:"https://example.test/album.jpg"}]
       } }
     ])
   };

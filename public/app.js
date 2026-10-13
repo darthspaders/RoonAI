@@ -286,9 +286,10 @@ function zoneHasCurrentNowPlaying(zone = {}) {
 
 function activeZone() {
   const selected = state.zones.find((zone) => zone.zone_id === state.selectedZoneId) || null;
-  if (selected && zoneHasCurrentNowPlaying(selected)) return selected;
+  // Track boundaries can briefly omit now_playing; keep the selected output.
+  if (selected) return selected;
   const playing = state.zones.find((zone) => zonePlaybackPlaying(zone) && zoneHasCurrentNowPlaying(zone));
-  return playing || selected || state.zones.find((zone) => !zonePlaybackStopped(zone)) || state.zones[0] || null;
+  return playing || state.zones.find((zone) => !zonePlaybackStopped(zone)) || state.zones[0] || null;
 }
 
 function escapeHtml(value) {
@@ -1513,11 +1514,22 @@ function nowSourceQualityHtml(info = null, track = null) {
   )).join("") + tagHtml;
 }
 
+const nowPlayingHtmlRenders = new WeakMap();
+function setNowPlayingHtmlIfChanged(element, html) {
+  // Preserve child nodes while the complete display is unchanged. Remember
+  // the browser's serialized HTML too, so another writer's clear or edit is
+  // repaired without mistaking attribute normalization for a content change.
+  const previous = nowPlayingHtmlRenders.get(element);
+  if (previous?.html === html && previous.dom === element.innerHTML) return;
+  element.innerHTML = html;
+  nowPlayingHtmlRenders.set(element, { html, dom: element.innerHTML });
+}
+
 function renderNowSourceQuality(info = null, track = state.nowTrack) {
   const source = $("#nowSourceFormat");
   if (!source) return;
   const html = nowSourceQualityHtml(info, track);
-  source.innerHTML = html;
+  setNowPlayingHtmlIfChanged(source, html);
   source.hidden = !html;
 }
 
@@ -2874,7 +2886,7 @@ function updateNowDiscoveryTools(zone = activeZone()) {
     tools.hidden = true;
     feedback.innerHTML = "";
     feedback.dataset.renderKey = "";
-    badge.innerHTML = "";
+    setNowPlayingHtmlIfChanged(badge, "");
     renderNowTidalPlaylistControl(null);
     openRabbitHole.disabled = true;
     setRabbitHolePanelOpen(false);
@@ -2891,7 +2903,7 @@ function updateNowDiscoveryTools(zone = activeZone()) {
     `;
     feedback.dataset.renderKey = feedbackRenderKey;
   }
-  badge.innerHTML = nowPlayingBadgeHtml(match.track, match.source);
+  setNowPlayingHtmlIfChanged(badge, nowPlayingBadgeHtml(match.track, match.source));
   renderNowTidalPlaylistControl(match.track);
   if (!state.tidalPlaylistsLoaded && !state.tidalPlaylistsLoading && !state.tidalPlaylistsError) {
     loadTidalPlaylists().catch(() => {});
@@ -3048,6 +3060,7 @@ function queueReportHtml(result = {}) {
   return `
     <div>
       <strong>${escapeHtml(title)}</strong>
+      ${result.bandcampDiagnostics ? `<details><summary>Bandcamp listening notes</summary><ul>${(result.bandcampDiagnostics.items || []).map(row => `<li>${escapeHtml(`${row.artist} — ${row.title}: ${row.message}`)}</li>`).join("")}</ul><p>${escapeHtml(result.bandcampDiagnostics.quotaNote || "")}</p></details>` : ""}
       ${queued.length ? `<p>${escapeHtml(`${queued.length} Rabbit Hole track${queued.length === 1 ? "" : "s"} ${actionText}. Existing queue items may still appear above them in Roon.`)}</p>` : ""}
       ${backupCount ? `<p>${escapeHtml(backupCount)} backup track${backupCount === 1 ? "" : "s"} used to fill the queue.</p>` : ""}
       ${result.warning ? `<p>${escapeHtml(result.warning)}</p>` : ""}
@@ -4650,6 +4663,7 @@ function markRabbitConnectionLost(error = {}) {
 }
 
 function renderState(payload) {
+  function setTextIfChanged(element, text) { if (element.textContent !== text) element.textContent = text; }
   lastRabbitStatusAt = Date.now();
   if (rabbitRecoveryTimer) {
     clearTimeout(rabbitRecoveryTimer);
@@ -4679,11 +4693,11 @@ function renderState(payload) {
   }
 
   const reconnecting = !payload.connected && state.zones.length > 0;
-  connectionPill.textContent = payload.connected
+  setTextIfChanged(connectionPill, payload.connected
     ? `Connected to ${payload.core.name}`
     : reconnecting
       ? "Roon reconnecting…"
-      : "Enable this extension in Roon Settings > Extensions";
+      : "Enable this extension in Roon Settings > Extensions");
 
   const select = $("#zoneSelect");
   select.innerHTML = state.zones.map((zone) => (
@@ -4703,17 +4717,17 @@ function renderState(payload) {
   }
   const now = currentZoneNowPlaying(zone);
   const displayNow = summarizeNowPlaying(zone);
-  $("#nowTitle").textContent = displayNow?.title || (zone ? "Nothing Playing" : "No active zone");
-  $("#nowSubtitle").textContent = [displayNow?.artist, displayNow?.album].filter(Boolean).join(" - ") || zone?.state || "";
+  setTextIfChanged($("#nowTitle"), displayNow?.title || (zone ? "Nothing Playing" : "No active zone"));
+  setTextIfChanged($("#nowSubtitle"), [displayNow?.artist, displayNow?.album].filter(Boolean).join(" - ") || zone?.state || "");
 
   const length = Math.max(0, Number(now?.length || 0));
   const position = Math.max(0, Math.min(length || Infinity, Number(now?.seek_position || 0)));
   const liveRadio = isLiveRadioZone(zone);
   const slider = $("#seekSlider");
-  $("#playState").textContent = zone?.state || "stopped";
+  setTextIfChanged($("#playState"), zone?.state || "stopped");
   $("#queueInfo").textContent = formatQueueInfo(zone);
   $("#seekPosition").textContent = formatSeconds(position) || "0:00";
-  $("#seekLength").textContent = liveRadio ? "Live radio" : (formatSeconds(length) || "0:00");
+  setTextIfChanged($("#seekLength"), liveRadio ? "Live radio" : (formatSeconds(length) || "0:00"));
   slider.max = String(liveRadio ? 1 : (length || 0));
   slider.disabled = liveRadio || !zone?.is_seek_allowed || !length;
   if (!state.isSeeking) slider.value = String(liveRadio ? 0 : (position || 0));
@@ -6935,6 +6949,7 @@ function sonicReviewAnchorFromInput(value = "") {
 }
 
 function sonicReviewTidalUrl(track = {}) {
+  if (state.sonicReview.blind && !state.sonicReview.revealed) return "";
   const existing = tidalTrackUrl(track);
   if (existing) return existing;
   const identityKey = sonicReviewIdentityKey(track);
@@ -6943,6 +6958,7 @@ function sonicReviewTidalUrl(track = {}) {
 }
 
 function sonicReviewTrackLabel(track = {}, fallback = "Unknown track") {
+  if (state.sonicReview.blind && !state.sonicReview.revealed) return "Identity hidden";
   const artist = String(track.artist || track.tidal?.artist || "").trim();
   const title = String(track.title || track.tidal?.title || "").trim();
   return [artist, title].filter(Boolean).join(" - ") || fallback;
@@ -6998,6 +7014,7 @@ function sonicReviewGenreFields(track = {}) {
 }
 
 function sonicReviewTrackMeta(track = {}) {
+  if (state.sonicReview.blind && !state.sonicReview.revealed) return "";
   const genreFields = sonicReviewGenreFields(track);
   return [
     track.album || track.tidal?.album || "",
@@ -7153,8 +7170,8 @@ async function saveSonicProfileState(profileState, prefix, render = () => {}) {
       tags: values.tags,
       note: values.note,
       sourceLabel: "rabbit-hole-sonic-review",
-      model: "discogs-effnet",
-      modelVersion: "1"
+      model: state.sonicReview.model,
+      modelVersion: state.sonicReview.modelVersion
     });
     profileState.profile = result.profile || null;
     profileState.status = "Sonic profile saved for this anchor.";
@@ -7223,7 +7240,7 @@ function sonicReviewHeaderHtml(anchor = {}) {
       <div>
         <p class="eyebrow">Shadow review</p>
         <h2 id="sonicReviewHeading">Sonic Review</h2>
-        <p class="sonicReviewIntro">Play the queued standby tracks in Roon, then use the current Roon track as your anchor. Load its sonic neighbors and record what you hear. Reviews stay out of global taste and production ordering. Queueing still uses strict TIDAL and Roon verification.</p>
+        <p class="sonicReviewIntro">Compare excerpts of the audio used by MERT-v2 FullSong. Switch between anchor and neighbors, then record what you hear. Reviews stay separate from global taste.</p>
       </div>
       <div class="sonicReviewHeaderMeta">
         <span class="sonicReviewMode">Shadow review · strict queue</span>
@@ -7241,11 +7258,11 @@ function sonicReviewHeaderHtml(anchor = {}) {
       <form id="sonicReviewAnchorForm" class="sonicReviewAnchorForm">
         <label for="sonicReviewAnchorInput">Stored identity or TIDAL track URL</label>
         <div class="sonicReviewAnchorRow">
-          <input id="sonicReviewAnchorInput" name="anchor" type="text" value="${escapeHtml(anchorKey)}" placeholder="tidal:123456789 or https://tidal.com/browse/track/123456789" autocomplete="off">
+          <input id="sonicReviewAnchorInput" name="anchor" type="text" value="${review.blind && !review.revealed ? "" : escapeHtml(anchorKey)}" placeholder="tidal:123456789 or https://tidal.com/browse/track/123456789" autocomplete="off">
           <button type="submit">Load anchor</button>
         </div>
       </form>
-      ${anchorKey ? `<p class="sonicReviewAnchorCurrent">Current anchor: <strong>${escapeHtml(anchorName)}</strong>${anchorMeta ? ` · ${escapeHtml(anchorMeta)}` : ""}${anchorUrl ? ` · <a href="${escapeHtml(anchorUrl)}" target="_blank" rel="noreferrer">Open in TIDAL</a>` : ` · <span>No verified TIDAL link</span>`}</p>` : ""}
+      ${anchorKey ? `<p class="sonicReviewAnchorCurrent">Current anchor: <strong>${escapeHtml(anchorName)}</strong>${anchorMeta ? ` · ${escapeHtml(anchorMeta)}` : ""}${anchorUrl ? ` · <a href="${escapeHtml(anchorUrl)}" target="_blank" rel="noreferrer">Open in TIDAL</a>` : ` · <span>${state.sonicReview.blind && !state.sonicReview.revealed ? "Identity hidden" : "No verified TIDAL link"}</span>`}</p>` : ""}
     </section>
   `;
 }
@@ -7261,9 +7278,10 @@ function sonicReviewNeighborHtml(candidate = {}, index = 0, active = false) {
       <span class="sonicReviewNeighborIndex">${String(index + 1).padStart(2, "0")}</span>
       <div class="sonicReviewNeighborBody">
         <strong>${escapeHtml(label)}</strong>
-        <span>${escapeHtml(meta || neighbor.selectionArea || "Metadata unavailable")}</span>
+        <span>${escapeHtml(state.sonicReview.blind && !state.sonicReview.revealed ? "Neighbor" : meta || neighbor.selectionArea || "Metadata unavailable")}</span>
       </div>
-      ${url ? `<a class="sonicReviewNeighborLink" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" aria-label="Open ${escapeHtml(label)} in TIDAL">TIDAL</a>` : `<span class="sonicReviewNeighborLink isMuted">No verified link</span>`}
+      ${url ? `<a class="sonicReviewNeighborLink" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" aria-label="Open ${escapeHtml(label)} in TIDAL">TIDAL</a>` : `<span class="sonicReviewNeighborLink isMuted">${state.sonicReview.blind && !state.sonicReview.revealed ? "Identity hidden" : "No verified link"}</span>`}
+      ${sonicReviewAudioHtml(candidate, "Neighbor " + (index + 1))}
       ${reviewed ? `<span class="sonicReviewNeighborReview">${escapeHtml(reviewed === "like" ? "kept" : reviewed.replace(/_/g, " "))}</span>` : ""}
     </div>
   `;
@@ -7277,33 +7295,23 @@ function renderSonicReview() {
   const draft = review.formDirty ? captureSonicReviewDraft(root, review.anchorIdentityKey) : null;
   const anchor = review.anchor || {};
   const candidate = review.candidates[review.index] || null;
-  const remaining = review.candidates.slice(review.index + 1, review.index + 5);
+  const remaining = review.candidates.slice(review.index + 1);
   const reviewedCount = Object.keys(review.reviewed).length;
   const status = sonicReviewStatusText();
 
+  root.querySelectorAll("audio").forEach(audio => audio.pause());
   root.innerHTML = `
     <div class="sonicReviewShell">
       ${sonicReviewHeaderHtml(anchor)}
-      <section class="panel sonicReviewQueueTools"><div><h3>Blind listening</h3><p class="muted">Compare prepared recommendations with model names and scores hidden.</p></div><button type="button" data-sonic-blind-open>Open listening batch</button></section>
-      ${sonicProfileEditorHtml({ prefix: "sonicReview", anchor, profileState: review })}
-      ${review.loaded ? `
-        <section class="panel sonicReviewQueueTools" aria-label="Queue sonic neighbors">
-          <div>
-            <p class="eyebrow">Roon listening queue</p>
-            <h3>${review.candidates.length ? `${review.candidates.length} neighbors ready` : "No neighbors to queue"}</h3>
-            <p class="sonicReviewQueueCopy">${escapeHtml(sonicReviewQueueStatusText())}</p>
-          </div>
-          <button type="button" class="sonicReviewQueueButton" data-sonic-review-queue ${review.queueing || !review.candidates.length || review.queueResult ? "disabled" : ""}>${review.queueing ? "Verifying & queueing…" : review.queueResult ? "Queue complete" : `Queue ${review.candidates.length} verified neighbors`}</button>
-        </section>
-      ` : ""}
-      <div class="sonicReviewLayout">
+      <section class="panel sonicReviewQueueTools"><label><input type="checkbox" data-sonic-review-blind ${review.blind ? "checked" : ""}> Hide identities while listening</label>${review.blind ? `<button type="button" data-sonic-review-reveal>${review.revealed ? "Hide identities" : "Reveal identities"}</button>` : ""}</section>      <div class="sonicReviewLayout">
         <aside class="panel sonicReviewAnchorPanel">
           <p class="eyebrow">Listen from</p>
           <h3>${escapeHtml(sonicReviewTrackLabel(anchor, review.anchorIdentityKey || "Choose an anchor"))}</h3>
-          <p class="sonicReviewAnchorMeta">${escapeHtml(sonicReviewTrackMeta(anchor) || review.anchorIdentityKey || "No track loaded yet")}</p>
+          <p class="sonicReviewAnchorMeta">${escapeHtml(review.blind && !review.revealed ? "Anchor" : sonicReviewTrackMeta(anchor) || review.anchorIdentityKey || "No track loaded yet")}</p>
+          ${sonicReviewAudioHtml(anchor, "Anchor")}
           <div class="sonicReviewRule"></div>
           <p class="muted">${review.loaded ? `${reviewedCount} reviewed in this pack` : "The review pack will stay shadow-only until you choose an anchor."}</p>
-          ${review.diagnostics ? `<p class="sonicReviewDiagnostics"><span>Traversal</span>${escapeHtml(sonicReviewDiagnosticsText(review.diagnostics))}</p>` : ""}
+          ${review.diagnostics && !(review.blind && !review.revealed) ? `<p class="sonicReviewDiagnostics"><span>Traversal</span>${escapeHtml(sonicReviewDiagnosticsText(review.diagnostics))}</p>` : ""}
         </aside>
 
         <section class="panel sonicReviewWorkspace" aria-live="polite" aria-busy="${review.loading ? "true" : "false"}">
@@ -7319,17 +7327,18 @@ function renderSonicReview() {
             <div class="sonicReviewCandidateHead">
               <div>
                 <p class="eyebrow">Neighbor ${review.index + 1} of ${review.candidates.length}</p>
-                <p class="sonicReviewCandidateHint">Open the verified TIDAL link, listen, then record one decision.</p>
+                <p class="sonicReviewCandidateHint">Listen here, compare with the anchor, then record one decision.</p>
               </div>
-              <span class="sonicReviewCandidateBadge">${escapeHtml(neighborLabel(candidate))}</span>
+              <span class="sonicReviewCandidateBadge">${review.blind && !review.revealed ? "Blind comparison" : escapeHtml(neighborLabel(candidate))}</span>
             </div>
             <article class="sonicReviewCandidate">
               <div class="sonicReviewCandidateText">
                 <h3>${escapeHtml(sonicReviewTrackLabel(candidate))}</h3>
-                <p>${escapeHtml(sonicReviewTrackMeta(candidate) || candidate.sonicNeighbor?.selectionArea || "Metadata unavailable")}</p>
+                <p>${escapeHtml(review.blind && !review.revealed ? "Neighbor" : sonicReviewTrackMeta(candidate) || candidate.sonicNeighbor?.selectionArea || "Metadata unavailable")}</p>
               </div>
-              ${sonicReviewTidalUrl(candidate) ? `<a class="buttonLink sonicReviewTidalButton" href="${escapeHtml(sonicReviewTidalUrl(candidate))}" target="_blank" rel="noreferrer">Open in TIDAL</a>` : `<span class="sonicReviewNoLink">No verified TIDAL link</span>`}
+              ${sonicReviewTidalUrl(candidate) ? `<a class="buttonLink sonicReviewTidalButton" href="${escapeHtml(sonicReviewTidalUrl(candidate))}" target="_blank" rel="noreferrer">Open in TIDAL</a>` : `<span class="sonicReviewNoLink">${state.sonicReview.blind && !state.sonicReview.revealed ? "Identity hidden" : "No verified TIDAL link"}</span>`}
             </article>
+            ${sonicReviewAudioHtml(candidate, "Neighbor " + (review.index + 1))}
             <div class="sonicReviewNotes">
               <label for="sonicReviewAreaInput">Corrected lane <span>(optional)</span></label>
               <input id="sonicReviewAreaInput" type="text" placeholder="e.g. Progressive House" autocomplete="off">
@@ -7348,6 +7357,19 @@ function renderSonicReview() {
         </section>
       </div>
 
+      <details class="panel sonicReviewExtraTools"><summary>Profile, Roon queue and saved listening batches</summary><section class="panel sonicReviewQueueTools"><div><h3>Saved listening batches</h3><p class="muted">Compare prepared recommendations with model names and scores hidden.</p></div><button type="button" data-sonic-blind-open>Open listening batch</button></section>
+      ${review.blind && !review.revealed ? "" : `<details class="sonicReviewProfileDetails"><summary>Anchor profile and taste settings</summary>${sonicProfileEditorHtml({ prefix: "sonicReview", anchor, profileState: review })}</details>`}
+      ${review.loaded ? `
+        <section class="panel sonicReviewQueueTools" aria-label="Queue sonic neighbors">
+          <div>
+            <p class="eyebrow">Roon listening queue</p>
+            <h3>${review.candidates.length ? `${review.candidates.length} neighbors ready` : "No neighbors to queue"}</h3>
+            <p class="sonicReviewQueueCopy">${escapeHtml(sonicReviewQueueStatusText())}</p>
+          </div>
+          <button type="button" class="sonicReviewQueueButton" data-sonic-review-queue ${review.queueing || !review.candidates.length || review.queueResult ? "disabled" : ""}>${review.queueing ? "Verifying & queueing…" : review.queueResult ? "Queue complete" : `Queue ${review.candidates.length} verified neighbors`}</button>
+        </section>
+      ` : ""}
+</details>
       ${remaining.length ? `<section class="panel sonicReviewUpcoming" aria-label="Upcoming sonic neighbors"><div class="sonicReviewUpcomingHead"><p class="eyebrow">Up next</p><span class="muted">${review.candidates.length - review.index - 1} remaining</span></div>${remaining.map((item, offset) => sonicReviewNeighborHtml(item, review.index + offset + 1)).join("")}</section>` : ""}
     </div>
   `;
@@ -7374,6 +7396,7 @@ function captureSonicReviewDraft(root, anchorIdentityKey = "") {
 function restoreSonicReviewDraft(root, draft = null) {
   if (!root || !draft || draft.anchorIdentityKey !== state.sonicReview.anchorIdentityKey) return;
   Object.entries(draft.fields || {}).forEach(([id, value]) => {
+    if (id === "sonicReviewAnchorInput" && (!value || (state.sonicReview.blind && !state.sonicReview.revealed))) return;
     const field = root.querySelector(`#${id}`);
     if (field && field.value !== value) field.value = value;
   });
@@ -7446,29 +7469,43 @@ async function loadSonicReview({ anchor = null } = {}) {
   });
 
   try {
-    review.status = "Preparing the sonic anchor from the saved embedding or a verified Beatport preview…";
+    review.status = "Preparing the MERT-v2 anchor from a saved embedding or verified audio…";
     renderSonicReview();
     const preparation = await api("/api/recommendation-v2/sonic-anchor/prepare", {
       track: trackPayload(anchorTrack),
-      model: "discogs-effnet",
-      modelVersion: "1",
-      allowVersionProxy: true
+      model: state.sonicReview.model,
+      modelVersion: state.sonicReview.modelVersion,
+      allowVersionProxy: false
     });
     if (review.requestId !== requestId) return;
+    review.model = preparation.model; review.modelVersion = preparation.modelVersion;
+    review.anchor = preparation.track || review.anchor;
+    review.audio = {};
     review.status = preparation.prepared
-      ? "Sonic anchor prepared from a verified Beatport preview. Finding neighbors…"
+      ? "Sonic anchor prepared from verified audio. Finding neighbors…"
       : "Stored sonic anchor found. Finding neighbors…";
     const result = await api("/api/recommendation-v2/sonic-neighbor-candidates", {
       anchors: [identityKey],
       count: 12,
       perAnchorCount: 12,
       selectionPoolFactor: 4,
-      model: "discogs-effnet",
-      modelVersion: "1"
+      model: state.sonicReview.model,
+      modelVersion: state.sonicReview.modelVersion,
+      allowVersionProxy: false
     });
     if (review.requestId !== requestId) return;
     review.candidates = Array.isArray(result.candidates) ? result.candidates.filter((candidate) => candidate?.identityKey) : [];
     review.diagnostics = result.diagnostics || null;
+    const audioTracks = [review.anchor, ...review.candidates], audioInfo = {};
+    for (let offset = 0; offset < audioTracks.length; offset += 3) {
+      await Promise.all(audioTracks.slice(offset, offset + 3).map(async track => {
+        const key = sonicReviewIdentityKey(track);
+        try { audioInfo[key] = await api("/api/recommendation-v2/sonic-review/audio-info", { identityKey: key }); }
+        catch (error) { audioInfo[key] = { status: "unavailable", reason: error.message }; }
+      }));
+      if (review.requestId !== requestId) return;
+    }
+    review.audio = audioInfo;
     review.loaded = true;
     review.status = review.candidates.length
       ? `Found ${review.candidates.length} shadow neighbors. Review decisions stay isolated to this sonic lane.`
@@ -7512,13 +7549,14 @@ async function submitSonicReview(rating = "") {
         note,
         sourceEventId: sonicReviewEventId(anchor, candidate, rating),
         sourceLabel: "rabbit-hole-sonic-review",
-        model: candidate.sonicNeighbor?.model || "discogs-effnet",
-        modelVersion: candidate.sonicNeighbor?.modelVersion || "1"
+        model: candidate.sonicNeighbor?.model || review.model,
+        modelVersion: candidate.sonicNeighbor?.modelVersion || review.modelVersion
       }]
     });
     review.reviewed[candidate.identityKey || trackKeyFor(candidate)] = rating === "keep" ? "like" : rating;
     review.error = "";
     review.index += 1;
+    review.revealed = false;
     review.status = rating === "keep"
       ? "Kept. Moving to the next neighbor."
       : rating === "wrong_genre"
@@ -7937,6 +7975,13 @@ $("#sonicReviewApp")?.addEventListener("submit", (event) => {
 });
 
 $("#sonicReviewApp")?.addEventListener("click", (event) => {
+  if (event.target.closest("[data-sonic-review-reveal]")) { state.sonicReview.revealed = !state.sonicReview.revealed; renderSonicReview(); return; }
+  const retryAudio = event.target.closest("[data-sonic-audio-retry]");
+  if (retryAudio) { const key = retryAudio.dataset.sonicAudioRetry; retryAudio.disabled = true;
+    api("/api/recommendation-v2/sonic-review/audio-info", { identityKey: key }).then(result => { state.sonicReview.audio[key] = result; renderSonicReview(); }).catch(error => { retryAudio.disabled = false; retryAudio.textContent = error.message + " — retry"; }); return; }
+  const replay = event.target.closest("[data-sonic-audio-replay]");
+  if (replay) { const audio = replay.parentElement.querySelector("audio"); audio.currentTime = 0; audio.play().catch(() => { replay.textContent = "Playback unavailable — retry"; }); return; }
+
   const current = event.target.closest("[data-sonic-review-load-current]");
   if (current) {
     loadSonicReview().catch((error) => {

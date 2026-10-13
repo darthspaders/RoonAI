@@ -9,6 +9,7 @@ const dgram = require('node:dgram');
 const os = require('node:os');
 const { performance } = require('node:perf_hooks');
 const { spawn } = require('node:child_process');
+const { PcmDelay } = require('../../src/soundSpectrumPcmDelay');
 
 const ROOT = path.resolve(__dirname, '../..');
 const DATA = path.join(ROOT, 'data/soundspectrum-audio-feed');
@@ -110,10 +111,12 @@ class AudioFeed {
   constructor({ settingsPath = SETTINGS, demandPath = DEMAND, output,
     bridgeStatus, requirePlayer, spawnImpl = spawn, socketFactory = () => dgram.createSocket('udp4'),
     clock = Date.now, paceClock = clock === Date.now ? () => performance.now() : clock,
-    maxEncoded = MAX_ENCODED, maxPcm = MAX_PCM } = {}) {
+    maxEncoded = MAX_ENCODED, maxPcm = MAX_PCM, visualDelayMs = 0 } = {}) {
     Object.assign(this, { settingsPath, demandPath, output, bridgeStatus, requirePlayer, clock, maxEncoded, maxPcm });
     this.spawn = spawnImpl; this.socketFactory = socketFactory;
     this.paceClock = paceClock;
+    this.visualDelay = new PcmDelay({ delayMs: visualDelayMs });
+    this.silenceDebtFrames = 0;
     this.state = 'disabled'; this.reason = 'The experimental music feed is off.';
     this.epoch = 0; this.startRequest = 0; this.socket = null; this.writer = null; this.decoder = null;
     this.token = ''; this.playerId = ''; this.streamGeneration = '';
@@ -129,7 +132,7 @@ class AudioFeed {
       pcmBytes: this.totalPcm, bufferedBytes: this.encodedSize + this.pcmSize + (this.decoder?.stdin.writableLength || 0),
       droppedPcmFrames: this.droppedPcm, pcmAgeMs: this.pcmAt ? Math.max(0, this.clock() - this.pcmAt) : null,
       decodedSignal: this.decodedSignal.snapshot(this.clock()), submittedSignal: this.submittedSignal.snapshot(this.clock()),
-      delayMs: this.settings?.delayMs || 0 };
+      delayMs: this.visualDelay.delayMs, visualDelay: this.visualDelay.snapshot() };
   }
   async inspect(refresh = false) {
     if (!refresh && this.inspectCache && this.clock() - this.inspectAt < 10000) return this.inspectCache;
@@ -300,7 +303,9 @@ class AudioFeed {
       if (header.sequence !== 0 || header.format !== 'flac' || payload.length &&
           (payload.length < 42 || !payload.subarray(0, 4).equals(Buffer.from('fLaC')))) return;
       this.resetDecoder(); this.streamGeneration = header.generation; this.expectedSequence = 1;
-      this.packetAt = this.clock(); this.readyAt = this.paceClock() + this.settings.delayMs;
+      // The shared post-pacer stage applies the global delay exactly once. The
+      // legacy per-decoder readiness delay remains readable but is not applied.
+      this.packetAt = this.clock();
       const command = buildDecodeCommand(this.settings);
       const decoder = this.spawn(command.command, command.args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: command.env });
       this.decoder = decoder; lowerPriority(decoder);
@@ -371,10 +376,29 @@ class AudioFeed {
     }
     if (this.pcmSize < 256 * 1024) this.decoder?.stdout.resume();
   }
+  setVisualDelayMs(milliseconds, options) { return this.visualDelay.setDelayMs(milliseconds, options); }
+  rebasePacer(now = this.paceClock()) {
+    const skipped = Number.isFinite(this.paceAt) ? Math.max(0, Math.floor((now - this.paceAt) * PCM_RATE / 1000) - this.paceWritten) : 0;
+    this.visualDelay.skipFrames(skipped);
+    this.paceAt = now; this.paceWritten = 0; this.silenceDebtFrames = 0;
+  }
+  takeLivePcm(frames) {
+    const silent = Math.min(frames, this.silenceDebtFrames); this.silenceDebtFrames -= silent;
+    if (!silent) return this.takePcm(frames * FRAME_BYTES);
+    const result = Buffer.alloc(frames * FRAME_BYTES);
+    if (silent < frames) this.takePcm((frames - silent) * FRAME_BYTES).copy(result, silent * FRAME_BYTES);
+    return result;
+  }
+  discardLiveFrames(frames) {
+    const silent = Math.min(frames, this.silenceDebtFrames); this.silenceDebtFrames -= silent;
+    this.discardPcm(frames - silent);
+  }
   tick(epoch) {
     if (epoch !== this.epoch || !this.writer || this.writer.stdin.destroyed) return;
     if (this.writer.stdin.writableNeedDrain || this.writer.stdin.writableLength > 65536) {
       if (!this.outputBlockedAt) this.outputBlockedAt = this.clock();
+      const discarded = this.pcmSize / FRAME_BYTES; this.discardPcm(discarded);
+      this.rebasePacer();
       if (this.clock() - this.outputBlockedAt > 2000) this.fail('The visualizer audio output fell behind. Playback continues.', epoch);
       return;
     }
@@ -383,19 +407,16 @@ class AudioFeed {
     // time so a 21 ms callback does not submit only 20 ms of source audio.
     let due = Math.floor(Math.max(0, this.paceClock() - this.paceAt) * PCM_RATE / 1000) - this.paceWritten;
     if (due <= 0) return;
-    const firstMusicFrame = this.readyAt ? Math.ceil(Math.max(0, this.readyAt - this.paceAt) * PCM_RATE / 1000) : Infinity;
     if (due > PCM_RATE / 2) {
       // A renderer/device startup or busy desktop can stall a callback. Skip
       // available copy PCM for that gap and keep at most 100 ms timing debt.
       // No missing decoded samples are borrowed from the listening branch.
       const skipped = due - MAX_TICK_FRAMES;
-      this.discardPcm(Math.max(0, this.paceWritten + skipped - Math.max(this.paceWritten, firstMusicFrame)));
+      this.discardLiveFrames(skipped); this.visualDelay.skipFrames(skipped);
       this.paceWritten += skipped; due -= skipped;
     }
-    const frames = Math.min(due, MAX_TICK_FRAMES), count = frames * FRAME_BYTES;
-    const silentFrames = Math.min(frames, Math.max(0, firstMusicFrame - this.paceWritten));
-    const value = Buffer.alloc(count);
-    if (silentFrames < frames) this.takePcm((frames - silentFrames) * FRAME_BYTES).copy(value, silentFrames * FRAME_BYTES);
+    const frames = Math.min(due, MAX_TICK_FRAMES);
+    const value = this.visualDelay.process(this.takeLivePcm(frames));
     this.paceWritten += frames;
     try {
       this.writer.stdin.write(value);
@@ -415,9 +436,12 @@ class AudioFeed {
     const decoder = this.decoder; this.decoder = null;
     if (decoder) { try { decoder.kill(); } catch {} }
     this.streamGeneration = ''; this.expectedSequence = 0; this.encoded = []; this.encodedSize = 0;
-    this.pcm = []; this.pcmSize = 0; this.pcmTail = Buffer.alloc(0); this.pendingEnd = false; this.readyAt = 0;
+    this.pcm = []; this.pcmSize = 0; this.pcmTail = Buffer.alloc(0); this.pendingEnd = false;
     this.decodedSignal.reset(); this.submittedSignal.reset();
-    this.paceAt = this.paceClock(); this.paceWritten = 0;
+    if (this.writer) {
+      const due = Math.max(0, Math.floor((this.paceClock() - this.paceAt) * PCM_RATE / 1000) - this.paceWritten);
+      this.silenceDebtFrames = Math.max(this.silenceDebtFrames, due);
+    } else this.rebasePacer();
   }
   fail(reason, epoch) {
     if (epoch !== this.epoch || this.state === 'error') return;
@@ -427,9 +451,10 @@ class AudioFeed {
   }
   async stop({ preserveError = false, preserveStart = false } = {}) {
     if (!preserveStart) ++this.startRequest;
+    this.visualDelay.reset();
     ++this.epoch; clearInterval(this.pacer); clearInterval(this.renewTimer); clearInterval(this.safetyTimer);
     this.pacer = null; this.renewTimer = null; this.safetyTimer = null;
-    const token = this.token, ownerToken = this.ownerToken; this.token = ''; this.resetDecoder();
+    const token = this.token, ownerToken = this.ownerToken; this.token = ''; this.resetDecoder(); this.visualDelay.reset();
     const writer = this.writer; this.writer = null; if (writer) { try { writer.kill(); } catch {} }
     const socket = this.socket; this.socket = null; if (socket) { try { socket.close(); } catch {} }
     this.playerId = '';

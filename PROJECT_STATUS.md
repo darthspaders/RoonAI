@@ -1,5 +1,8 @@
 # The Rabbit Hole — project status
 
+Current source/activation handoff: [October 2026 update](docs/october-2026-update.md).
+This supersedes older current-status claims below; historical details remain for context.
+
 Updated 2026-10-04.
 
 Rabbit Hole provides independent Roon and Lyrion playback paths in a local Node.js

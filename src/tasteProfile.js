@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { trackKey } = require("./sessionStore");
+const { captureRetrospectiveInput, inputForFeedback } = require("./retrospectiveReviewInput");
 const {
   artistIdentityKey,
   isCollisionSensitiveArtist
@@ -488,6 +489,7 @@ class TasteProfile {
       title: cleanText(track.title),
       label: labelFor(track),
       tidalUrl: cleanText(track.tidal?.tidalUrl || track.tidalUrl),
+      tidalId: cleanText(track.tidal?.id || track.tidalId),
       score: numberOrNull(track.score ?? track.scoreBreakdown?.total),
       tasteScore: nextDelta,
       sourceType: cleanText(track.sourceType),
@@ -497,6 +499,9 @@ class TasteProfile {
       discoveryLane: cleanText(track.discoveryLane),
       promptMismatch: normalizedRating === "wrong_genre",
       artistSignalBlocked: normalizedRating === "wrong_genre" || normalizedRating === "reject_similar" || shouldBlockArtistSignal(track, nextDelta),
+      reviewInput: context.reviewInput
+        ? inputForFeedback({ ...track, reviewInput: context.reviewInput })
+        : captureRetrospectiveInput(track),
       calibration: feedbackCalibrationEntry(track, normalizedRating, context),
       updatedAt: new Date().toISOString()
     };

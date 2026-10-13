@@ -9,6 +9,7 @@ const {
   positiveNumber
 } = require("./tidalRequestGuard");
 const { normalizeTidalTrackUrl } = require("./tidalIdentity");
+const { exactMatch } = require("./exactTrackVerification");
 
 const DEFAULT_MIN_LOOKUP_INTERVAL_MS = 1500;
 const DEFAULT_CACHE_MAX = 200;
@@ -840,6 +841,15 @@ class RadioMetadataResolver extends EventEmitter {
     const recordings = await this.searchRecordings(track);
 
     for (const recording of recordings) {
+      // Search ranking is retrieval evidence, not an artwork identity match.
+      // In particular the local index can return partial-title bucket matches.
+      const candidate = {
+        title: cleanText(recording.title),
+        artist: (recording["artist-credit"] || []).map(credit =>
+          cleanText(credit?.artist?.name || credit?.name)).filter(Boolean).join(", "),
+        durationMs: toDurationMs(recording.length)
+      };
+      if (!candidate.artist || !candidate.title || !exactMatch(track, candidate)) continue;
       const release = chooseRelease(recording);
       if (!release) continue;
 
@@ -855,11 +865,14 @@ class RadioMetadataResolver extends EventEmitter {
 
       return {
         key,
-        title: track.title,
-        artist: track.artist,
+        title: candidate.title,
+        artist: candidate.artist,
         album: cleanText(release.title || recording.title),
         albumArtUrl: preparedAlbumArtUrl,
-        durationMs: toDurationMs(recording.length)
+        durationMs: candidate.durationMs,
+        source: "musicbrainz",
+        recordingId: cleanText(recording.id),
+        releaseId: cleanText(release.id)
       };
     }
 

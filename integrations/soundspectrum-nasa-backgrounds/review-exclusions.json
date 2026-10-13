@@ -1,0 +1,698 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "nasa-science-1234021",
+      "presentationSha256": "6c63fd0e1c6c574f04581be1d0ac071d8d68f3793fa1870f26f85bc954dc09b1",
+      "reason": "Visible telescope-alignment evaluation heading",
+      "reviewedAt": "2026-10-11",
+      "evidence": "Direct contact-sheet pixel review; original retained"
+    },
+    {
+      "id": "nasa-science-1258235",
+      "presentationSha256": "4a95f2c89bccd0529b3005b89b2c3f502c7a2d6a8cca3c7a4852bf81ea1e9528",
+      "reason": "Visible credit text in the photograph",
+      "reviewedAt": "2026-10-11",
+      "evidence": "Direct contact-sheet pixel review; original retained"
+    },
+    {
+      "id": "nasa-science-1255859",
+      "presentationSha256": "161b1979a6d0591c16b7112234836b669ced40a9031ca84c1648e9d444547733",
+      "reason": "Magnified inset panel",
+      "reviewedAt": "2026-10-11",
+      "evidence": "Direct contact-sheet pixel review; original retained"
+    },
+    {
+      "id": "nasa-science-1238704",
+      "presentationSha256": "e5e87df208e4e82764dc112a700a491fba658363b70aac2b10864d8b36fd2f9f",
+      "reason": "Framed image with a caption and instrument labels",
+      "reviewedAt": "2026-10-11",
+      "evidence": "Direct contact-sheet pixel review; original retained"
+    },
+    {
+      "id": "nasa-science-1237960",
+      "presentationSha256": "f751c3d7f65c3b1b0668980a2e5891cc3ad05e533446fd507810e286cfc944d3",
+      "reason": "Visible credit text in the photograph",
+      "reviewedAt": "2026-10-11",
+      "evidence": "Direct contact-sheet pixel review; original retained"
+    },
+    {
+      "id": "nasa-science-1237935",
+      "presentationSha256": "a16a181219b98b7014bcd1a1437003ce3e8287cda2f2879423c10c69ef9e7312",
+      "reason": "Visible credit text in the photograph",
+      "reviewedAt": "2026-10-11",
+      "evidence": "Direct contact-sheet pixel review; original retained"
+    },
+    {
+      "id": "nasa-science-884022",
+      "presentationSha256": "54654c8fb406e1ec5ccb804b98484561ffe6a2be5011671eeca33410070d7130",
+      "reason": "Labeled diagonal comparison with NASA logo",
+      "reviewedAt": "2026-10-11",
+      "evidence": "Direct contact-sheet pixel review; original retained"
+    },
+    {
+      "id": "nasa-science-1249290",
+      "presentationSha256": "f1f8d58a983f030f1ace45cc6f2c15465cc3d693f416922cb6395237dffaaeca",
+      "reason": "Visible photographer credit in the photograph",
+      "reviewedAt": "2026-10-11",
+      "evidence": "Direct contact-sheet pixel review; original retained"
+    },
+    {
+      "id": "nasa-science-1248876",
+      "presentationSha256": "ea6f051b00f99f97373e3e30f66a5923fa4bc3d02131f087ec1d68fdf87250be",
+      "reason": "Visible photographer credit in the photograph",
+      "reviewedAt": "2026-10-11",
+      "evidence": "Direct contact-sheet pixel review; original retained"
+    },
+    {
+      "id": "nasa-auto-7648d0be975e8139d542f75a",
+      "presentationSha256": "8419a2ae6aaa790f524a90252f8d285b342a31ab00eaa00609e1483c4657e16d",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-f23718764706e82f127d0876",
+      "presentationSha256": "4e2742bd5741cd19692db3dcfb36b90b20b649d6c6ea40ba67fcf37afea99890",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-e4b00be5a5729f5c1021207e",
+      "presentationSha256": "678d484e6b12e77b4acac2da47079404a351e82e5ab466070a5d50f7d2bea6d7",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-d127144e736d3f69ca6b7a65",
+      "presentationSha256": "a5e0183030bf5017bbf1befa243072462c67164c370398029d365c572c36fd2a",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-2498ff7cb543f9b9b852f515",
+      "presentationSha256": "76d7564eba3cc0941dd4917f59f26eccc49c7e8524b9d33856b02ff4a23760e0",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-05ea57439d5f86533bdb78a2",
+      "presentationSha256": "2386f4a9592f32df9f1a61a38155766a9733bc8245d1cc0259f5e575aa26bed2",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-1c5d1016a1972f9699540c4b",
+      "presentationSha256": "d105f895fdb57bc6decbf8bb912b6037a639afcfd7cf27f12c7e6629494fcc25",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-aa38d2298c78bed9fd0d0649",
+      "presentationSha256": "afae6a71e153d851dab6b3fe210b781e6da72f1693e36cd61a4d84384f622256",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-0c2ca884148ce0aee3a1fab5",
+      "presentationSha256": "e5d2cfb801819067dcd874084efd7f13a8471358636d72af359bd44a27f32754",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-e7c3375aaa51be997102d874",
+      "presentationSha256": "c7cabb41850ee7647c78c1ebe13b3c015a6c8ae3db612cbd0de3da888761601f",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-b85389fea05affa16c0b14e1",
+      "presentationSha256": "aba44a976d5065b956fdc1287ada7977c76f850de58b768e168f50aaa34d847c",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-6c7f9df413aa2ef0654c9b24",
+      "presentationSha256": "96eed57f8915ed2564a8692da709d92c0095e078ced3a5d03dc6874364916d9b",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-be776b87099c1fb91bf24a8c",
+      "presentationSha256": "4a3aec5081b7711c3066e150dad8a00d7dc9412879f1cc087d26c908b5750980",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-533bdc36458752c78b0f4427",
+      "presentationSha256": "d79bc02d859ed6c4700fd617aeae595512e9dc439033a1a607f14d327e23931e",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-48e98b3dba77532fd04e7c9d",
+      "presentationSha256": "d2a0d538d8440c67cc7be2e72ef760eb0ff740f9b84ad1d9e5c49df842742b54",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-95033042a9ee944d8ed7dba9",
+      "presentationSha256": "92bcc88deb129f433efe437ac6bde11617383513eb20bcb095dff8b440bbe3e0",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-df4abd1bd89c5f4716519b47",
+      "presentationSha256": "18fb2fa52deacbe024ab60b870f0067cdefd118b87c19526211cc131adc7c962",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-0a5c34794d883afc6573164b",
+      "presentationSha256": "679f84ed9cd33e4a320e2708f6b0ac5574a58a4022667d6bef13822d3ba19e7b",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-88acdd4d3933abc34121165a",
+      "presentationSha256": "4df84c8400d50cf94aef8761b0e4ad368a57882ece0a4477a9a26861abaa9562",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-602ff052cd14e249990f53e4",
+      "presentationSha256": "cd90e6113ba05da96896b98ae06b3cc2b3f7a000854ec99159a05bb412b1919d",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-86614bc0d8e365c81976d70a",
+      "presentationSha256": "c6d38a8a68bf953781b0452cd90852864a8867957f87a07adf63152edf21ecc0",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-32267264b251981f3297d8c6",
+      "presentationSha256": "58338a0f45973e4c534fc9a48cc1390fb742149c9c22b203dfa638cc1add22c8",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-779d2265a9d25f07bfccd558",
+      "presentationSha256": "636fee4602a09793520b34acf67612612bb3ff4c5a97ae7887532ffab20aa903",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-d45e33f2210ca5da0f69d257",
+      "presentationSha256": "df1e812850a4370396969f4e6532ee9462e4ee2e1aeea5fcf72a06e7cd759e90",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-42d6e4d9ba3e64f5e0c8d6bf",
+      "presentationSha256": "7213ed8402a17ebfbfc2afaf04f1d553a3d9a7b009abbc2aefa5a07b1ef96f6d",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-f6d810bbb6f585f1c313209f",
+      "presentationSha256": "fa9642ed7fec76c001c054c327b78f4e2b1e33562a866611357f8ce8c61fd461",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-830a93d7cff38a346ab95865",
+      "presentationSha256": "a33c8371b3df56f7eb77c8d8fca0f0df3c1b5337132c7e38e02a913511a0a950",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-f5341d71f44cb88ab0d5fc9a",
+      "presentationSha256": "393ddddd46e729fea85b0a9e7a6528bc36cbe28665ac47cc9daa49c02b6cac46",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-72be68567d8c360138aaf76f",
+      "presentationSha256": "9421738375045ffe09b61dabb5f0d1a1310401281402cbe6ada486a26b0045bf",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-29808ff604f422d62f17e08f",
+      "presentationSha256": "005d9a64efd72cf09c8f93bff5518826ef1f6f33922145aa8da3acdde0501ba9",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-f9725f6828da6e24c4bf183d",
+      "presentationSha256": "70fad7fa61fe6adb1e64aa96d83203b03df0c21abf2e85ec36df8893c50bca64",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-8c70a2c997fb8979b667c426",
+      "presentationSha256": "aed5a1fe822ac4856e00ea08d53a6c08b15eb62f9cc00b1a814a3d7adf78f253",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-bda5e36825c18a508b96a1c5",
+      "presentationSha256": "9d0e431262ab5fd8dce3fa9e2428ab31f181e4d71a1241e7de8646092cf469bd",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-4eac1fef5d1d001783cbd33d",
+      "presentationSha256": "1b0319a7c1e0f26202f5a88fdbaf16fa4f7c44ea93f9c961565ea899ee3797c6",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-3a6540a6d0b83248d4ec82f8",
+      "presentationSha256": "0c9c53551717aba857ac7db2a238627d8010927b13aeb67e66b2674568b840a6",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-4c070be458b55c80aab67637",
+      "presentationSha256": "7466056d4eb60c950e2008c00b26a2b7fa0e98fad1de42d7ad8f49b5b24ccf73",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-0895f708815dcca017e1dfb7",
+      "presentationSha256": "78879da117ab7bbd92747164de3e6fbcce251678403770c75998c571abf8c849",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-e0eab6cb9b4f16d4617449c1",
+      "presentationSha256": "8e6df022d6881cc9bad5e4069a174f7c54133b43fe196e24032758edc8f09a5a",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-8c9863abf353f41acb4a1f5c",
+      "presentationSha256": "f19902d2e3b9e3ebdd48ce02905115ef2b25fe12ab93aa359d4fc3eb5333ffd4",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-9be28b44b319d4c76a95cdcb",
+      "presentationSha256": "a1d9d786098b8348136e15c486bdbc927cace53c9ec774f369d36a1a29abe625",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-a726904ea96c0712c9a8fc0a",
+      "presentationSha256": "22ebeb64a347b4f626a8f153848254628b8630dc4976edb81f445ea999c9b2be",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1002375",
+      "presentationSha256": "5b32cda64441ac7639ed1d3cb32a5e29b8e018206927fa3737cade8b2baea05b",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-983689",
+      "presentationSha256": "ec4cf46b27d01c6da355e4e3885439d5914e44626d3432681ef4532901e001fd",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1238663",
+      "presentationSha256": "da276da369c9ea86ee930e3fdf14f8f006553194d0a1510538212ce784da91f2",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1208745",
+      "presentationSha256": "0b3ed68d1db1982d71b900470d08c9a4ecacf72abe8479c669751d2ba76af139",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1249338",
+      "presentationSha256": "c77a25f87dd626a8cc34d44a2c26873a9bb51cffa1dc06a86e09dffbdc833e68",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1249135",
+      "presentationSha256": "8ceb24186f6e589582c4a39f739a27050a73113e2f385567c198b5dfbce92a1b",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1247250",
+      "presentationSha256": "d3ae418e4735796e0e82cd5be3c2eeca18b5c57c0c36c77d9df363ad9c8b5c1d",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888888",
+      "presentationSha256": "34b1ddad8a6419fce93aa37a53ca8966ffa32ebdef481a74bd7559ac0b60cb7d",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888877",
+      "presentationSha256": "0e8055a3699d6faca1d8932e2b0d3ead6ad907828cf8370b2dd5e301e82c7512",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888876",
+      "presentationSha256": "4501f0011574981c9369f53ec2cb83b27d10157c83e95b70f8f9ce30f2c6fc96",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888875",
+      "presentationSha256": "301fe589bd105680892e533018e5cfda30f328a5b884db8a3c4b7c8475fa0a77",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888874",
+      "presentationSha256": "d09de8e7c9203885f767db31336dda360135fa166929d0995587ba41a4c27f97",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888873",
+      "presentationSha256": "65ca7fde6edcd9e18b01f1f57055ddda688979fb5803e4830f7423256b4ccb95",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888872",
+      "presentationSha256": "73c83eca5b00a0bdf9ea0dde52b70e3951589d9c8b57b3d71a59c387f68e43d5",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888871",
+      "presentationSha256": "85f5efe203b69938e35bc7d69f72becf38231beabe724ce97ee9b4210246a4e4",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888870",
+      "presentationSha256": "d476c1101a2f0f85fa509272106ac25ccced71b0a6abfbc92a40963d1007e0d4",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888869",
+      "presentationSha256": "9bf6c321e9040bb120905d35039d7435873e24f86c11f837c52457edd46c07ee",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888868",
+      "presentationSha256": "3df995b210a1b1be1b7e2599fc8537874c8e9780a7704e80e8a23c163e204858",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888867",
+      "presentationSha256": "88e470cc74d2db8a6d56e1652198ded0af0ce082c390a0f8386781def3164fdc",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888866",
+      "presentationSha256": "984af1965dc7e79b1fd997c07297d3e8b67bdd44545c8f6ccd02e059f856eb77",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-888865",
+      "presentationSha256": "3ace1dc156bbd077dc96315ea80128ad6632c2852b25240ff6cf1b3f1468ef4f",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1242896",
+      "presentationSha256": "3e1122c7c1ba876d0d366aff7a1f3d76536d9f04973b2212e79a3b3817b40e85",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1242759",
+      "presentationSha256": "f728a287825f2102813757741395ebc7a762fd6dac05830590e63e4b5aee5c86",
+      "reason": "Non-celestial subject: people, event, facility or spacecraft/equipment photograph",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-d51cdbfb852391190fbc63b1",
+      "presentationSha256": "a6c9d919b0a7c322dc2deafe98897765526603fa38a86a52abd7ba78c7edefe2",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-dd67a44c5e35cf02754ebae6",
+      "presentationSha256": "370b40057c617530086dba80f26fce62e31b9a7da6285878e23dea06ddbc9296",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-8dd406c39d4c102c112b4265",
+      "presentationSha256": "1bfd4985693fc5cf853c1d9d2194e23cfe72727be31b8bd88d307a82f88cfaa5",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-auto-776124583442c84f1661129d",
+      "presentationSha256": "9d4234142d522371bc97b9e9fdb12cc869672b0f852f3282694dc3b508c8acf4",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-894617",
+      "presentationSha256": "331539b6d86126a616ec57d50dee75f334ca5388697b5fbebd767985ae028889",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-892974",
+      "presentationSha256": "449241d112b6b7e76ab0831d814a4cbc7a52a390cb73e643c29884f59b788d14",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1198170",
+      "presentationSha256": "ebd66b942a0b75e8989d9ab869511b4d6bc7fe03ab07b6cf274f102dd8911676",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1002406",
+      "presentationSha256": "44a7b8033f038a2dd0d7225d9960e097c837f552032091e3e12dcb98e68f3516",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-996685",
+      "presentationSha256": "6c5c0ad6da1f90342bfab374f72315a300664c6e0c4cf711b469282b07b155c5",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-988599",
+      "presentationSha256": "009a138d18c5fc59b9213777db48370a501683f0278ff59b295c7681c1e70dc5",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-986488",
+      "presentationSha256": "6a48d9de7cfbddbb8b6c1c4b67bd6e499e62c4cddef65e0e0aa43845f558bb30",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-985615",
+      "presentationSha256": "fab809b3422c5c4114654198e148ec2a0a5cb3bdc435fc34097e846d26a183dd",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-983902",
+      "presentationSha256": "7931289960f3ca04f9d20002775735f9b42a719a02448c0350f0c4c99c18a502",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-981490",
+      "presentationSha256": "829a25ae9906b28f3b5deef9943a9aaf64517d06834c93e91233f57a62b01421",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1279936",
+      "presentationSha256": "82c9294bbe740cb378a01ffe1d23862d7198f0e59c49602fe46423557b8dd37d",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-892414",
+      "presentationSha256": "94d0e60b290592d9e68c2b3cfea767d880df6afa2ece24008c9e0a05744e7314",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-892311",
+      "presentationSha256": "8eec18430a275b7f42bc8a5be0cd9f3601fd64e53947bb68314db831888686db",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-854050",
+      "presentationSha256": "443ecb43ba75e3a043615a9e3fbb1113618d8818a9463b63d48e4c5686a8cb5b",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-857411",
+      "presentationSha256": "e9991af6b6e81fe5004f8f2f9ce542ac24ecb280f454274900fa6ec1194da4fc",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-952872",
+      "presentationSha256": "ebc791552e63368e67c5cab7b66661d02800ce96aa7cb8b62d0d276024b4b387",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-952858",
+      "presentationSha256": "f36d56669b2140bc483ba59c15323952c32dfa4bb6aaacb436a0a173c5f980cd",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-985049",
+      "presentationSha256": "018bbc1e2e148b307d9d81ccd5aa7fe38eacd3ea64e3e2a4f2149afe265213fc",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1354928",
+      "presentationSha256": "b0be45072e1eae0d4216eb088f8b8f2bfd092f97be4a36e2ee3b9106d782f5c8",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1246113",
+      "presentationSha256": "b42c2ed34667c76a82e8439960e1176f24568043b0e44b047fbc704a1aad9d43",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-255883",
+      "presentationSha256": "5ae188cc35817870e22d65cc1ba4c5960b4a9bce9c2a62e174ac9a5ab56d60f4",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    },
+    {
+      "id": "nasa-science-1232338",
+      "presentationSha256": "d1d5308797794b46f396aa42a16f89612d291fe721c89118d3701d7f915aa2fd",
+      "reason": "Presentation graphic: panels, labels, inset, illustration or visible credit text",
+      "reviewedAt": "2026-10-12",
+      "evidence": "Direct pixel review of local prepared image in the full 413-image contact-sheet audit"
+    }
+  ]
+}

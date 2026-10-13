@@ -8,8 +8,9 @@
     <link rel="stylesheet" href="/database.css?v=20260919-local-metadata-1">
     <link rel="stylesheet" href="/sonicBlindReview.css?v=20260925-1">
     <link rel="stylesheet" href="/lyrion.css?v=11">
-    <link rel="stylesheet" href="/lyrionVisualizer.css?v=11">
-    <link rel="stylesheet" href="/roonVisualizer.css?v=6">
+  <link rel="stylesheet" href="/lyrionVisualizer.css?v=20261011-visual-glass-2">
+    <link rel="stylesheet" href="/roonVisualizer.css?v=20261013-transport-buttons-1">
+    <link rel="stylesheet" href="/soundSpectrumDelay.css?v=1">
   </head>
   <body>
     <main class="shell">
@@ -196,7 +197,7 @@
           <section id="sonicCoveragePanel" class="settingsSection sonicCoverageSettings" aria-labelledby="sonicCoverageHeading">
             <div class="settingsSectionHeader">
               <div>
-                <h3 id="sonicCoverageHeading">Sonic audio coverage</h3>
+                <h3 id="sonicCoverageHeading">MERT-v2 FullSong coverage</h3>
                 <p class="muted">Prepare audio fingerprints for known tracks. Discovery requests get priority. Musical reviews and ratings stay separate.</p>
               </div>
               <button type="button" data-coverage-action="refresh">Refresh</button>
@@ -536,6 +537,8 @@
 
         <section id="historyMetrics" class="historyMetrics"></section>
 
+        <section id="modelReviewBacklog" class="panel historyPanel" hidden data-await-backlog-api></section>
+
         <section class="historyGrid">
           <div class="panel historyPanel">
             <p class="eyebrow">Top Artists</p>
@@ -584,7 +587,7 @@
                 <label>Artist<input name="artist" type="search" list="dbArtistOptions" placeholder="Choose or type an artist" autocomplete="off"><datalist id="dbArtistOptions"></datalist></label>
                 <label>Label<input name="label" type="search" list="dbLabelOptions" placeholder="Choose or type a label" autocomplete="off"><datalist id="dbLabelOptions"></datalist></label>
                 <label>Latest rating<select name="rating" data-db-facet="rating"><option value="">All ratings</option></select></label>
-                <label>Sonic<select name="sonic"><option value="">All Sonic states</option><option value="embedded">Embedding stored</option><option value="missing">Missing embedding</option><option value="anchor">Has anchor profile</option><option value="reviewed">Has neighbor review</option></select></label>
+                <label>Sonic<select name="sonic"><option value="">All Sonic states</option><option value="embedded">MERT-v2 FullSong stored</option><option value="missing">Missing MERT-v2 FullSong</option><option value="anchor">Has anchor profile</option><option value="reviewed">Has neighbor review</option></select></label>
                 <details class="dbMoreFilters"><summary>More filters</summary><div>
                   <label>Metadata tag<select name="tag" data-db-facet="tag"><option value="">All metadata tags</option></select></label>
                   <label>Sonic tag<select name="sonicTag" data-db-facet="sonicTag"><option value="">All Sonic tags</option></select></label>
@@ -785,17 +788,27 @@
     </main>
     <button type="button" id="jumpTop" class="jumpTop" hidden>Now Playing</button>
     <script src="/statusLive.js?v=1"></script>
-    <script src="/app.js?v=20261004-rabbit-hole-panel-1"></script>
-    <script src="/sonicBlindReview.js?v=20260925-1"></script>
+    <script src="/modelReviewBacklog.js?v=20261007-1"></script>
+    <script src="/app.js?v=20261011-bandcamp-notes-1"></script>
+    <script src="/bandcampDiagnostics.js?v=20261011-2" defer></script>
+    <script src="/sonicBlindReview.js?v=20261007-3"></script>
     <script src="/webmcpTools.js"></script>
     <script src="/sonicCoverage.js?v=20260917-1"></script>
     <script src="/database.js?v=20260919-local-metadata-1"></script>
     <script src="/lyrion.js?v=15"></script>
-    <script src="/soundSpectrumVideo.js?v=1"></script>
-  <script src="/soundSpectrumStage.js?v=5"></script>
-    <script src="/lyrionVisualizer.js?v=11"></script>
-  <script src="/roonVisualizer.js?v=3"></script>
+    <script src="/soundSpectrumVideo.js?v=20261011-visual-modes-1"></script>
+  <script src="/soundSpectrumWebRTC.js?v=20261011-visual-modes-1"></script>
+  <script src="/vendor/hls-1.7.3.min.js"></script>
+  <script src="/soundSpectrumHLS.js?v=20261011-visual-modes-1"></script>
+  <script src="/soundSpectrumFidelity.js?v=20261010-hls-fill-diagnostics-1"></script>
+  <script src="/soundSpectrumDelay.js?v=1"></script>
+  <script src="/soundSpectrumWebCodecs.js?v=20261012-webcodecs-120-2"></script>
+  <script src="/remoteClockStyle.js?v=20261011-clock-settings-1"></script>
+  <script src="/soundSpectrumStage.js?v=20261012-tablet-cadence-3"></script>
+    <script src="/lyrionVisualizer.js?v=13"></script>
+  <script src="/roonVisualizer.js?v=5"></script>
     <script src="/lyrionDiscoveryRail.js?v=6"></script>
     <script src="/lyrionSoundCloudPlaylists.js?v=1"></script>
-  </body>
+  <script src="/sonicReviewAudio.js?v=20261012-1"></script>
+</body>
 </html>

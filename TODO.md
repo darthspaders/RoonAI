@@ -1,5 +1,8 @@
 # Rabbit Hole follow-up work
 
+Current source/activation handoff: [October 2026 update](docs/october-2026-update.md).
+This supersedes older current-status claims below; historical details remain for context.
+
 - Verify Lyrion source/plugin combinations on additional Linux installations.
 - Expand sustained SiriusXM artist/Xtra playback checks, including outages,
   long pauses, expiring media URLs and queue edits from other clients.

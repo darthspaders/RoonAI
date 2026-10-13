@@ -2,6 +2,7 @@
 
 const { setImmediate: yieldToEventLoop } = require("node:timers/promises");
 const { identityKeyFor } = require("./sonicEmbeddingStore");
+const { storedSonicIdentityMatches } = require("./sonicProfileIdentity");
 const {
   CHARACTERISTIC_ENTRIES,
   GENRE_ENTRIES,
@@ -13,8 +14,7 @@ const REVIEW_POLICIES = ["ASSISTANT_AUTO", "ASSISTANT_DRAFT", "HUMAN_CONFIRM_EAC
 const QUEUE_POLICIES = ["NEVER", "ASK", "STRONG_ONLY", "KEEP_AND_STRONG", "ALL_VALID"];
 const NOVELTY_POLICIES = ["FRESH_ONLY", "PREFER_FRESH", "ALLOW_KNOWN", "REDISCOVERY_OK"];
 const MAX_SESSION_COUNT = 500;
-const DEFAULT_MODEL = "discogs-effnet";
-const DEFAULT_MODEL_VERSION = "1";
+const { MODEL: DEFAULT_MODEL, MODEL_VERSION: DEFAULT_MODEL_VERSION } = require("./sonicCoverageIdentity");
 
 function cleanText(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -480,7 +480,7 @@ function createSonicReviewSessionService({
     const memory = trackFromMemoryRow(row);
     let sonic = {};
     try {
-      sonic = trackFromStoredSonicProfile(recommendationEngine?.findStoredSonicProfile?.(supplied) || null);
+      sonic = trackFromStoredSonicProfile(readStrictStoredProfile(supplied) || null);
     } catch {
       sonic = {};
     }
@@ -694,6 +694,11 @@ function createSonicReviewSessionService({
     if (!anchorIdentityKey) throw new Error("The Sonic Review anchor has no safe stored identity.");
     const model = cleanText(input.model || input.provider) || DEFAULT_MODEL;
     const modelVersion = cleanText(input.modelVersion) || DEFAULT_MODEL_VERSION;
+    if (!readStrictStoredProfile(anchor, model, modelVersion)) {
+      if (recommendationEngine.prepareReviewAnchor) await recommendationEngine.prepareReviewAnchor(anchor);
+      else if (recommendationEngine.prepareSonicAnchor) await recommendationEngine.prepareSonicAnchor(anchor, { model, modelVersion, allowVersionProxy: false, requireValidEmbedding: true });
+    }
+    requireVerifiedProfile(anchor, model, modelVersion);
     const reviewPolicy = validOrDefault(input.reviewPolicy, REVIEW_POLICIES, "ASSISTANT_DRAFT");
     const queuePolicy = validOrDefault(input.queuePolicy, QUEUE_POLICIES, "ASK");
     const noveltyPolicy = validOrDefault(input.noveltyPolicy, NOVELTY_POLICIES, "PREFER_FRESH");
@@ -717,6 +722,7 @@ function createSonicReviewSessionService({
         perAnchorCount: generationCount,
         model,
         modelVersion,
+        allowVersionProxy: false,
         minSimilarity: input.minimumSimilarity ?? input.minSimilarity,
         excludeIdentityKeys: [...excluded],
         discoveryIntent: input.discoveryIntent || "sonic-review",
@@ -741,6 +747,7 @@ function createSonicReviewSessionService({
       const exposure = exposureFor(candidate, standbyKeys);
       let reason = "";
       if (!key) reason = "missing-identity";
+      else if (!readStrictStoredProfile(candidate, model, modelVersion)) reason = "unverified-sonic-identity";
       else if (excluded.has(key) && excludePreviouslyReviewed) reason = "previously-reviewed-or-anchor";
       else if (sameRecording(anchor, candidate)) reason = "anchor-duplicate";
       else if (seen.has(key) || (dedupeKey && seen.has(dedupeKey))) reason = "duplicate";
@@ -836,9 +843,22 @@ function createSonicReviewSessionService({
     return getReviewSession(id, { includeDiagnostics: true, includeCurrent: true, includeAnchorContext: true });
   }
 
+  function readStrictStoredProfile(track, model = DEFAULT_MODEL, modelVersion = DEFAULT_MODEL_VERSION) {
+    const stored = recommendationEngine?.findStoredSonicProfile?.(track, { model, modelVersion, allowVersionProxy: false });
+    return stored?.model === model && stored?.modelVersion === modelVersion && storedSonicIdentityMatches(stored, track) ? stored : null;
+  }
+
+  function requireVerifiedProfile(track, model, modelVersion) {
+    const stored = readStrictStoredProfile(track, model, modelVersion);
+    if (stored) return stored;
+    const error = new Error("Sonic Review requires a stored profile with verified recording identity. Prepare verified audio before reviewing this track.");
+    error.statusCode = 422;
+    throw error;
+  }
+
   function readExistingEmbeddingSummary(track, model, modelVersion) {
     try {
-      const stored = recommendationEngine?.findStoredSonicProfile?.(track, { model, modelVersion });
+      const stored = readStrictStoredProfile(track, model, modelVersion);
       if (!stored) return null;
       return {
         identityKey: cleanText(stored.identityKey),
@@ -888,9 +908,12 @@ function createSonicReviewSessionService({
       const result = recommendationEngine?.findSonicNeighbors?.(track, 3, {
         model,
         modelVersion,
-        analyzeIfMissing: false
+        analyzeIfMissing: false,
+        allowVersionProxy: false
       });
-      return Array.isArray(result?.neighbors) ? result.neighbors.slice(0, 3).map((neighbor) => ({
+      return Array.isArray(result?.neighbors) ? result.neighbors
+        .filter((neighbor) => readStrictStoredProfile(neighbor.identityKey || neighbor.track, model, modelVersion))
+        .slice(0, 3).map((neighbor) => ({
         identityKey: cleanText(neighbor.identityKey || identityKeyFor(neighbor.track || {})),
         track: factsForTrack(neighbor.track || {}),
         cosineSimilarity: scalar(neighbor.similarity),
@@ -932,6 +955,8 @@ function createSonicReviewSessionService({
     }
     const item = candidateItem(session, candidateIdentity) || currentItem(session);
     if (!item) throw new Error("This Sonic Review session has no pending candidate.");
+    requireVerifiedProfile(session.anchorContext, session.model, session.modelVersion);
+    requireVerifiedProfile(item.candidate, session.model, session.modelVersion);
     const anchor = hydrateTrack(session.anchorContext);
     const candidate = hydrateTrack(item.candidate);
     const anchorFacts = factsForTrack(anchor);
@@ -1129,6 +1154,8 @@ function createSonicReviewSessionService({
     if (session.model === "blind-listening") throw new Error("Use the blind listening controls; this batch cannot write inferred profiles or ratings.");
     const item = candidateItem(session, input.candidateIdentity) || currentItem(session);
     if (!item) throw new Error("This Sonic Review session has no candidate to save.");
+    requireVerifiedProfile(session.anchorContext, session.model, session.modelVersion);
+    requireVerifiedProfile(item.candidate, session.model, session.modelVersion);
     const decision = normalizedDecision(input.decision);
     if (!decision) throw new Error("A valid Sonic Review decision is required.");
     let profile;

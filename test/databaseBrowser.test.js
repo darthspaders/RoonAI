@@ -1,4 +1,5 @@
 "use strict";
+const {MODEL,MODEL_VERSION,DIMENSIONS}=require("../src/sonicCoverageIdentity");
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -35,10 +36,10 @@ function fixture(t) {
   memory.saveTasteFeedback(tracks[0], { rating: "like", createdAt: "2025-01-01" });
   memory.saveTasteFeedback(tracks[1], { rating: "up", createdAt: "2025-01-01" });
   memory.saveTasteFeedback(tracks[2], { rating: "wrong genre", createdAt: "2025-01-01" });
-  sonic.upsertEmbedding({ track: tracks[0], model: "discogs-effnet", modelVersion: "1", vector: Array(1280).fill(.25) });
-  sonic.upsertEmbedding({ track: tracks[1], model: "other-model", modelVersion: "1", vector: Array(1280).fill(.25) });
-  sonic.upsertEmbedding({ track: tracks[2], model: "discogs-effnet", modelVersion: "1", vector: Array(1280).fill(.25) });
-  sonic.db.prepare("UPDATE track_sonic_profile SET embedding_base64 = ? WHERE identity_key = ?").run(encodeVector(Array(1280).fill(0)), "tidal:103");
+  sonic.upsertEmbedding({ track: tracks[0], model: MODEL, modelVersion: MODEL_VERSION, vector: Array(DIMENSIONS).fill(.25) });
+  sonic.upsertEmbedding({ track: tracks[1], model: "other-model", modelVersion: "1", vector: Array(DIMENSIONS).fill(.25) });
+  sonic.upsertEmbedding({ track: tracks[2], model: MODEL, modelVersion: MODEL_VERSION, vector: Array(DIMENSIONS).fill(.25) });
+  sonic.db.prepare("UPDATE track_sonic_profile SET embedding_base64 = ? WHERE identity_key = ?").run(encodeVector(Array(DIMENSIONS).fill(0)), "tidal:103");
   sonic.saveSonicAnchorProfile({ anchor: tracks[0], tags: ["hypnotic", "rolling"], mood: "dark", note: "Existing listening note" });
   sonic.saveSonicNeighborFeedback({ anchor: tracks[0], candidate: tracks[3], rating: "keep" });
   memory.db.exec("CREATE TABLE sonic_review_session_item (candidate_identity_key TEXT, decision TEXT)");
@@ -97,9 +98,9 @@ test("Sonic coverage reads later pages without admitting incompatible vectors or
   const { memory, sonic, tracks } = fixture(t);
   // More than one bounded read page precedes the real catalogue identity.
   for (let index = 0; index < 130; index++) {
-    sonic.upsertEmbedding({ identityKey: `test:page-filler:${index}`, model: "discogs-effnet", modelVersion: "1", vector: Array(1280).fill(.25) });
+    sonic.upsertEmbedding({ identityKey: `test:page-filler:${index}`, model: MODEL, modelVersion: MODEL_VERSION, vector: Array(DIMENSIONS).fill(.25) });
   }
-  sonic.upsertEmbedding({ track: tracks[3], model: "discogs-effnet", modelVersion: "1", vector: Array(1280).fill(.25) });
+  sonic.upsertEmbedding({ track: tracks[3], model: MODEL, modelVersion: MODEL_VERSION, vector: Array(DIMENSIONS).fill(.25) });
   sonic.upsertEmbedding({ track: tracks[4], model: "discogs-effnet", modelVersion: "1", vector: Array(64).fill(.25) });
   sonic.upsertEmbedding({ track: tracks[4], model: "discogs-effnet", modelVersion: "2", vector: Array(1280).fill(.25) });
   const changeCount = db => db.prepare("SELECT total_changes() AS n").get().n;
@@ -157,9 +158,9 @@ test("coverage follows stored exact resolutions and aliases without guessing by 
   const { memory, sonic, tracks, snapshot } = fixture(t);
   const alias = { artist: tracks[0].artist, title: tracks[0].title };
   memory.rememberObservation(alias, "now_playing");
-  memory.db.exec("CREATE TABLE sonic_coverage_work (identity_key TEXT, resolved_identity_key TEXT, state TEXT)");
+  memory.db.exec("CREATE TABLE sonic_coverage_work (identity_key TEXT, resolved_identity_key TEXT, state TEXT, track_json TEXT, model TEXT, model_version TEXT)");
   const aliasIdentity = memory.db.prepare("SELECT identity_key FROM track_identity WHERE tidal_id = '' AND title = ?").get(alias.title);
-  memory.db.prepare("INSERT INTO sonic_coverage_work VALUES (?, ?, ?)").run(aliasIdentity.identity_key, "tidal:101", "prepared");
+  memory.db.prepare("INSERT INTO sonic_coverage_work VALUES (?, ?, ?, ?, ?, ?)").run(`production:${MODEL_VERSION}:${aliasIdentity.identity_key}`, "tidal:101", "prepared", JSON.stringify({identityKey:aliasIdentity.identity_key}), MODEL, MODEL_VERSION);
   const result = browseCatalog(snapshot(), { view: "tracks", sonic: "embedded" });
   assert.equal(result.total, 2);
   assert.ok(result.items.every(track => track.sonicIdentityKey === "tidal:101"));

@@ -1,4 +1,4 @@
-/* SoundSpectrum shares Lyrion's artwork transparency and decorative backdrop. */
+/* SoundSpectrum presents one opaque video surface. */
 #lyrionView .lyrionCenterViews {display:none;}
 #lyrionView .lyrionNow--fullscreen .lyrionCenterViews {display:flex;flex-wrap:wrap;gap:8px;margin-left:auto;}
 :is(#lyrionView,#playerView) .lyrionCenterViews button[aria-pressed="true"],:is(#lyrionView,#playerView) .lyrionVisualToolbar button[aria-pressed="true"] {border-color:var(--accent);background:rgba(217,179,255,.09);}
@@ -6,9 +6,12 @@
 #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] #lyrionVisualPanel {display:block;}
 #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionCover,#lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionArtEmpty {display:none;}
 #lyrionView .lyrionNow[data-center-view="visualizer"][data-visual-active="true"] .lyrionBackdrop {opacity:0;}
-#lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionArtworkLane {max-height:100%;overflow:auto;}
-#lyrionView .lyrionVisualSurface {position:relative;width:100%;height:min(48dvh,calc(100dvh - 400px));min-height:160px;background:transparent;overflow:hidden;}
-:is(#lyrionVisualVideo,#roonVisualVideo),:is(#lyrionVisualCanvas,#roonVisualCanvas) {display:block;width:100%;height:100%;object-fit:contain;opacity:.8;}
+#lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionArtworkLane {align-self:stretch;grid-template-rows:minmax(0,1fr) auto;height:100%;min-height:0;max-height:none;overflow:hidden;}
+#lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] #lyrionVisualPanel {height:100%;min-height:0;}
+#lyrionView .lyrionVisualSurface {position:relative;width:100%;height:100%;min-height:0;background:transparent;overflow:hidden;}
+:is(#lyrionVisualVideo,#roonVisualVideo),:is(#lyrionVisualCanvas,#roonVisualCanvas) {display:block;width:100%;height:100%;object-fit:contain;opacity:1;}
+.lyrionVisualWebRTC {display:block;width:100%;height:100%;object-fit:contain;opacity:1;}
+.lyrionVisualWebRTC[hidden] {display:none;}
 :is(#lyrionVisualVideo,#roonVisualVideo)[hidden],:is(#lyrionVisualCanvas,#roonVisualCanvas)[hidden] {display:none;}
 :is(#lyrionView,#playerView) .lyrionVisualBackdrop {position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;opacity:.26;filter:blur(12px);z-index:-2;pointer-events:none;}
 :is(#lyrionView,#playerView) .lyrionVisualBackdrop[hidden] {display:none;}
@@ -16,13 +19,32 @@
 :is(#lyrionVisualEmpty,#roonVisualEmpty)[hidden] {display:none;}
 :is(#lyrionVisualReason,#roonVisualReason) {max-width:40ch;font-size:14px;line-height:1.6;color:var(--muted);margin:0;}
 :is(#lyrionView,#playerView) .lyrionVisualFields {display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px;}
+:is(#lyrionView,#playerView) .lyrionVisualTransport {grid-column:1/-1;}
 :is(#lyrionView,#playerView) .lyrionVisualFields label {display:grid;gap:8px;min-width:0;font-size:12px;color:var(--muted);}
-:is(#lyrionView,#playerView) .lyrionVisualFields select {width:100%;min-width:0;min-height:44px;font-size:13px;}
+:is(#lyrionView,#playerView) .lyrionVisualFields :is(select,input) {width:100%;min-width:0;min-height:44px;box-sizing:border-box;font-size:13px;}
+:is(#lyrionView,#playerView) .lyrionVisualFields input:focus-visible {outline:2px solid var(--accent);outline-offset:2px;}
+:is(#lyrionView,#playerView) .lyrionVisualFields input[aria-invalid="true"] {border-color:var(--accent);outline:1px solid var(--accent);}
 :is(#lyrionVisualHint,#roonVisualHint) {font-size:12px;line-height:1.5;margin:12px 0;}
 :is(#lyrionView,#playerView) .lyrionVisualToolbar {display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;}
 :is(#lyrionView,#playerView) .lyrionVisualToolbar button,:is(#lyrionView,#playerView) .lyrionCenterViews button {min-height:44px;padding:8px 16px;font-size:13px;}
 :is(#lyrionView,#playerView) .lyrionVisualToolbar button:focus-visible,:is(#lyrionView,#playerView) .lyrionCenterViews button:focus-visible,:is(#lyrionView,#playerView) .lyrionVisualFields select:focus-visible {outline:2px solid var(--accent);outline-offset:2px;}
 :is(#lyrionVisualStatus,#roonVisualStatus) {min-height:20px;font-size:12px;line-height:1.5;margin:8px 0 0;}
+/* One modal owns the existing controls, so closing settings keeps video running. */
+:is(#lyrionView,#playerView) .soundSpectrumStage .soundSpectrumSettingsButton {align-self:flex-start;justify-self:start;flex:0 0 auto;min-height:44px;max-width:100%;margin:0 0 14px;padding:10px 16px;border:1px solid rgba(217,179,255,.3);border-radius:999px;background:rgba(16,7,28,.82);color:var(--accent);font-size:13px;line-height:1.2;}
+#lyrionView .lyrionNow:not(.lyrionNow--fullscreen) .soundSpectrumSettingsButton {display:none;}
+#lyrionView .lyrionStageBar > .soundSpectrumSettingsButton {margin:0;align-self:center;}
+:is(#lyrionView,#playerView) .soundSpectrumStage > .soundSpectrumSettingsDialog {position:fixed;inset:0;z-index:110;box-sizing:border-box;width:min(640px,calc(100% - 32px));max-width:none;max-height:calc(100dvh - 32px);margin:auto;padding:0;border:1px solid rgba(217,179,255,.3);border-radius:18px;background:linear-gradient(150deg,#1c102a,#0c0614);color:var(--text);box-shadow:0 24px 80px rgba(0,0,0,.6);overflow:auto;overscroll-behavior:contain;transform:none;text-align:left;}
+:is(#lyrionView,#playerView) .soundSpectrumStage > .soundSpectrumSettingsDialog:not([open]) {display:none;}
+:is(#lyrionView,#playerView) .soundSpectrumStage > .soundSpectrumSettingsDialog[open] {display:block;}
+.soundSpectrumSettingsDialog::backdrop {background:rgba(3,1,8,.7);}
+:is(#lyrionView,#playerView) .soundSpectrumSettingsHeader {position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 24px;border-bottom:1px solid rgba(217,179,255,.16);background:#150b20;}
+:is(#lyrionView,#playerView) .soundSpectrumSettingsHeader h2 {margin:0;font-size:20px;line-height:1.3;color:var(--accent);}
+:is(#lyrionView,#playerView) .soundSpectrumSettingsHeader button {flex:0 0 auto;min-width:44px;min-height:44px;padding:8px 12px;font-size:13px;}
+:is(#lyrionView,#playerView) .soundSpectrumSettingsBody {padding:24px;}
+:is(#lyrionView,#playerView) .soundSpectrumSettingsBody > p {font-size:13px;line-height:1.5;margin:0 0 16px;}
+:is(#lyrionView,#playerView) .soundSpectrumSettingsBody > p[hidden] {display:none;}
+:is(#lyrionView,#playerView) .soundSpectrumSettingsBody .lyrionVisualFields {margin-top:0;}
+:is(#lyrionView,#playerView) :is(.soundSpectrumSettingsButton,.soundSpectrumSettingsHeader button):focus-visible {outline:2px solid var(--accent);outline-offset:3px;}
 :is(#lyrionView,#playerView) .lyrionVisualOverlay {position:absolute;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));z-index:2;display:flex;align-items:center;gap:8px;opacity:0;pointer-events:none;transition:opacity var(--motion-fast,120ms) linear;}
 :is(#lyrionView,#playerView) .lyrionVisualOverlay[hidden] {display:none;}
 :is(#lyrionView,#playerView) .lyrionVisualSurface[data-controls-visible="true"] .lyrionVisualOverlay {opacity:1;pointer-events:auto;}
@@ -38,10 +60,31 @@
 @media(prefers-reduced-motion:reduce){
   :is(#lyrionView,#playerView) .lyrionVisualOverlay {transition:none;}
 }
+/* Temporary diagnostic is opt-in with ?visualDiagnostics=1 and never resizes media. */
+:is(#lyrionView,#playerView) .soundSpectrumFidelity {position:absolute;top:8px;left:8px;z-index:3;max-width:min(440px,calc(100% - 16px));box-sizing:border-box;border:1px solid rgba(217,179,255,.22);border-radius:10px;background:rgba(5,3,9,.92);color:var(--text);font-size:12px;line-height:1.4;}
+:is(#lyrionView,#playerView) .soundSpectrumFidelity[hidden] {display:none;}
+:is(#lyrionView,#playerView) .soundSpectrumFidelity[open] {width:440px;max-height:min(calc(100% - 16px),70dvh,440px);overflow:auto;}
+:is(#lyrionView,#playerView) .soundSpectrumFidelity summary {box-sizing:border-box;min-height:44px;padding:12px;cursor:pointer;color:var(--accent);}
+:is(#lyrionView,#playerView) .soundSpectrumFidelity :is(summary,button):focus-visible {outline:2px solid var(--accent);outline-offset:-3px;}
+:is(#lyrionView,#playerView) .soundSpectrumFidelity dl {display:grid;grid-template-columns:minmax(110px,.8fr) minmax(0,1.2fr);gap:7px 12px;margin:0;padding:0 12px 12px;}
+:is(#lyrionView,#playerView) .soundSpectrumFidelity dt {color:var(--muted);}
+:is(#lyrionView,#playerView) .soundSpectrumFidelity dd {margin:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums;}
+:is(#lyrionView,#playerView) .soundSpectrumFidelity > :is(div,p) {margin:0;padding:0 12px 12px;}
+:is(#lyrionView,#playerView) .soundSpectrumFidelity button {min-height:44px;font-size:12px;padding:8px 12px;}
+/* The moving backdrop is already blurred. The touch-player panel and controls
+   keep their transparent fill without another backdrop compositing filter. */
+@media(pointer:coarse) and (hover:none){
+  :is(#lyrionView,#playerView) .soundSpectrumStage[data-center-view="visualizer"][data-visual-active="true"]:not(.roonVisualFullscreen):not(.lyrionNow--visualFullscreen),
+  :is(#lyrionView,#playerView) .soundSpectrumStage[data-center-view="visualizer"][data-visual-active="true"]:not(.roonVisualFullscreen):not(.lyrionNow--visualFullscreen) :is(button,input,select,textarea) {
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+  }
+}
 @media(max-width:700px){
   #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] {display:flex;flex-direction:column;}
   #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] > :not(.lyrionBackdrop):not(.lyrionVisualBackdrop) {flex-shrink:0;}
-  #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionArtworkLane {order:1;width:100%;max-height:none;overflow:visible;}
+  #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionArtworkLane {order:1;width:100%;height:auto;max-height:none;overflow:visible;}
+  #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] #lyrionVisualPanel {height:auto;}
   #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionStageFooter {order:2;}
   #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] .lyrionNowDetails {order:3;}
   #lyrionView .lyrionNow--fullscreen[data-center-view="visualizer"] #lyrionDiscoveryRail {order:4;}
@@ -49,10 +92,13 @@
   #lyrionView .lyrionNow--fullscreen .lyrionCenterViews {order:3;flex-basis:100%;margin-left:0;}
   :is(#lyrionView,#playerView) .lyrionCenterViews button {flex:1;}
   :is(#lyrionView,#playerView) .lyrionVisualFields {grid-template-columns:1fr;}
-  :is(#lyrionView,#playerView) .lyrionVisualFields select {font-size:16px;}
-  #lyrionView .lyrionVisualSurface {height:32dvh;}
+  :is(#lyrionView,#playerView) .lyrionVisualFields :is(select,input) {font-size:16px;}
+  #lyrionView .lyrionVisualSurface {height:auto;aspect-ratio:16/9;}
+  :is(#lyrionView,#playerView) .soundSpectrumSettingsHeader {padding:12px 16px;}
+  :is(#lyrionView,#playerView) .soundSpectrumSettingsBody {padding:16px;}
+  :is(#lyrionView,#playerView) .soundSpectrumSettingsBody .lyrionVisualToolbar button {flex:1 1 140px;}
 }
-/* Visualizer-only focus keeps the current stream and backdrop inside its player. */
+/* Visualizer-only focus keeps the current stream inside its player. */
 #lyrionView .lyrionNow--fullscreen.lyrionNow--visualFullscreen[data-center-view="visualizer"] {padding:0;gap:0;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);overflow:hidden;}
 #lyrionView .lyrionNow--visualFullscreen[data-center-view="visualizer"] > :not(.lyrionArtworkLane):not(.lyrionBackdrop):not(.lyrionVisualBackdrop) {display:none;}
 #lyrionView .lyrionNow--visualFullscreen[data-center-view="visualizer"] #lyrionDiscoveryRail {display:none;}
@@ -60,3 +106,28 @@
 #lyrionView .lyrionNow--visualFullscreen[data-center-view="visualizer"] .lyrionArtworkLane > :not(#lyrionVisualPanel),#lyrionView .lyrionNow--visualFullscreen[data-center-view="visualizer"] #lyrionVisualPanel > :not(.lyrionVisualSurface) {display:none;}
 #lyrionView .lyrionNow--visualFullscreen[data-center-view="visualizer"] #lyrionVisualPanel {width:100%;height:100%;}
 #lyrionView .lyrionNow--fullscreen.lyrionNow--visualFullscreen[data-center-view="visualizer"] .lyrionVisualSurface {position:fixed;inset:0;z-index:1;width:100%;height:100dvh;min-height:0;overflow:hidden;}
+
+/* The video is opaque. Only the controls have a dark reading surface. */
+:is(#lyrionView,#playerView) .soundSpectrumStage .lyrionVisualSurface {background:#000;opacity:1;filter:none;}
+:is(#lyrionView,#playerView) .soundSpectrumStage .lyrionVisualBackdrop {display:none;}
+:is(#lyrionView,#playerView) .soundSpectrumControlsExpand {min-height:44px;}
+:is(#lyrionView,#playerView) .soundSpectrumControlsExpand[hidden] {display:none;}
+:is(#lyrionView,#playerView) .soundSpectrumControlsExpand:focus-visible {outline:2px solid var(--accent);outline-offset:2px;}
+:is(#lyrionView,#playerView) .soundSpectrumStage.soundSpectrumStage--controlsFullscreen {position:fixed;inset:0;box-sizing:border-box;width:100%;height:100dvh;max-width:none;max-height:none;margin:0;border-radius:0;z-index:100;isolation:isolate;}
+:is(#lyrionView,#playerView) .soundSpectrumStage.soundSpectrumStage--controlsFullscreen::before,
+:is(#lyrionView,#playerView) .soundSpectrumStage.soundSpectrumStage--controlsFullscreen::after {display:none;}
+:is(#lyrionView,#playerView) .soundSpectrumStage.soundSpectrumStage--controlsFullscreen > .lyrionVisualSurface {position:absolute;inset:0;width:100%;height:100%;aspect-ratio:auto;z-index:0;}
+:is(#lyrionView,#playerView) .soundSpectrumStage.soundSpectrumStage--controlsFullscreen > :not(.lyrionVisualSurface) {z-index:2;}
+#lyrionView .soundSpectrumStage--controlsFullscreen .lyrionArtworkLane {pointer-events:none;}
+#lyrionView .soundSpectrumStage--controlsFullscreen #lyrionDiscoveryRail {pointer-events:auto;}
+#lyrionView .soundSpectrumStage--controlsFullscreen :is(.lyrionNowDetails,#lyrionDiscoveryRail,.lyrionStageBar,.lyrionStageFooter) {background:rgba(10,4,19,.63);}
+@media(max-width:700px){
+  :is(#lyrionView,#playerView) .soundSpectrumStage.soundSpectrumStage--controlsFullscreen {overflow:auto;}
+  :is(#lyrionView,#playerView) .soundSpectrumStage.soundSpectrumStage--controlsFullscreen > .lyrionVisualSurface {position:fixed;}
+}
+
+/* A lighter controls overlay; text and video retain their original opacity. */
+:is(#lyrionView,#playerView) .soundSpectrumStage--controlsFullscreen :is(button,select,input:not([type="range"]):not([type="checkbox"])) {background:rgba(5,3,9,.15)!important;}
+:is(#lyrionView,#playerView) .soundSpectrumStage.soundSpectrumStage--controlsFullscreen button:is([aria-pressed="true"],.active) {background:rgba(217,179,255,.0675)!important;}
+:is(#lyrionView,#playerView) .soundSpectrumStage.soundSpectrumStage--controlsFullscreen button:hover:not(:disabled) {background:rgba(217,179,255,.06)!important;}
+:is(#lyrionView,#playerView) .soundSpectrumStage.soundSpectrumStage--controlsFullscreen .soundSpectrumSettingsButton {background:rgba(16,7,28,.615)!important;}

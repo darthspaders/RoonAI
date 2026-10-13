@@ -636,6 +636,141 @@ test("Beatport search continues to bounded later pages when the first hit is uns
   assert.equal(client.lastIdentityDiagnostics.evaluated.find((item) => item.id === "901").safe, false);
 });
 
+test("Beatport search continues past a disallowed proxy to an exact result in a later query", async () => {
+  for (const allowVersionProxy of [undefined, true, false]) {
+    const requests = [];
+    const client = new BeatportClient({
+      enabled: true,
+      accessToken: "test-token",
+      tokenFile: tempTokenFile(),
+      maxSearchPages: 1,
+      maxSearchQueries: 2,
+      sleepFn: async () => {},
+      logger: null,
+      fetchImpl: async (url) => {
+        requests.push(new URL(url));
+        const proxy = requests.length === 1;
+        return jsonResponse(200, { results: [{
+          id: proxy ? "bp-proxy" : "bp-exact",
+          name: "Dream On",
+          mix_name: proxy ? "Extended Mix" : "Original Mix",
+          artists: [{ name: "Anchor Artist" }],
+          label: { name: "Anchor Label" },
+          release_date: "2026-09-11",
+          length_ms: proxy ? 410000 : 232000
+        }] });
+      }
+    });
+    const options = allowVersionProxy === undefined ? {} : { allowVersionProxy };
+    const result = await client.findTrack({
+      artist: "Anchor Artist", title: "Dream On", label: "Anchor Label",
+      releaseDate: "2026-09-11", durationMs: 232000
+    }, options);
+
+    const strict = allowVersionProxy === false;
+    assert.equal(result.id, strict ? "bp-exact" : "bp-proxy");
+    assert.equal(requests.length, strict ? 2 : 1);
+    assert.deepEqual(client.lastIdentityDiagnostics.attemptedSearches.map((search) => search.label),
+      strict ? ["artist-title", "artist-base-title"] : ["artist-title"]);
+    assert.equal(client.lastIdentityDiagnostics.evaluated.find((item) => item.id === "bp-proxy").safe, !strict);
+    assert.equal(client.lastIdentityDiagnostics.safeCandidateCount, 1);
+  }
+});
+
+test("Beatport explicit track ID selection respects the caller's strict proxy policy", async () => {
+  for (const allowVersionProxy of [true, false]) {
+    const requests = [];
+    const proxy = {
+      id: "101", name: "Dream On", mix_name: "Extended Mix",
+      artists: [{ name: "Anchor Artist" }], label: { name: "Anchor Label" },
+      release_date: "2026-09-11", length_ms: 410000
+    };
+    const client = new BeatportClient({
+      enabled: true, accessToken: "test-token", tokenFile: tempTokenFile(), logger: null,
+      maxSearchPages: 1, maxSearchQueries: 1, sleepFn: async () => {},
+      fetchImpl: async (url) => {
+        const pathname = new URL(url).pathname;
+        requests.push(pathname);
+        return jsonResponse(200, pathname.includes("/search/") ? { results: [proxy] } : proxy);
+      }
+    });
+    const result = await client.findTrack({
+      artist: "Anchor Artist", title: "Dream On", label: "Anchor Label",
+      releaseDate: "2026-09-11", durationMs: 232000
+    }, { beatportTrackId: "101", allowVersionProxy });
+
+    assert.equal(result?.id || null, allowVersionProxy ? "101" : null);
+    assert.deepEqual(requests, [
+      "/v4/catalog/tracks/101/",
+      ...(!allowVersionProxy ? ["/v4/catalog/search/"] : [])
+    ]);
+    if (!allowVersionProxy) {
+      assert.equal(client.lastIdentityDiagnostics.safeCandidateCount, 0);
+      assert.equal(client.lastIdentityDiagnostics.evaluated.find((item) => item.id === "101").safe, false);
+      assert.equal(client.lastIdentityDiagnostics.selectedCandidateId, "");
+    }
+  }
+});
+
+test("strict Beatport ISRC lookup continues past a proxy to an exact search result", async () => {
+  for (const useStoreUrl of [false, true]) {
+    const requests = [];
+    const proxy = {
+      id: "101", name: "Dream On", mix_name: "Extended Mix",
+      artists: [{ name: "Anchor Artist" }], label: { name: "Anchor Label" },
+      release_date: "2026-09-11", length_ms: 410000, isrc: "US83Z2657964"
+    };
+    const exact = { ...proxy, id: "102", mix_name: "Original Mix", length_ms: 232000, isrc: "US83Z2657966" };
+    const client = new BeatportClient({
+      enabled: true, accessToken: "test-token", tokenFile: tempTokenFile(), logger: null,
+      maxSearchPages: 1, maxSearchQueries: 1, sleepFn: async () => {},
+      fetchImpl: async (url) => {
+        const pathname = new URL(url).pathname;
+        requests.push(pathname);
+        if (pathname.includes("/store/")) {
+          return jsonResponse(200, useStoreUrl ? { store_url: "https://www.beatport.com/track/dream-on/101/" } : proxy);
+        }
+        return jsonResponse(200, pathname.includes("/search/") ? { results: [exact] } : proxy);
+      }
+    });
+
+    const result = await client.findTrack({
+      artist: "Anchor Artist", title: "Dream On", label: "Anchor Label",
+      releaseDate: "2026-09-11", durationMs: 232000, isrc: "US83Z2657966"
+    }, { allowVersionProxy: false });
+    assert.equal(result.id, "102");
+    assert.deepEqual(requests, [
+      "/v4/catalog/tracks/store/US83Z2657966/",
+      ...(useStoreUrl ? ["/v4/catalog/tracks/101/"] : []),
+      "/v4/catalog/search/"
+    ]);
+    assert.equal(client.lastIdentityDiagnostics.selectedCandidateId, "102");
+  }
+});
+
+test("strict Beatport ISRC lookup rejects a conflicting named remix even when the ISRC matches", async () => {
+  const { tidal, beatport } = require("./fixtures/anuqram-remix.json");
+  const requests = [];
+  const wrongRemix = {
+    id: "wrong-remix", name: beatport.title, mix_name: "Other Artist Remix",
+    artists: [{ name: beatport.artist }], isrc: beatport.isrc, length_ms: beatport.durationMs
+  };
+  const client = new BeatportClient({
+    enabled: true, accessToken: "test-token", tokenFile: tempTokenFile(), logger: null,
+    maxSearchPages: 1, maxSearchQueries: 1, sleepFn: async () => {},
+    fetchImpl: async (url) => {
+      const pathname = new URL(url).pathname;
+      requests.push(pathname);
+      return jsonResponse(200, pathname.includes("/search/") ? { results: [wrongRemix] } : wrongRemix);
+    }
+  });
+
+  assert.equal(await client.findTrack(tidal, { allowVersionProxy: false }), null);
+  assert.deepEqual(requests, [`/v4/catalog/tracks/store/${tidal.isrc}/`, "/v4/catalog/search/"]);
+  assert.equal(client.lastIdentityDiagnostics.safeCandidateCount, 0);
+  assert.ok(client.lastIdentityDiagnostics.evaluated[0].rejectionReasons.some((reason) => /non-proxy edit\/remix/.test(reason)));
+});
+
 test("Beatport track id lookup fetches the authoritative candidate before search", async () => {
   const requests = [];
   const client = new BeatportClient({

@@ -37,6 +37,7 @@ class ExactRoonBridge {
   }
   async resolveBatchNow(rows, input) {
     const title = "Rabbit Hole Exact Verification Bridge";
+    const actionMode = input.mode === "append" ? "queue" : input.mode || "queue";
     if (!this.profile.isConfigured()) throw new Error("TIDAL profile writes are not configured; bridge unavailable.");
     let saved = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, "utf8")) : {};
     if (!saved.playlistId) {
@@ -93,7 +94,7 @@ class ExactRoonBridge {
           };
         } else {
           try {
-            item.last = await this.roon.resolveExactPlaylistAction(item.row.track, input.zoneId || item.row.roon?.zoneId, title, { timeoutMs, mode: input.mode || "queue" });
+            item.last = await this.roon.resolveExactPlaylistAction(item.row.track, input.zoneId || item.row.roon?.zoneId, title, { timeoutMs, mode: actionMode, requireNextAction: input.requireNextAction === true });
           } catch (error) {
             item.last = {
               success: false,

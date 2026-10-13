@@ -63,3 +63,7 @@ and the [HQPTuner protocol notes](https://github.com/ohshitgorillas/hqptuner/blo
 as references. SiriusXM adapters reference
 [aiosxm](https://github.com/MizterB/aiosxm); that Python library is not bundled
 or a Rabbit Hole runtime dependency.
+
+## Included integration build assets
+
+The browser HLS player includes its license in public/vendor/hls-1.7.3.LICENSE.txt. The optional SRT helper includes pinned GStreamer source under integrations/soundspectrum-srt-high-bitrate/native/upstream; its COPYING file and upstream manifest accompany that source. Android wallpaper companion builds include the Gradle wrapper; Gradle uses Apache-2.0 and its distribution retains the associated notices. These components retain their own licenses.

@@ -46,17 +46,31 @@ class LyrionClient {
     this.actions = new Map();
     this.items = new LyrionItems(itemsFile);
   }
-  async rpc(player, command) {
+  async rpc(player, command, options = {}) {
+    options.signal?.throwIfAborted();
     const headers = { "Content-Type": "application/json" };
     if (process.env.LYRION_USERNAME) headers.Authorization = `Basic ${Buffer.from(`${process.env.LYRION_USERNAME}:${process.env.LYRION_PASSWORD || ""}`).toString("base64")}`;
-    const response = await this.fetch(`${this.baseUrl}/jsonrpc.js`, { method: "POST", headers,
-      body: JSON.stringify({ id: crypto.randomUUID(), method: "slim.request", params: [player || "", command] }),
-      signal: AbortSignal.timeout(12000) });
-    if (!response.ok) throw new Error(`Lyrion returned HTTP ${response.status}`);
-    const body = await response.json();
-    if (body.error) throw new Error(`Lyrion: ${body.error.message || JSON.stringify(body.error)}`);
-    if (!body.result || body.result.error) throw new Error(`Lyrion: ${body.result?.error || "Empty response"}`);
-    return body.result;
+    const controller = new AbortController();
+    const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1, Math.min(12000, options.timeoutMs)) : 12000;
+    const abort = () => controller.abort(options.signal.reason);
+    if (options.signal?.aborted) abort();
+    else options.signal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(() => controller.abort(new DOMException("Lyrion request timed out", "TimeoutError")), timeoutMs);
+    timer.unref?.();
+    try {
+      const response = await this.fetch(`${this.baseUrl}/jsonrpc.js`, { method: "POST", headers,
+        body: JSON.stringify({ id: crypto.randomUUID(), method: "slim.request", params: [player || "", command] }),
+        ...(options.redirect === "error" ? { redirect: "error" } : {}), signal: controller.signal });
+      controller.signal.throwIfAborted();
+      if (!response.ok) throw new Error(`Lyrion returned HTTP ${response.status}`);
+      const body = await response.json();
+      controller.signal.throwIfAborted();
+      if (body.error) throw new Error(`Lyrion: ${body.error.message || JSON.stringify(body.error)}`);
+      if (!body.result || body.result.error) throw new Error(`Lyrion: ${body.result?.error || "Empty response"}`);
+      return body.result;
+    } finally {
+      clearTimeout(timer); options.signal?.removeEventListener("abort", abort);
+    }
   }
   async players() {
     const result = await this.rpc("", ["serverstatus", 0, 999]);
@@ -80,12 +94,12 @@ class LyrionClient {
     return { id: String(t.id || ""), title: t.title || t.track || "Untitled", artist: t.artist || "", album: t.album || "",
       duration: Number(t.duration) || 0, artwork: this.artwork(t), source: /siriusxm/i.test(`${t.album} ${t.artwork_url}`) ? "SiriusXM" : sourceFor(t.url), soundcloudUrn:soundcloudUrn(t.url), index: Number(t["playlist index"]), url: t.url || "" };
   }
-  async status(player, offset = 0, limit = 100) {
-    const s = await this.rpc(player, ["status", offset, limit, "tags:aljJKNuxd"]);
+  async status(player, offset = 0, limit = 100, options = {}) {
+    const s = await this.rpc(player, ["status", offset, limit, "tags:aljJKNuxd"], options);
     const index = Number(s.playlist_cur_index || 0);
     let current = (s.playlist_loop || []).find(t => Number(t["playlist index"]) === index);
     if (!current && Number(s.playlist_tracks)) {
-      const result = await this.rpc(player, ["status", "-", 1, "tags:aljJKNuxd"]);
+      const result = await this.rpc(player, ["status", "-", 1, "tags:aljJKNuxd"], options);
       current = result.playlist_loop?.[0];
     }
     if (s.remoteMeta) current = { ...current, ...s.remoteMeta };

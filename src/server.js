@@ -79,7 +79,10 @@ const {
 } = require("./discoveryEngine");
 const { DiscoveryHistory } = require("./discoveryHistory");
 const { ListeningHistory } = require("./listeningHistory");
-const { generateSearchPlan, scoreCandidateBatch } = require("./llmClient");
+const { generateSearchPlan, scoreCandidateBatch, scoreRetrospectiveCandidate,
+  isLocalModelBusy, subscribeLocalModelActivity } = require("./llmClient");
+const { ModelReviewBacklog } = require("./modelReviewBacklog");
+const { createRetrospectiveModelHealth, createRetrospectiveScorer, handleModelReviewBacklog } = require("./modelReviewBacklogApi");
 const { LastFmClient } = require("./lastFmClient");
 const { MetadataEnrichmentService } = require("./metadataEnrichmentService");
 const { MusicBrainzLocalIndex } = require("./musicBrainzLocalIndex");
@@ -91,6 +94,7 @@ const { DiscogsOAuth } = require("./discogsOAuth");
 const { RecommendationEngineV2 } = require("./recommendationEngineV2");
 const { createSonicReviewSessionService } = require("./sonicReviewSessionService");
 const { SonicBlindReview } = require("./sonicBlindReview");
+const { SonicCatalogScoutService } = require("./sonicCatalogScoutService");
 const { serveBlindAudio } = require("./sonicBlindAudio");
 const { createRecommendationV2DiscoveryReranker } = require("./recommendationV2Discovery");
 const { createRabbitHoleMcpHttpHandler, createRabbitHoleMcpTools } = require("./mcpHttpServer");
@@ -176,6 +180,7 @@ const { TidalPinnedMixStore } = require("./tidalPinnedMixes");
 const { TasteProfile, normalizeRating, ratingDelta } = require("./tasteProfile");
 const { TidalProfileMixes } = require("./tidalProfileMixes");
 const { TidalVerifier } = require("./tidalVerifier");
+const { createRequestedVersionEvidenceLookup } = require("./requestedVersionEvidence");
 const { buildCsv, buildM3u, safeM3uFileName } = require("./m3u");
 const { TrackMemory } = require("./trackMemory");
 const { QueueAttemptStore } = require("./queueAttemptStore");
@@ -248,7 +253,9 @@ const exactRoonBridge = new ExactRoonBridge({
 });
 const externalTrackQueue = new ExternalTrackQueue({ roon, verify: runExactVerification,
   save: result => { if (lastExactVerification === result) exactVerificationStore.save(result); },
-  bridge: exactRoonBridge
+  bridge: exactRoonBridge,
+  diagnostics: /^(1|true|yes|on)$/i.test(process.env.RABBIT_HOLE_SUPPLIED_QUEUE_DIAGNOSTICS || ""),
+  logger: entry => console.warn("[supplied-queue]", JSON.stringify(entry))
 });
 {
   const directBridge = require("./directRoonBridge");
@@ -289,6 +296,7 @@ const beatport = new BeatportClient({
   ...config.beatport,
   logger: console
 });
+tidal.setRequestedRecordingEvidenceLookup(createRequestedVersionEvidenceLookup({ beatport }));
 const discogsOAuth = new DiscogsOAuth({
   enabled: config.discogs.enabled,
   consumerKey: config.discogs.consumerKey,
@@ -331,6 +339,18 @@ const recommendationEngineV2 = new RecommendationEngineV2({
   tidalClient: tidal,
   logger: console
 });
+const { BandcampAnalysisSource } = require("./bandcampAnalysisSource");
+const { createBandcampEligibility } = require("./bandcampEligibility");
+const bandcampAnalysis = new BandcampAnalysisSource({
+  verifyEligibility: createBandcampEligibility({ tidal, roon, zoneId: () => defaultRoonZoneId() })
+});
+recommendationEngineV2.bandcamp = bandcampAnalysis;
+discoveryDiagnostics.sourceDiagnostics = tracks => bandcampAnalysis.report(tracks);
+roon.bandcampAvailabilityGuard = async track => {
+  const record = bandcampAnalysis.report([track]).items[0];
+  if (record?.code !== "ANALYZED") return true;
+  try { return (await tidal.streamingAvailability(record.tidalId)).available === true; } catch { return false; }
+};
 function currentSonicReviewTrack() {
   const state = playbackSnapshot();
   const zones = Array.isArray(state?.zones) ? state.zones : [];
@@ -400,6 +420,7 @@ const sonicReviewSessionService = createSonicReviewSessionService({
       trackMemory
     });
     rememberMusicObservations(feedbackTrack, `feedback:${rating || "unknown"}`);
+    captureMissingModelReviews();
     scheduleBroadcast();
     return result;
   },
@@ -422,8 +443,12 @@ const sonicCoverage = musicMemory?.db && recommendationEngineV2.enabled ? new So
   settings: config.recommendationV2.coverage,
   autoStart: false
 }) : null;
-const sonicAnalysis = sonicCoverage ? new SonicAnalysisService({ db: musicMemory.db, recommendationEngine: recommendationEngineV2, coverage: sonicCoverage }) : null;
+const sonicAnalysis = sonicCoverage ? new SonicAnalysisService({ db: musicMemory.db, recommendationEngine: recommendationEngineV2,
+  coverage: sonicCoverage, worker: recommendationEngineV2.provider.analysisWorker }) : null;
+recommendationEngineV2.prepareReviewAnchor = reference => sonicCoverage.prepareOnDemand(reference);
+const sonicAnalyzedAudio = new (require("./sonicAnalyzedAudio").SonicAnalyzedAudio)({ store: recommendationEngineV2.store });
 const sonicBlindReview = new SonicBlindReview(musicMemory.db);
+const sonicCatalogScouts = new SonicCatalogScoutService();
 recommendationEngineV2.analysisEvidenceFor = track => sonicAnalysis?.evidence(track) || [];
 const recommendationV2Discovery = createRecommendationV2DiscoveryReranker({
   analysisService: sonicAnalysis,
@@ -680,6 +705,7 @@ const {
   queryYieldTracker,
   hardDurationConstraintFor,
   recommendationV2Reranker: recommendationV2Discovery.rerankCandidates,
+  catalogScoutObserver: sonicCatalogScouts.observeCandidates.bind(sonicCatalogScouts),
   selectDiscoveryLaneCandidates,
   shouldContinueAutoBroadenAfterError,
   tasteProfile,
@@ -790,6 +816,7 @@ const {
   standbyCleanText,
   standbyFreshSummary
 } = createStandbyRefreshService({
+  sourceDiagnostics: tracks => bandcampAnalysis.report(tracks),
   booleanFlag,
   candidateIdentityKeys,
   config,
@@ -846,6 +873,18 @@ const { llmHealth, llmSnapshot } = createLlmHealthStatus({
   config,
   fetchJsonWithTimeout,
   openAiCompatibleProviders: OPENAI_COMPATIBLE_PROVIDERS
+});
+
+const modelReviewBacklog = new ModelReviewBacklog({
+  filePath: path.join(__dirname, "..", "data", "model-review-backlog.json"),
+  listFeedback: () => tasteProfile.read().feedback,
+  modelHealth: createRetrospectiveModelHealth({ llmHealth, openAiCompatibleProviders: OPENAI_COMPATIBLE_PROVIDERS }),
+  scoreReview: createRetrospectiveScorer(config, scoreRetrospectiveCandidate),
+  isForegroundBusy: () => isLocalModelBusy() || Boolean(sonicCoverage?.active?.size) ||
+    Number(liveSonicAnalysis.activeAnalyses || 0) > 0
+});
+const unsubscribeReviewPriority = subscribeLocalModelActivity(({ phase }) => {
+  if (phase === "start") modelReviewBacklog.yieldToForeground();
 });
 
 const webMcpHeaders = {
@@ -1231,7 +1270,13 @@ function feedbackTrackWithSessionContext(track = {}, rating = "") {
 }
 
 function feedbackCalibrationContext(track = {}, request = {}) {
-  return buildFeedbackCalibrationContext(track, request);
+  return buildFeedbackCalibrationContext(track, request, { sessionStore, trackKey });
+}
+
+function captureMissingModelReviews() {
+  void Promise.resolve(modelReviewBacklog.sync()).catch(() => {
+    console.warn("[model-review-backlog] Could not persist pending feedback review.");
+  });
 }
 
 function playbackSnapshot() {
@@ -1301,7 +1346,9 @@ function serveStatic(req, res, pathname) {
     ? "/index.html"
     : pathname === "/remote"
       ? "/remote.html"
-      : pathname;
+      : pathname === "/srt-experiment"
+        ? "/srt-experiment.html"
+        : pathname;
   const filePath = path.normalize(path.join(publicDir, safePath));
   const relativePath = path.relative(publicDir, filePath);
   if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
@@ -1389,6 +1436,15 @@ async function roonPlaylistsResponse({ includeTidal = false } = {}) {
 async function handleApi(req, res, url) {
   const pathname = url.pathname;
 
+  if (pathname === "/api/sonic/bandcamp-status" && req.method === "GET") {
+    const targets = key => String(url.searchParams.get(key) || "").split(",").filter(id => /^\d{1,20}$/.test(id)).slice(0, 40).map(tidalId => ({ tidalId }));
+    return sendJson(res, 200, { ...bandcampAnalysis.recent(),
+      discovery: bandcampAnalysis.report(targets("discovery")),
+      standby: bandcampAnalysis.report(targets("standby")) });
+  }
+
+  if (await handleModelReviewBacklog(req, res, url, { backlog: modelReviewBacklog, readJson, sendJson })) return;
+
   if (pathname === "/api/events") {
     const stored = await statusDelivery.read();
     if (req.destroyed || res.destroyed || res.writableEnded || shuttingDown) return;
@@ -1467,6 +1523,14 @@ async function handleApi(req, res, url) {
     });
   }
 
+  if (pathname === "/api/recommendation-v2/catalog-scouts" && req.method === "GET") {
+    return sendJson(res, 200, sonicCatalogScouts.status());
+  }
+  if (pathname === "/api/recommendation-v2/catalog-scouts" && req.method === "POST") {
+    try { return sendJson(res, 200, sonicCatalogScouts.configure(await readJson(req))); }
+    catch { return sendJson(res, 400, { error: "Invalid catalog scout configuration." }); }
+  }
+
   if (pathname === "/api/recommendation-v2/coverage" && req.method === "GET") {
     return sendJson(res, sonicCoverage ? 200 : 503, sonicCoverage?.status() || { error: "Sonic coverage is unavailable." });
   }
@@ -1523,6 +1587,12 @@ async function handleApi(req, res, url) {
     }
   }
 
+  if (["GET", "HEAD"].includes(req.method) && pathname === "/api/recommendation-v2/sonic-review/audio") return sonicAnalyzedAudio.serve(req, res, url);
+  if (req.method === "POST" && pathname === "/api/recommendation-v2/sonic-review/audio-info") {
+    const body = await readJson(req);
+    try { return sendJson(res, 200, await sonicAnalyzedAudio.describe(body.identityKey)); }
+    catch (error) { return sendJson(res, 422, { status: "unavailable", reason: error.message }); }
+  }
   if (req.method === "GET" && pathname === "/api/recommendation-v2/sonic-review/schema") {
     return sendJson(res, 200, sonicReviewSessionService.getReviewSchema());
   }
@@ -1713,7 +1783,7 @@ async function handleApi(req, res, url) {
     const reference = body.track || body.tidalUrl || body.tidalId || body.trackId || body.reference;
     if (!reference) return sendJson(res, 400, { error: "A TIDAL track URL, id, or normalized track is required." });
     try {
-      return sendJson(res, 200, await recommendationEngineV2.prepareSonicAnchor(reference, body));
+      return sendJson(res, 200, await sonicCoverage.prepareOnDemand(reference));
     } catch (error) {
       return sendJson(res, recommendationEngineV2.enabled ? (error.statusCode || 422) : 503, {
         error: error.message,
@@ -1747,7 +1817,11 @@ async function handleApi(req, res, url) {
     const reference = body.track || body.trackId || body.reference || body.filePath || body.path || body.file;
     if (!reference) return sendJson(res, 400, { error: "A stored track identity or local audio file is required." });
     try {
-      return sendJson(res, 200, recommendationEngineV2.findSonicNeighbors(reference, body.count, body));
+      const currentModel = !body.model || body.model === recommendationEngineV2.provider.name;
+      if (currentModel && body.analyzeIfMissing !== false && !body.filePath && !body.path && !body.file && !reference?.filePath
+        && !(typeof reference === "string" && /[\\/]/.test(reference) && !/^https?:/.test(reference))
+        && !recommendationEngineV2.findStoredSonicProfile(reference, { allowVersionProxy: false })) await sonicCoverage.prepareOnDemand(reference);
+      return sendJson(res, 200, recommendationEngineV2.findSonicNeighbors(reference, body.count, { ...body, allowVersionProxy: false }));
     } catch (error) {
       return sendJson(res, recommendationEngineV2.enabled ? 404 : 503, { error: error.message, recommendationV2: recommendationEngineV2.status() });
     }
@@ -2078,7 +2152,8 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "GET" && pathname === "/api/standby") {
-    return sendJson(res, 200, standbyFreshSummary());
+    const summary = standbyFreshSummary();
+    return sendJson(res, 200, { ...summary, bandcampDiagnostics: bandcampAnalysis.report(summary.tracks) });
   }
 
   if (req.method === "GET" && pathname === "/api/lastfm/status") {
@@ -2697,6 +2772,7 @@ async function handleApi(req, res, url) {
       trackMemory
     });
     rememberMusicObservations(feedbackTrack, `feedback:${rating || "unknown"}`);
+    captureMissingModelReviews();
     scheduleBroadcast();
     return sendJson(res, 200, result);
   }
@@ -2853,6 +2929,7 @@ async function handleApi(req, res, url) {
       bridgeSyncDelaysMs: body.bridgeSyncDelaysMs,
       bridgeLookupTimeoutMs: body.bridgeLookupTimeoutMs
     });
+    result.bandcampDiagnostics = bandcampAnalysis.report(tracks);
     try {
       queueAttemptStore.record({ request: body, result, source: req.headers["x-rabbit-hole-caller"] || "" });
     } catch (error) {
@@ -2917,6 +2994,26 @@ const siriusxmAccount = new (require("./siriusxmAccount").SiriusXmAccount)();
 const siriusxmOnDemand = require("./siriusxmOnDemandApi").createSiriusXmOnDemandApi({lyrion:lyrionApi,readJson,sendJson});
 const soundSpectrumApi = require("./soundSpectrum").createSoundSpectrumApi({readJson,sendJson,
   getRoonState: () => ({ connected: Boolean(roon.core), zones: [...roon.zones.values()] }) });
+let soundSpectrumNowPlaying = null;
+let soundSpectrumWhiteCapArtwork = null;
+const optionalNowPlaying = path.join(__dirname, "../integrations/soundspectrum-now-playing/index.cjs");
+if (fs.existsSync(optionalNowPlaying)) {
+  try {
+    soundSpectrumNowPlaying = require(optionalNowPlaying).attachNowPlaying({ service: soundSpectrumApi.service,
+      getRoonState: () => ({ connected: Boolean(roon.core), zones: [...roon.zones.values()] }),
+      getRoonCore: () => roon.core, lyrionClient: lyrionApi.client });
+  } catch { console.warn("[soundspectrum] Optional now-playing module is unavailable; visuals and audio continue."); }
+}
+try {
+  soundSpectrumWhiteCapArtwork = require("../integrations/soundspectrum-whitecap-artwork/index.cjs").attach({
+    service: soundSpectrumApi.service,
+    // Reuse current, keyed display caches without starting enrichment or audio work.
+    getRoonState: () => attachMetadataEnrichment(attachRadioEnrichment({
+      connected: Boolean(roon.core), zones: [...roon.zones.values()]
+    }), { bridgeArtwork: false }),
+    artBridge: config.artBridge,
+    getRoonCore: () => roon.core, lyrionClient: lyrionApi.client });
+} catch { console.warn("[soundspectrum] Optional WhiteCap artwork is unavailable; visuals and audio continue."); }
 lyrionApi.siriusxm.liveMetadata=new (require('./siriusxmLiveMetadata').SiriusXmLiveMetadata)();
 const siriusxmBrowser = new (require("./siriusxmBrowserRelay").SiriusXmBrowserRelay)();
 // Browser heartbeats do not prove that SiriusXM refreshed its visible metadata.
@@ -2926,7 +3023,15 @@ const lyrionTrackMetadata=require('./lyrionTrackMetadata').createLyrionTrackMeta
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
-    if(url.pathname.startsWith('/api/soundspectrum/')){
+    if(url.pathname==='/api/nasa-backgrounds/status'&&req.method==='GET'){
+      res.setHeader('Cache-Control','no-store');
+      return sendJson(res,200,await require('../integrations/soundspectrum-nasa-backgrounds/pipeline.cjs').publicStatus());
+    } else if(url.pathname==='/api/nasa-backgrounds/catalog'&&req.method==='GET'){
+      res.setHeader('Cache-Control','no-store');
+      const offset=Math.max(0,Math.min(1000000,parseInt(url.searchParams.get('offset'),10)||0));
+      const limit=Math.max(1,Math.min(100,parseInt(url.searchParams.get('limit'),10)||50));
+      return sendJson(res,200,await require('../integrations/soundspectrum-nasa-backgrounds/pipeline.cjs').publicCatalog(offset,limit));
+    } else if(url.pathname.startsWith('/api/soundspectrum/')){
       await soundSpectrumApi.handle(req,res,url);
     } else if(url.pathname==='/api/lyrion/track-metadata'&&req.method==='POST'){
       return sendJson(res,200,await lyrionTrackMetadata((await readJson(req)).track));
@@ -2990,19 +3095,25 @@ function shutdown(reason, code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   shutdownCode = code;
+  unsubscribeReviewPriority();
+  modelReviewBacklog.stop();
   sonicCoverage?.close();
   sonicAnalysis?.close();
   void statusDelivery.close().catch(() => {});
+  void soundSpectrumNowPlaying?.close().catch(() => {});
+  void soundSpectrumWhiteCapArtwork?.close().catch(() => {});
   void soundSpectrumApi.service.close().catch(() => {});
   databaseBrowser.close().catch(() => {});
   console.warn(`[lifecycle] Rabbit Hole shutting down pid=${process.pid} reason=${reason}`);
   try { roon.stop(); } catch (error) { console.error(`[lifecycle] Roon shutdown failed: ${error.message}`); }
   try { beatportMemoryBackfillChild?.kill(); } catch (_) {}
+  lanHttps?.close(); lanHttps?.closeAllConnections?.();
   if (server.listening) server.close(() => finishShutdown(code));
   else finishShutdown(code);
 }
 
 soundSpectrumApi.attachVideoTransport(server);
+const lanHttps = require("./lanHttps").start(server);
 server.on("error", error => {
   console.error(`[lifecycle] HTTP server error: ${error.message}`);
   shutdown("http-server-error", 1);
@@ -3032,6 +3143,7 @@ server.listen(config.port, config.host, () => {
   }
   console.log("Enable the extension in Roon Settings > Extensions if prompted.");
   scheduleStandbyRefresh(45_000);
+  modelReviewBacklog.start();
   if (sonicCoverage) { sonicCoverage.autoStart = true; sonicCoverage.schedule(5000); }
   scheduleBeatportMemoryBackfill();
   scheduleBeatportChartRefresh();

@@ -4,6 +4,7 @@
   if (!stage || !window.createSoundSpectrumStage) return;
   const controller = window.createSoundSpectrumStage({
     stage, lane: stage.querySelector(".lyrionArtworkLane"), bar: stage.querySelector(".lyrionStageBar"),
+    settingsAnchor: stage.querySelector(".lyrionStageBar"),
     beforeChoices: $("lyrionFullscreen"), prefix: "lyrion", immersiveClass: "lyrionNow--visualFullscreen",
     presentationVisible: () => stage.classList.contains("lyrionNow--fullscreen"),
     selectedTarget: () => $("lyrionPlayer")?.value || "", targetSelect: $("lyrionPlayer"),

@@ -5,6 +5,10 @@ existing music memory. TIDAL/Roon continue to establish playable track identity.
 Sonic similarity, provider previews and catalogue enrichment cannot replace
 strict identity verification or authorize a queue operation.
 
+## Current Sonic model
+
+MERT-v2 FullSong is the authoritative coverage and Sonic Review representation. Coverage requires the matching model/version/dimensions; stored legacy Discogs-EffNet vectors are retained but excluded. Listening previews represent the analyzed source and report unavailable source artifacts explicitly. See [current source and activation status](october-2026-update.md).
+
 ## Components and defaults
 
 - `spectral-baseline`: deterministic 80-D FFmpeg/FFT features for wiring and

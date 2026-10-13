@@ -74,7 +74,7 @@ class SonicAnalysisStore {
       if (spec.kind === "embedding") this.embeddings.upsertEmbedding({ track, model: spec.repo, modelVersion: spec.key,
         vector: result.vector, sourceSha256: sourceHash, sampleRate: result.sampleRate,
         audioDurationMs: Math.round(result.audioDurationSeconds * 1000),
-        metadata: { analysisSpec: spec, artifactKey, provenance, experimental: true, analyzedSeconds: result.analyzedSeconds } });
+        metadata: { analysisSpec: spec, artifactKey, provenance, experimental: true, audioDurationSeconds: result.audioDurationSeconds, segments: result.segments.map(({vector,...span}) => span), analyzedSeconds: result.analyzedSeconds } });
       this.db.exec("RELEASE sonic_analysis_save");
     } catch (error) { this.db.exec("ROLLBACK TO sonic_analysis_save; RELEASE sonic_analysis_save"); throw error; }
     return { identityKey: identity, prepared: true, artifactKey };

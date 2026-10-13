@@ -1,4 +1,5 @@
 "use strict";
+const {MODEL,MODEL_VERSION,DIMENSIONS}=require("../src/sonicCoverageIdentity");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -84,9 +85,9 @@ test("Sonic coverage requires a valid vector for the exact local bytes, not a ma
   await scanLocalMedia(f);
   const hash = readLocalMedia(f.db, null).records[0].fileHash;
   f.db.exec("CREATE TABLE track_sonic_profile(source_sha256 TEXT, embedding_base64 TEXT, model TEXT, model_version TEXT, dimensions INTEGER)");
-  const vector = new Float32Array(1280).fill(0.1);
+  const vector = new Float32Array(DIMENSIONS).fill(0.1);
   const encoded = Buffer.from(vector.buffer).toString("base64");
-  const insert = f.db.prepare("INSERT INTO track_sonic_profile VALUES(?,?,'discogs-effnet','1',1280)");
+  const insert = {run:(hash,vector)=>f.db.prepare("INSERT INTO track_sonic_profile VALUES(?,?,?,?,?)").run(hash,vector,MODEL,MODEL_VERSION,DIMENSIONS)};
   insert.run("provider-preview-hash", encoded);
   assert.equal(readLocalMedia(f.db, f.db).records[0].sonicEmbedded, false);
   insert.run(hash, "invalid-vector");

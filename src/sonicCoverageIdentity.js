@@ -2,9 +2,10 @@
 
 const { identityKeyFor } = require("./sonicEmbeddingStore");
 const { explicitTidalTrackId, tidalTrackIdFromUrl } = require("./tidalIdentity");
-const MODEL = "discogs-effnet";
-const MODEL_VERSION = "1";
-const DIMENSIONS = 1280;
+const SPEC = require("./sonicAnalysisSpec").analysisSpec("mert-fullsong");
+const MODEL = SPEC.repo;
+const MODEL_VERSION = SPEC.key;
+const DIMENSIONS = SPEC.dimensions;
 const text = value => String(value ?? "").trim();
 
 function coverageTrack(input = {}) {

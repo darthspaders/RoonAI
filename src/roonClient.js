@@ -125,6 +125,10 @@ function actionTitle(item) {
   return String(item?.title || "").toLowerCase();
 }
 
+function isNextQueueAction(value) {
+  return /\badd\s+(?:to\s+)?next\b|\badd\s+after\b|\bplay\s+next\b/i.test(String(value || ""));
+}
+
 function actionRank(item, mode) {
   if (item?.hint !== "action" || !item.item_key) return 0;
   const title = actionTitle(item);
@@ -3445,7 +3449,7 @@ class RoonClient extends EventEmitter {
   async resolveDirectAction(track, zoneId, mode, options = {}) {
     const policy = options.matchPolicy || track.directMatchPolicy;
     const cached = [...(this.exactQueueActions || new Map()).entries()].find(([token, entry]) =>
-      this.hasVerifiedQueueAction(token) && entry.zoneId === zoneId && (entry.mode || "queue") === mode &&
+      this.hasVerifiedQueueAction(token, { zoneId, mode, requireNextAction: options.requireNextAction === true }) && entry.zoneId === zoneId && (entry.mode || "queue") === mode &&
       (!entry.policy || entry.policy === policy) && directIdentity(track, { ...entry.track, tidalTrackId: entry.track.tidalTrackId || entry.track.id }, "strict").accepted && directIdentity(track, entry.result.match, policy).accepted);
     if (cached) return { ...cached[1].result, queueToken: cached[0], resolutionMethod: cached[1].result.resolutionMethod || "cached_roon_action" };
     let result, timedOut = false;
@@ -3480,7 +3484,7 @@ class RoonClient extends EventEmitter {
     if (track.verifiedQueueToken) {
       const entry = this.exactQueueActions?.get(track.verifiedQueueToken);
       if (!this.hasVerifiedQueueAction(track.verifiedQueueToken)) throw new Error("Stored Roon action expired; resolve the saved TIDAL identity again.");
-      if (entry.zoneId !== zoneId || mode !== (entry.mode || "queue")) throw new Error("Selected zone differs from the resolved zone, or mode is not append.");
+      if (entry.zoneId !== zoneId || mode !== (entry.mode || "queue")) throw new Error("Selected zone or action mode differs from the resolved action.");
       const samePolicy = !entry.policy || entry.policy === (options.matchPolicy || track.directMatchPolicy);
       const trustedBridgeToken = entry.result?.hierarchy === "playlists" && entry.result?.identityEvidence?.accepted;
       const identityMatches = entry.policy
@@ -3495,11 +3499,15 @@ class RoonClient extends EventEmitter {
       if (result.queueToken) this.exactQueueActions.delete(result.queueToken);
     } else result = await this.resolveSearchAction(track, zoneId, mode, options);
     if (!result.success || !result.playable?.item_key) return result;
+    if (mode === "next" && options.requireNextAction && !isNextQueueAction(result.playable.title || result.action)) {
+      return { ...result, success: false, failureType: "next_action_unavailable", reason: "Roon did not expose Add Next for this exact track; no append action was dispatched." };
+    }
     const zoneOrOutputId = this.zoneOrOutputId(zoneId);
 
     let played;
     const controller = new AbortController();
     const timer = options.matchPolicy ? setTimeout(() => controller.abort(), 15000) : null;
+    const queueAttemptedAt = new Date().toISOString();
     try {
       played = await roonLookupContext.run(options.matchPolicy ? controller.signal : roonLookupContext.getStore(), () => callRoon((cb) => this.browse.browse({
       hierarchy: result.hierarchy || "search",
@@ -3508,10 +3516,15 @@ class RoonClient extends EventEmitter {
       zone_or_output_id: zoneOrOutputId
     }, cb)));
     } catch (error) {
-      if (!options.matchPolicy) throw error;
-      return { ...result, success: false, resolved: true, failureType: "queue_failed", reason: controller.signal.aborted ? "Queue acknowledgement timed out; outcome unknown. Inspect the queue before retrying." : error.message };
+      if (!options.matchPolicy) {
+        error.queueAttemptedAt = queueAttemptedAt;
+        error.queueOutcomeUncertain = true;
+        error.resolved = true;
+        throw error;
+      }
+      return { ...result, success: false, resolved: true, queueAttemptedAt, queueOutcomeUncertain: true, failureType: "queue_failed", reason: controller.signal.aborted ? "Queue acknowledgement timed out; outcome unknown. Inspect the queue before retrying." : error.message };
     } finally { if (timer) clearTimeout(timer); }
-    if (isErrorMessage(played)) return { ...result, success: false, resolved: true, failureType: "queue_failed", reason: played.message || "Roon rejected the selected action." };
+    if (isErrorMessage(played)) return { ...result, success: false, resolved: true, queueAttemptedAt, queueOutcomeUncertain: true, failureType: "queue_failed", reason: played.message || "Roon rejected the selected action." };
 
     const startReset = mode === "play" && /\bplay\b/i.test(result.playable.title || "")
       ? await this.seekToStartWhenReady(zoneId, 4500)
@@ -3521,26 +3534,33 @@ class RoonClient extends EventEmitter {
   }
 
   async canQueueTrack(track, zoneId, options = {}) {
-    const result = options.matchPolicy ? await this.resolveDirectAction(track, zoneId, "queue", options) : await roonLookupContext.run(options.signal, () => this.resolveSearchAction(track, zoneId, "queue", {
+    const mode = options.mode === "next" ? "next" : "queue";
+    const result = options.matchPolicy ? await this.resolveDirectAction(track, zoneId, mode, options) : await roonLookupContext.run(options.signal, () => this.resolveSearchAction(track, zoneId, mode, {
       ...options, ...(options.query ? { queries: [options.query] } : {})
     }));
     options.signal?.throwIfAborted();
+    if (result.success && mode === "next" && options.requireNextAction && !isNextQueueAction(result.playable?.title || result.action)) {
+      return { ...result, success: false, queueToken: "", failureType: "next_action_unavailable", reason: "Roon did not expose Add Next for this exact track; append fallback is disabled." };
+    }
     if (result.success && !result.queueToken && (options.matchPolicy || options.exactVerification || track.exactVerification)) {
       this.exactQueueActions ||= new Map();
       for (const [key, entry] of this.exactQueueActions) if (Date.now() - entry.createdAt > 30 * 60_000) this.exactQueueActions.delete(key);
       while (this.exactQueueActions.size >= 200) this.exactQueueActions.delete(this.exactQueueActions.keys().next().value);
       result.queueToken = require("node:crypto").randomUUID();
-      this.exactQueueActions.set(result.queueToken, { result, zoneId, track: { ...track }, policy: options.matchPolicy, mode: "queue", createdAt: Date.now(), browse: this.browse });
+      this.exactQueueActions.set(result.queueToken, { result, zoneId, track: { ...track }, policy: options.matchPolicy, mode, createdAt: Date.now(), browse: this.browse });
     }
     return result;
   }
 
-  hasVerifiedQueueAction(token) {
+  hasVerifiedQueueAction(token, { zoneId, mode, requireNextAction = false } = {}) {
     const entry = this.exactQueueActions?.get(token);
-    return Boolean(entry && Date.now() - entry.createdAt <= 30 * 60_000 && entry.browse === this.browse);
+    return Boolean(entry && Date.now() - entry.createdAt <= 30 * 60_000 && entry.browse === this.browse
+      && (!zoneId || entry.zoneId === zoneId) && (!mode || (entry.mode || "queue") === mode)
+      && !(mode === "next" && requireNextAction && !isNextQueueAction(entry.result?.playable?.title || entry.result?.action)));
   }
 
-  async resolveExactPlaylistAction(track, zoneId, playlistTitle, { timeoutMs = 15000, mode = "queue" } = {}) {
+  async resolveExactPlaylistAction(track, zoneId, playlistTitle, { timeoutMs = 15000, mode = "queue", requireNextAction = false } = {}) {
+    if (mode === "append") mode = "queue";
     const { roonIdentityEvidence } = require("./roonExactResolution");
     const { normalize } = require("./exactTrackVerification");
     const controller = new AbortController();
@@ -3584,6 +3604,9 @@ class RoonClient extends EventEmitter {
         recordDiagnostics(depth, items);
         const playable = matched && preferredAction(items, mode);
         if (playable?.item_key) {
+          if (mode === "next" && requireNextAction && !isNextQueueAction(playable.title)) {
+            return { success: false, failureType: "next_action_unavailable", reason: "The exact bridge track has no Add Next action; append fallback is disabled.", diagnostics };
+          }
           const result = { success: true, session, hierarchy: "playlists", playable, match: matched, action: playable.title, diagnostics };
           const trustedEvidence = bridgeTrustedIdentity(track, matched).evidence;
           result.identityEvidence = trustedEvidence?.accepted
@@ -3618,6 +3641,9 @@ class RoonClient extends EventEmitter {
     const entry = this.exactQueueActions?.get(queueToken);
     if (!entry) throw new Error("Stored Roon action expired; resolve the saved TIDAL identity again.");
     if (mode !== "append") throw new Error("Stored Roon actions require append mode.");
+    if (this.bandcampAvailabilityGuard && !(await this.bandcampAvailabilityGuard(entry.track))) {
+      throw new Error("TIDAL availability could not be reconfirmed for this Bandcamp-analyzed track. It was not queued.");
+    }
     const result = await this.performSearchAction({ ...entry.track, verifiedQueueToken: queueToken }, zoneId, "queue");
     if (result.success) this.emit?.("trackQueued", entry.track);
     return result;
@@ -3664,6 +3690,7 @@ class RoonClient extends EventEmitter {
     const bridgePending = [];
     const searchOptions = {
       preferExtendedMixes: shouldPreferExtendedMixes(options),
+      ...(options.requireNextAction ? { requireNextAction: true } : {}),
       ...(options.matchPolicy ? { matchPolicy: options.matchPolicy } : {}),
       ...(options.allowBridge && !bulkBridge ? { allowBridge: true } : {})
     };
@@ -3679,6 +3706,9 @@ class RoonClient extends EventEmitter {
       const { track, isAlternate } = request;
       const mode = options.mode === "next" ? "next" : (appendOnly ? "queue" : (sentAny ? "queue" : "play"));
       try {
+        if (this.bandcampAvailabilityGuard && !(await this.bandcampAvailabilityGuard(track))) {
+          throw new Error("TIDAL availability could not be reconfirmed for this Bandcamp-analyzed track. It was not queued.");
+        }
         options.onQueueStart?.(track, index);
         const lookupStarted = Date.now();
         const result = await this.performSearchAction(track, zoneId, mode, searchOptions);
@@ -3717,7 +3747,7 @@ class RoonClient extends EventEmitter {
             track,
             isAlternate,
             reason: result.reason || "No usable Roon action.",
-            failureType: result.failureType, resolved: result.resolved, bridge: result.bridge, directFailure: result.directFailure, identityEvidence: result.identityEvidence, resolutionMethod: result.resolutionMethod, albumFallback: result.albumFallback, attempts: result.attempts, elapsedMs: result.elapsedMs,
+            failureType: result.failureType, resolved: result.resolved, queueAttemptedAt: result.queueAttemptedAt || "", queueOutcomeUncertain: Boolean(result.queueOutcomeUncertain), bridge: result.bridge, directFailure: result.directFailure, identityEvidence: result.identityEvidence, resolutionMethod: result.resolutionMethod, albumFallback: result.albumFallback, attempts: result.attempts, elapsedMs: result.elapsedMs,
             match: result.match ? itemSummary(result.match) : null,
             actions: result.actions || []
           };
@@ -3730,7 +3760,7 @@ class RoonClient extends EventEmitter {
           options.onQueueResult?.(index, false);
         }
       } catch (error) {
-        failed.push({ index, track, reason: error.message });
+        failed.push({ index, track, reason: error.message, resolved: Boolean(error.resolved), queueAttemptedAt: error.queueAttemptedAt || "", queueOutcomeUncertain: Boolean(error.queueOutcomeUncertain) });
         options.onQueueResult?.(index, false);
       }
     }

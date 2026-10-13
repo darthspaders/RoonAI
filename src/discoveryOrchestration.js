@@ -15,6 +15,7 @@ function createDiscoveryOrchestration({
   mergeTrackLists,
   queryYieldTracker,
   recommendationV2Reranker = null,
+  catalogScoutObserver = null,
   selectDiscoveryLaneCandidates,
   shouldContinueAutoBroadenAfterError,
   tasteProfile,
@@ -327,6 +328,15 @@ function createDiscoveryOrchestration({
     if (!originalPool.length) return result;
 
     let pool = originalPool;
+    let catalogScouts = null;
+    if (typeof catalogScoutObserver === "function") {
+      try {
+        const observed = catalogScoutObserver(JSON.parse(JSON.stringify(originalPool)), { options: JSON.parse(JSON.stringify(options)), requestedCount })?.diagnostics;
+        catalogScouts = observed ? { ...observed, mode: observed.mode === "off" ? "off" : "observe", applied: false, productionApplied: false, productionPromotionAllowed: false } : null;
+      } catch {
+        catalogScouts = { mode: "observe", applied: false, productionApplied: false, fallback: true, reason: "scout-observation-unavailable" };
+      }
+    }
     let recommendationV2 = {
       enabled: false,
       invoked: false,
@@ -383,6 +393,7 @@ function createDiscoveryOrchestration({
         ...(result.verification || {}),
         laneQuotas: selection.quota,
         recommendationV2,
+        ...(catalogScouts ? { catalogScouts } : {}),
         perRunArtistCap: defaultPerRunArtistCap(options, profile, requestedCount),
         ...(diagnostics ? {
           poolDiagnostics: {

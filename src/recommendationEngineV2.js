@@ -22,6 +22,7 @@ const {
 const { matchBeatportVersionToTidal } = require("./beatportVersionMatch");
 const { explicitTidalTrackId, tidalTrackIdFromUrl } = require("./tidalIdentity");
 const { scoreTidalIdentity } = require("./exactTrackVerification");
+const { storedSonicIdentityMatches } = require("./sonicProfileIdentity");
 
 function cleanText(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -117,7 +118,9 @@ class RecommendationEngineV2 {
     this.sonicNeighborSecondStageConfig = mergeSecondStageConfig(sonicNeighborSecondStageConfig);
     this.store = new SonicEmbeddingStore({ enabled: this.enabled, dbFile, logger });
     const providerName = String(embeddingProvider || "spectral-baseline").trim().toLowerCase();
-    this.provider = embeddingProviderInstance || (providerName === "discogs-effnet" || providerName === "essentia"
+    this.provider = embeddingProviderInstance || (providerName === "mert-fullsong"
+      ? new (require("./sonicFullSongProvider").SonicFullSongProvider)({ timeoutMs: embeddingTimeoutMs })
+      : providerName === "discogs-effnet" || providerName === "essentia"
       ? new EssentiaDiscogsEffNetProvider({
           ...essentia,
           modelVersion: essentia.modelVersion || embeddingModelVersion,
@@ -204,6 +207,12 @@ class RecommendationEngineV2 {
   }
 
   async generateSonicNeighborCandidatesAsync(input = {}) {
+    const options = this.sonicNeighborCandidateOptions(input).input;
+    if (this.prepareReviewAnchor && options.model === this.provider.name && options.modelVersion === this.provider.modelVersion) {
+      for (const anchor of input.anchors || [input.anchor || input.track || input.reference]) {
+        if (anchor && !this.findStoredSonicProfile(anchor, { ...options, allowVersionProxy: false })) await this.prepareReviewAnchor(anchor);
+      }
+    }
     return generateSonicNeighborCandidatesAsync(this.sonicNeighborCandidateOptions(input));
   }
 
@@ -543,19 +552,23 @@ class RecommendationEngineV2 {
     };
   }
 
-  findStoredSonicProfile(track, { model = "", modelVersion = "" } = {}) {
+  findStoredSonicProfile(track, { model = "", modelVersion = "", allowVersionProxy = true } = {}) {
+    // Raw proof-of-concept lookup remains compatible. Coverage and Sonic Review
+    // explicitly request recording-level identity with allowVersionProxy:false.
     if (!this.enabled) return null;
-    return this.store.getEmbedding(track, {
+    const stored = this.store.getEmbedding(track, {
       model: cleanText(model) || this.provider.name,
       modelVersion: cleanText(modelVersion) || this.provider.modelVersion
     });
+    return allowVersionProxy === false && !storedSonicIdentityMatches(stored, track) ? null : stored;
   }
 
   async prepareSonicAnchor(reference, options = {}) {
     if (!this.enabled) throw new Error("Recommendation Engine v2 is disabled. Set RABBIT_HOLE_RECOMMENDATION_V2_ENABLED=true for the proof of concept.");
     const model = cleanText(options.model || options.provider) || this.provider.name;
     const modelVersion = cleanText(options.modelVersion) || this.provider.modelVersion;
-    const existing = this.findStoredSonicProfile(reference, { model, modelVersion });
+    if (model !== this.provider.name || modelVersion !== this.provider.modelVersion) throw new Error("Requested embedding model/version differs from the active provider. Historical vectors are read-only.");
+    const existing = this.findStoredSonicProfile(reference, { model, modelVersion, allowVersionProxy: options.allowVersionProxy });
     if (existing && (!options.requireValidEmbedding || require("./sonicCoverageIdentity").validCoverageEmbedding(existing))) {
       return {
         ok: true,
@@ -612,8 +625,17 @@ class RecommendationEngineV2 {
       });
       const stored = this.findStoredSonicProfile(result.identityKey || track, {
         model: result.model || model,
-        modelVersion: result.modelVersion || modelVersion
+        modelVersion: result.modelVersion || modelVersion,
+        allowVersionProxy: options.allowVersionProxy
       });
+      // Audio-hash reuse can return an older profile without replacing its
+      // metadata. A strict preparation must also validate the persisted result.
+      if (options.allowVersionProxy === false && !storedSonicIdentityMatches(stored, canonicalTrack)) {
+        const error = new Error("Stored sonic profile has no verified recording identity after strict preparation.");
+        error.statusCode = 422;
+        error.identityDiagnostics = { failureType: "UNSAFE_PROXY", identityRules: ["stored-sonic-provenance-unverified"] };
+        throw error;
+      }
       return {
         ok: true,
         ready: Boolean(stored),
@@ -647,6 +669,7 @@ class RecommendationEngineV2 {
     const supplied = reference && typeof reference === "object" ? { ...reference } : {};
     const textReference = typeof reference === "string" ? reference.trim() : "";
     const tidalId = explicitTidalTrackId(supplied)
+      || cleanText(supplied.identityKey || textReference).match(/^tidal:(\d+)$/i)?.[1]
       || tidalTrackIdFromUrl(supplied.tidalUrl || supplied.tidal_url || supplied.tidal?.url || "")
       || tidalTrackIdFromUrl(textReference)
       || (/^\d+$/.test(textReference) ? textReference : "");
@@ -832,6 +855,43 @@ class RecommendationEngineV2 {
   }
 
   async analyzeBeatportPreviewForTidalTrack(reference, options = {}) {
+    // Retain the public method for old clients. Only source-acquisition misses
+    // qualify; identity/API/inference failures must not create fallback traffic.
+    try { return await this.analyzeBeatportSource(reference, this.bandcamp ? { ...options, allowVersionProxy: false } : options); }
+    catch (error) {
+      if (!this.bandcamp) throw error;
+      if (!error.bandcampEligible) {
+        if (error.beatportAcquisition) this.bandcamp.record(reference, "BEATPORT_ERROR");
+        throw error;
+      }
+      return this.analyzeBandcampSource(reference, options);
+    }
+  }
+
+  async analyzeBandcampSource(reference, options = {}) {
+    const track = await this.resolveTidalTrackReference(reference);
+    const cached = this.findStoredSonicProfile(track);
+    if (cached && !options.analysisHandler) return { cached: true, profile: cached, tidal: track, sourceProvider: cached.track?.metadata?.sourceProvider || "stored", match: { relation: "exact" } };
+    const acquired = await this.bandcamp.acquire(track);
+    try {
+      const analyze = options.analysisHandler || this.sonic.analyzeBufferAsync.bind(this.sonic);
+      const tidalId = explicitTidalTrackId(track);
+      const result = await analyze(acquired.buffer, { ...track, identityKey: `tidal:${tidalId}` }, {
+        sourceType: "bandcamp-stream", metadata: { sourceProvider: "bandcamp", sourceTrackId: acquired.source.id,
+          sourcePage: acquired.source.pageUrl, sourceVersion: acquired.source.title, sourceSha256: acquired.sha256,
+          canonicalProvider: "tidal", canonicalTrackId: tidalId, identityRelation: "exact",
+          identityReasons: ["exact-credits-version-duration-and-release"], eligibility: acquired.eligibility,
+          previewBytes: acquired.buffer.length, previewDurationMs: acquired.source.durationMs, partialPreview: true,
+          analysisNote: "Available Bandcamp stream; the selected model still analyzes its configured excerpt, not necessarily the full song." }
+      });
+      this.bandcamp.record(track, "ANALYZED", { sourceTrackId: acquired.source.id, sourcePage: acquired.source.pageUrl });
+      return { ...result, sourceProvider: "bandcamp", relation: "exact", match: { relation: "exact" }, tidal: track,
+        bandcamp: { id: acquired.source.id, pageUrl: acquired.source.pageUrl } };
+    } catch (error) { this.bandcamp.record(track, "ANALYSIS_FAILED"); throw error; }
+    finally { acquired.buffer.fill(0); }
+  }
+
+  async analyzeBeatportSource(reference, options = {}) {
     if (!this.enabled) throw new Error("Recommendation Engine v2 is disabled. Set RABBIT_HOLE_RECOMMENDATION_V2_ENABLED=true for the proof of concept.");
     if (!this.beatport || typeof this.beatport.findTrack !== "function" || typeof this.beatport.fetchPreviewBuffer !== "function") {
       throw new Error("Beatport is not connected to Recommendation Engine v2.");
@@ -846,10 +906,15 @@ class RecommendationEngineV2 {
       tidalTrack.beatport?.id ||
       metadataBeatport.id
     );
-    const beatportTrack = await this.beatport.findTrack(tidalTrack, { beatportTrackId: requestedBeatportTrackId });
+    const allowVersionProxy = options.allowVersionProxy !== false;
+    const beatportTrack = await this.beatport.findTrack(tidalTrack, {
+      beatportTrackId: requestedBeatportTrackId,
+      allowVersionProxy
+    }).catch(error => { error.beatportAcquisition = true; throw error; });
     if (!beatportTrack) {
       const error = new Error("Beatport returned no candidate for the TIDAL track.");
       error.statusCode = 404;
+      error.bandcampEligible = true;
       error.identityDiagnostics = beatportIdentityDiagnostics({
         tidalTrack,
         requestedBeatportTrackId,
@@ -858,12 +923,13 @@ class RecommendationEngineV2 {
       throw error;
     }
     const match = matchBeatportVersionToTidal(tidalTrack, beatportTrack, {
-      allowVersionProxy: options.allowVersionProxy !== false,
+      allowVersionProxy,
       requestedBeatportTrackId
     });
     if (!match.matched) {
       const error = new Error(`Beatport candidate was rejected: ${match.reasons.join("; ")}`);
       error.statusCode = 422;
+      error.bandcampEligible = true;
       error.match = match;
       error.tidalTrack = tidalTrack;
       error.beatportTrack = beatportTrack;
@@ -877,13 +943,18 @@ class RecommendationEngineV2 {
       throw error;
     }
 
-    const streamed = await this.beatport.fetchPreviewBuffer(beatportTrack, options);
+    const streamed = await this.beatport.fetchPreviewBuffer(beatportTrack, options).catch(error => {
+      error.beatportAcquisition = true;
+      error.bandcampEligible = [404, 410].includes(Number(error.statusCode));
+      throw error;
+    });
     let audioBuffer = streamed.buffer;
     try {
       const tidalId = explicitTidalTrackId(tidalTrack);
       // Learned extraction blocks in FFmpeg/Essentia child processes. Every
       // preview caller, including live observation, must keep it off Roon's thread.
-      const backgroundExtraction = options.backgroundExtraction === true || this.provider instanceof EssentiaDiscogsEffNetProvider;
+      const backgroundExtraction = options.backgroundExtraction === true || this.provider instanceof EssentiaDiscogsEffNetProvider
+        || typeof this.provider.extractBufferAsync === "function";
       const analyzeBuffer = typeof options.analysisHandler === "function" ? options.analysisHandler : backgroundExtraction
         ? this.sonic.analyzeBufferAsync.bind(this.sonic) : this.sonic.analyzeBuffer.bind(this.sonic);
       const result = await analyzeBuffer(audioBuffer, {

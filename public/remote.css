@@ -13,6 +13,9 @@
   --remote-radius: 18px;
   --remote-light: rgba(255, 245, 255, 0.12);
   --remote-shadow-deep: rgba(0, 0, 0, 0.48);
+  --remote-touch-target: 48px;
+  --remote-utility-gap: 8px;
+  --remote-clock-green: #51ee83;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -37,6 +40,11 @@
 .rabbitRemotePage button,
 .rabbitRemotePage input {
   font: inherit;
+}
+
+/* Keep the fixed rating sheet anchored to the fullscreen viewport. */
+:root:fullscreen .rabbitRemotePage.rabbitRemoteSheetOpen {
+  perspective: none;
 }
 
 .rabbitRemotePage button {
@@ -89,6 +97,141 @@
   min-height: 100svh;
   margin: 0 auto;
   padding: calc(8px + env(safe-area-inset-top)) 18px calc(24px + env(safe-area-inset-bottom));
+}
+
+.rabbitRemoteUtilities {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  justify-items: end;
+  gap: var(--remote-utility-gap);
+  margin-bottom: var(--remote-utility-gap);
+}
+
+.rabbitRemoteClock {
+  justify-self: start;
+  display: flex;
+  gap: 4px;
+  color: var(--remote-clock-green);
+  filter: drop-shadow(0 0 3px rgba(81, 238, 131, .2));
+}
+
+.rabbitRemoteDigit { width: clamp(22px, 7.5vw, 32px); height: 52px; }
+.rabbitRemoteColon { width: 9px; height: 52px; }
+.rabbitRemoteClockDetails {
+  grid-column: 1 / -1;
+  justify-self: stretch;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  color: var(--remote-clock-green);
+  font: 500 1rem/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.rabbitRemoteDate { white-space: nowrap; }
+.rabbitRemoteWeather { min-width: 0; }
+.rabbitRemoteWeather summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+}
+.rabbitRemoteWeather summary::-webkit-details-marker { display: none; }
+.rabbitRemoteWeather summary::after { content: "⌄"; font-size: .85rem; }
+.rabbitRemoteWeather summary:focus-visible { outline: 2px solid var(--remote-clock-green); outline-offset: 3px; }
+.rabbitRemoteWeatherIcon { width: 22px; height: 22px; flex: 0 0 22px; }
+.rabbitRemoteWeatherSettings {
+  padding: 12px;
+  border: 1px solid var(--remote-line);
+  border-radius: 12px;
+  background: var(--remote-bg);
+  font: .85rem/1.45 Inter, ui-sans-serif, system-ui, sans-serif;
+  color: var(--remote-muted);
+}
+.rabbitRemoteWeatherSettings p { margin: 0 0 10px; }
+.rabbitRemoteWeatherSettings button { min-height: 44px; padding: 8px 12px; }
+.rabbitRemoteWeatherSettings a { display: block; margin-top: 10px; color: var(--remote-clock-green); }
+
+/* One small, bounded canvas. Text remains in the accessible DOM underneath it. */
+.rabbitRemoteMatrixCanvas {
+  position: absolute;
+  inset: 0 auto auto 0;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: 7px;
+}
+.rabbitRemoteUtilities > :not(canvas) { position: relative; z-index: 1; }
+.rabbitRemoteMatrixMode { row-gap: 0; }
+.rabbitRemoteMatrixMode .rabbitRemoteClock {
+  width: clamp(145px, 50vw, 270px);
+  height: 64px;
+  opacity: 0;
+}
+.rabbitRemoteMatrixMode .rabbitRemoteClockDetails {
+  grid-column: 1;
+  width: clamp(145px, 50vw, 270px);
+  gap: 0;
+}
+.rabbitRemoteMatrixMode .rabbitRemoteDate,
+.rabbitRemoteMatrixMode .rabbitRemoteWeather summary {
+  color: transparent;
+  font: 900 26px/1.2 Arial, sans-serif;
+  padding: 0 9px;
+}
+.rabbitRemoteMatrixMode .rabbitRemoteWeather summary { min-height: 44px; padding-right: 20px; position: relative; font-size: 22px; }
+.rabbitRemoteMatrixMode .rabbitRemoteDate { min-height: 32px; }
+.rabbitRemoteMatrixMode .rabbitRemoteWeatherIcon { display: none; }
+.rabbitRemoteMatrixMode .rabbitRemoteWeather summary::after { color: var(--remote-clock-green); position: absolute; right: 5px; }
+.rabbitRemoteMatrixMode .rabbitRemoteWeatherSettings { width: min(330px, calc(100vw - 36px)); }
+
+@media (max-width: 340px) {
+  .rabbitRemoteDigit { height: 44px; }
+  .rabbitRemoteColon { height: 44px; }
+}
+
+.rabbitRemoteFullscreenToggle {
+  min-height: var(--remote-touch-target);
+  max-width: 100%;
+  padding: 8px 14px;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.rabbitRemoteFullscreenToggle[aria-pressed="true"] {
+  color: var(--remote-accent);
+  border-color: var(--remote-line-strong);
+}
+
+.rabbitRemoteFullscreenToggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  transform: none;
+}
+
+.rabbitRemoteFullscreenToggle[aria-busy="true"] {
+  cursor: wait;
+}
+
+.rabbitRemoteFullscreenStatus {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--remote-danger);
+  font-size: 0.84rem;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.rabbitRemoteWakeLockStatus {
+  grid-column: 1 / -1;
+  max-width: 100%;
+  margin: 0;
+  color: var(--remote-muted);
+  font-size: 0.84rem;
+  line-height: 1.4;
+  text-align: right;
 }
 
 .rabbitRemoteStage {
@@ -366,13 +509,19 @@
   justify-content: center;
 }
 
-.rabbitRemoteRatingBackdrop {
+.rabbitRemoteRatingBackdrop,
+:root:fullscreen .rabbitRemoteRatingBackdrop {
   position: absolute;
   inset: 0;
   width: 100%;
   border: 0;
   border-radius: 0;
   background: rgba(3, 3, 8, 0.76);
+}
+
+:root:fullscreen .rabbitRemoteRatingBackdrop {
+  box-shadow: none;
+  transform: none;
 }
 
 .rabbitRemoteRatingPanel {

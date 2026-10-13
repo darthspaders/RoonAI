@@ -9,7 +9,7 @@ const FEED_SOURCES = Object.freeze({
 const validZoneId = value => typeof value === "string" && /^[a-f0-9]{20,128}$/i.test(value);
 
 function createHQPlayerZoneGuard(getRoonState = () => ({ connected: false, zones: [] })) {
-  return async (zoneId, settings = {}) => {
+  return async (zoneId, settings = {}, options = {}) => {
     if (!validZoneId(zoneId) || zoneId !== settings.zoneId || !validZoneId(settings.outputId)) {
       throw Error("Choose the configured Roon HQPlayer zone for the music analysis feed.");
     }
@@ -19,7 +19,12 @@ function createHQPlayerZoneGuard(getRoonState = () => ({ connected: false, zones
     if (!zone || !Array.isArray(zone.outputs) || zone.outputs.length !== 1 || zone.outputs[0]?.output_id !== settings.outputId) {
       throw Error("The configured Roon HQPlayer output is unavailable or grouped. Choose its original zone.");
     }
-    if (zone.state !== "playing") throw Error("Play music in the configured Roon HQPlayer zone before starting visuals.");
+    const inactive = options?.allowInactive === true && ["paused", "loading", "stopped"].includes(zone.state);
+    if (zone.state !== "playing" && !inactive) {
+      // Diagnostic state is an enum only; never expose arbitrary transport data.
+      const zoneState = ["playing", "paused", "loading", "stopped"].includes(zone.state) ? zone.state : "unknown";
+      throw Object.assign(Error("Play music in the configured Roon HQPlayer zone before starting visuals."), { zoneState });
+    }
     // Return only the facts the adapter needs, never signed source/queue data.
     return { zone_id: zone.zone_id, state: zone.state, outputs: [{ output_id: zone.outputs[0].output_id }] };
   };
@@ -43,6 +48,12 @@ function createFeedMux(entries = []) {
     return results.filter(result => result.status === "fulfilled").flatMap(result => result.value || []);
   };
   const audioFeed = {
+    setVisualDelayMs(delayMs) {
+      const { validateDelayMs } = require("./soundSpectrumPcmDelay");
+      validateDelayMs(delayMs);
+      for (const entry of feeds.values()) if (typeof entry.audioFeed.setVisualDelayMs !== "function") throw Error("The shared visual delay adapter is unavailable.");
+      for (const entry of feeds.values()) entry.audioFeed.setVisualDelayMs(delayMs);
+    },
     async inspect(refresh) {
       return settle(async (id, entry) => {
         const input = await entry.audioFeed.inspect(refresh);

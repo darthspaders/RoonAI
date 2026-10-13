@@ -1,5 +1,8 @@
 # The Rabbit Hole
 
+Current source/activation handoff: [October 2026 update](docs/october-2026-update.md).
+This supersedes older current-status claims below; historical details remain for context.
+
 Rabbit Hole is a local music discovery and playback assistant for **Roon and
 Lyrion Music Server (LMS)**. Run it on your network and open its browser interface
 at `http://localhost:3777`, or use your server's LAN address from a tablet.

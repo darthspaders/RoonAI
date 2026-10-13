@@ -781,7 +781,7 @@ class BeatportClient {
       : null;
   }
 
-  async findTrack(track = {}, { beatportTrackId = "" } = {}) {
+  async findTrack(track = {}, { beatportTrackId = "", allowVersionProxy = true } = {}) {
     this.lastIdentityDiagnostics = null;
     const requestedId = firstText(
       beatportTrackId,
@@ -789,10 +789,11 @@ class BeatportClient {
       track.beatportId,
       track.beatport?.id
     );
+    const matchOptions = { requestedBeatportTrackId: requestedId, allowVersionProxy: allowVersionProxy !== false };
     if (requestedId) {
       const byId = await this.getTrackById(requestedId);
       if (byId) {
-        const ranked = rankBeatportCandidates(track, [byId], { requestedBeatportTrackId: requestedId });
+        const ranked = rankBeatportCandidates(track, [byId], matchOptions);
         if (ranked.best) return ranked.best;
       }
     }
@@ -806,8 +807,9 @@ class BeatportClient {
         if (normalized.title || normalized.artist) {
           const requestedIsrc = isrc;
           const normalizedIsrc = cleanText(normalized.isrc).replace(/[^a-z0-9]/gi, "").toUpperCase();
-          if (requestedIsrc && requestedIsrc === normalizedIsrc) return normalized;
-          const ranked = rankBeatportCandidates(track, [normalized], { requestedBeatportTrackId: requestedId });
+          // Strict recording callers must also validate descriptors on ISRC results.
+          if (matchOptions.allowVersionProxy && requestedIsrc && requestedIsrc === normalizedIsrc) return normalized;
+          const ranked = rankBeatportCandidates(track, [normalized], matchOptions);
           if (ranked.best) return ranked.best;
         }
         const trackId = beatportTrackIdFromUrl(exact.store_url);
@@ -816,8 +818,8 @@ class BeatportClient {
           const detailNormalized = normalizeBeatportTrack(detail || {});
           if (detailNormalized.title || detailNormalized.artist) {
             const detailIsrc = cleanText(detailNormalized.isrc).replace(/[^a-z0-9]/gi, "").toUpperCase();
-            if (isrc && isrc === detailIsrc) return detailNormalized;
-            const ranked = rankBeatportCandidates(track, [detailNormalized], { requestedBeatportTrackId: requestedId });
+            if (matchOptions.allowVersionProxy && isrc && isrc === detailIsrc) return detailNormalized;
+            const ranked = rankBeatportCandidates(track, [detailNormalized], matchOptions);
             if (ranked.best) return ranked.best;
           }
         }
@@ -839,7 +841,7 @@ class BeatportClient {
     const candidates = [];
     const seenCandidates = new Set();
     const attemptedSearches = [];
-    let ranked = rankBeatportCandidates(track, [], { requestedBeatportTrackId: requestedId });
+    let ranked = rankBeatportCandidates(track, [], matchOptions);
     outer:
     for (const plan of queryPlans) {
       const maxPages = plan.label === "artist-title" ? this.maxSearchPages : 1;
@@ -862,7 +864,7 @@ class BeatportClient {
             candidates.push(candidate);
           }
         }
-        ranked = rankBeatportCandidates(track, candidates, { requestedBeatportTrackId: requestedId });
+        ranked = rankBeatportCandidates(track, candidates, matchOptions);
         if (ranked.best) break outer;
       }
     }

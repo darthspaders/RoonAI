@@ -54,6 +54,7 @@ function readSonicNeighborFeedbackEmbeddings(db, { model = "discogs-effnet", mod
         COUNT(*) AS review_count
       FROM track_sonic_profile tsp
       JOIN sonic_neighbor_feedback snf ON snf.candidate_identity_key = tsp.identity_key
+       AND snf.model = tsp.model AND snf.model_version = tsp.model_version
       LEFT JOIN track_identity ti ON ti.identity_key = tsp.identity_key
       LEFT JOIN beatport_enrichment be ON be.track_identity_id = ti.id
       WHERE tsp.model = ? AND tsp.model_version = ?

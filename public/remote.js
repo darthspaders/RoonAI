@@ -24,6 +24,143 @@
 
   const $ = (selector) => document.querySelector(selector);
 
+  const FULLSCREEN_UNAVAILABLE = "Fullscreen is unavailable in this browser.";
+  let fullscreenBusy = false;
+  const screenWake = { sentinel: null, pending: null, epoch: 0, eligible: false, attempted: false, pageActive: true };
+
+  function wakeLockEligible() {
+    return screenWake.pageActive && document.visibilityState === "visible" && Boolean(document.fullscreenElement);
+  }
+
+  function setWakeLockStatus(message, state = "") {
+    const status = $("#remoteWakeLockStatus");
+    if (!status) return;
+    if (status.textContent !== message) status.textContent = message;
+    status.dataset.state = state;
+    status.hidden = !message;
+  }
+
+  async function releaseScreenWake(sentinel) {
+    if (!sentinel || sentinel.released) return;
+    // The standard release() promise resolves; tolerate a browser failure
+    // without leaking a rejection or creating an automatic retry loop.
+    try { await sentinel.release(); } catch {}
+  }
+
+  function syncScreenWake() {
+    const eligible = wakeLockEligible();
+    if (eligible !== screenWake.eligible) {
+      screenWake.eligible = eligible;
+      screenWake.epoch++;
+      screenWake.attempted = false;
+    }
+    if (!eligible) {
+      const sentinel = screenWake.sentinel;
+      screenWake.sentinel = null;
+      void releaseScreenWake(sentinel);
+      setWakeLockStatus("");
+      return;
+    }
+    if (screenWake.sentinel || screenWake.pending || screenWake.attempted) return;
+    // One attempt per visible fullscreen period. A denial or OS release waits
+    // for a new visibility/fullscreen transition instead of retrying in place.
+    screenWake.attempted = true;
+    if (window.isSecureContext !== true) {
+      setWakeLockStatus("Screen may sleep: keep-awake needs a secure connection.", "unavailable");
+      return;
+    }
+    if (typeof navigator === "undefined" || typeof navigator.wakeLock?.request !== "function") {
+      setWakeLockStatus("Screen may sleep: keep-awake is unavailable in this browser.", "unavailable");
+      return;
+    }
+    const request = { epoch: screenWake.epoch };
+    screenWake.pending = request;
+    setWakeLockStatus("Requesting keep-awake...", "pending");
+    void (async () => {
+      try {
+        const sentinel = await navigator.wakeLock.request("screen");
+        if (request.epoch !== screenWake.epoch || !wakeLockEligible()) {
+          await releaseScreenWake(sentinel);
+          return;
+        }
+        if (sentinel.released) {
+          setWakeLockStatus("Screen may sleep: keep-awake was released.", "released");
+          return;
+        }
+        screenWake.sentinel = sentinel;
+        sentinel.addEventListener("release", () => {
+          if (screenWake.sentinel !== sentinel) return;
+          screenWake.sentinel = null;
+          if (wakeLockEligible()) setWakeLockStatus("Screen may sleep: keep-awake was released.", "released");
+          else setWakeLockStatus("");
+        });
+        // Keep successful acquisition quiet; report only pending/failure states.
+        setWakeLockStatus("", "active");
+      } catch {
+        if (request.epoch === screenWake.epoch && wakeLockEligible()) {
+          setWakeLockStatus("Screen may sleep: keep-awake request was declined.", "declined");
+        }
+      } finally {
+        if (screenWake.pending === request) screenWake.pending = null;
+        // A new eligible period may have started while the old request awaited
+        // permission. Dispose of its result before requesting for the new one.
+        if (request.epoch !== screenWake.epoch) syncScreenWake();
+      }
+    })();
+  }
+
+  function fullscreenSupported() {
+    const canExit = typeof document.exitFullscreen === "function";
+    if (document.fullscreenElement) return canExit;
+    return canExit && document.fullscreenEnabled !== false
+      && typeof document.documentElement.requestFullscreen === "function";
+  }
+
+  function setFullscreenStatus(message) {
+    const status = $("#remoteFullscreenStatus");
+    if (!status) return;
+    status.textContent = message;
+    status.hidden = !message;
+  }
+
+  function syncFullscreenButton() {
+    const button = $("#remoteFullscreenToggle");
+    if (!button) return;
+    const active = Boolean(document.fullscreenElement);
+    const supported = fullscreenSupported();
+    const label = active ? "Exit fullscreen" : "Enter fullscreen";
+    button.textContent = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-pressed", String(active));
+    button.setAttribute("aria-busy", String(fullscreenBusy));
+    button.title = supported ? label : FULLSCREEN_UNAVAILABLE;
+    button.disabled = fullscreenBusy || !supported;
+    if (!supported) setFullscreenStatus(FULLSCREEN_UNAVAILABLE);
+  }
+
+  async function toggleFullscreen() {
+    if (fullscreenBusy) return;
+    if (!fullscreenSupported()) {
+      syncFullscreenButton();
+      return;
+    }
+    const exiting = Boolean(document.fullscreenElement);
+    fullscreenBusy = true;
+    setFullscreenStatus("");
+    syncFullscreenButton();
+    try {
+      // Include the rating sheet, which is a sibling of the main shell.
+      if (exiting) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch {
+      setFullscreenStatus(`Could not ${exiting ? "exit" : "enter"} fullscreen. Try again or use your browser's fullscreen control.`);
+    } finally {
+      fullscreenBusy = false;
+      syncFullscreenButton();
+      syncScreenWake();
+    }
+  }
+
   function cleanText(value) {
     return String(value ?? "").replace(/\s+/g, " ").trim();
   }
@@ -384,6 +521,17 @@
     }
   }
 
+  $("#remoteFullscreenToggle")?.addEventListener("click", toggleFullscreen);
+  document.addEventListener("fullscreenchange", () => {
+    setFullscreenStatus("");
+    syncFullscreenButton();
+    syncScreenWake();
+  });
+  document.addEventListener("fullscreenerror", () => {
+    setFullscreenStatus("Fullscreen could not be changed. Try again or use your browser's fullscreen control.");
+    syncFullscreenButton();
+  });
+
   $("#remoteRatingTrigger")?.addEventListener("click", () => setRatingSheet(true));
   $("#remoteRatingClose")?.addEventListener("click", () => setRatingSheet(false));
   $("#remoteRatingBackdrop")?.addEventListener("click", () => setRatingSheet(false));
@@ -440,9 +588,20 @@
     if (Date.now() - state.lastEventAt > 15000) refresh().catch(() => {});
   }, 5000);
   document.addEventListener("visibilitychange", () => {
+    syncScreenWake();
     if (!document.hidden) refresh().catch(() => {});
   });
+  window.addEventListener("pagehide", () => {
+    screenWake.pageActive = false;
+    syncScreenWake();
+  });
+  window.addEventListener("pageshow", () => {
+    screenWake.pageActive = true;
+    syncScreenWake();
+  });
 
+  syncFullscreenButton();
+  syncScreenWake();
   render({ connected: false, zones: [] });
   refresh().catch(() => {});
 })();

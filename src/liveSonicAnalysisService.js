@@ -9,6 +9,7 @@ const SONIC_STATUS = Object.freeze({
   READY_BEATPORT_PREVIEW: "READY_BEATPORT_PREVIEW",
   ANALYZING_BEATPORT_PREVIEW: "ANALYZING_BEATPORT_PREVIEW",
   ANALYZED_BEATPORT_PREVIEW: "ANALYZED_BEATPORT_PREVIEW",
+  ANALYZED_BANDCAMP_STREAM: "ANALYZED_BANDCAMP_STREAM",
   NEEDS_LOCAL_FILE: "NEEDS_LOCAL_FILE",
   ANALYSIS_FAILED: "ANALYSIS_FAILED"
 });
@@ -124,7 +125,7 @@ class LiveSonicAnalysisService {
     return {
       enabled: this.enabled,
       autoAnalyze: this.autoAnalyze,
-      policy: LIVE_SONIC_POLICY,
+      policy: this.recommendationEngine?.bandcamp ? "BEATPORT_THEN_EXACT_BANDCAMP" : LIVE_SONIC_POLICY,
       minConfidence: this.minConfidence,
       pending: this.pending.size,
       activeAnalyses: this.activeAnalyses,
@@ -165,12 +166,12 @@ class LiveSonicAnalysisService {
     this.musicMemory?.reconcileReversedRoonTrack?.(track);
     const existing = this.musicMemory?.findSonicAnalysisRequest?.(track);
     if (existing?.status === SONIC_STATUS.NEEDS_LOCAL_FILE) {
-      if (!isRetryableBeatportMiss(existing)) {
+      if (!isRetryableBeatportMiss(existing) && !this.recommendationEngine?.bandcamp) {
         return { skipped: true, status: existing.status, request: existing };
       }
     }
     if (existing?.status === SONIC_STATUS.ANALYSIS_FAILED) {
-      if (isStoredDeterministicBeatportRejection(existing)) {
+      if (isStoredDeterministicBeatportRejection(existing) && !this.recommendationEngine?.bandcamp) {
         const request = this.rememberState(track, {
           status: SONIC_STATUS.NEEDS_LOCAL_FILE,
           policy: LIVE_SONIC_POLICY,
@@ -253,7 +254,12 @@ class LiveSonicAnalysisService {
       );
     }
     const decision = sonicSourceDecision(entry, { minConfidence: this.minConfidence });
-    if (!decision.evidence.available || !this.autoAnalyze || !this.recommendationEngine?.enabled) {
+    const fallbackEligible = Boolean(tidalId && this.recommendationEngine?.bandcamp);
+    if (fallbackEligible) {
+      decision.policy = "BEATPORT_THEN_EXACT_BANDCAMP";
+      decision.requiredSource = "beatport_or_exact_bandcamp_or_verified_local";
+    }
+    if ((!decision.evidence.available && !fallbackEligible) || !this.autoAnalyze || !this.recommendationEngine?.enabled) {
       const request = this.rememberState(track, decision);
       return { ...decision, request, analyzed: false };
     }
@@ -261,11 +267,14 @@ class LiveSonicAnalysisService {
     const existingProfile = this.recommendationEngine.findStoredSonicProfile?.(enrichedTrack);
     if (existingProfile) {
       const cachedMetadata = existingProfile.track?.metadata || {};
+      const cachedBandcamp = cachedMetadata.sourceProvider === "bandcamp";
+      const cachedStatus = cachedBandcamp ? SONIC_STATUS.ANALYZED_BANDCAMP_STREAM : SONIC_STATUS.ANALYZED_BEATPORT_PREVIEW;
       const request = this.rememberState(track, {
         ...decision,
-        status: SONIC_STATUS.ANALYZED_BEATPORT_PREVIEW,
+        status: cachedStatus,
+        sourceAudioType: cachedBandcamp ? "bandcamp_stream" : "beatport_preview",
         sourceMatchType: cleanText(cachedMetadata.identityRelation) || "CACHED_PROFILE",
-        reason: "existing sonic profile found; Beatport preview download and analysis skipped",
+        reason: "existing sonic profile found; source download and analysis skipped",
         fulfilledAt: existingProfile.updatedAt || new Date(Number(this.clock())).toISOString(),
         rawJson: {
           cached: true,
@@ -281,7 +290,8 @@ class LiveSonicAnalysisService {
       });
       return {
         ...decision,
-        status: SONIC_STATUS.ANALYZED_BEATPORT_PREVIEW,
+        status: cachedStatus,
+        sourceAudioType: cachedBandcamp ? "bandcamp_stream" : "beatport_preview",
         analyzed: false,
         cached: true,
         previewDownloaded: false,
@@ -310,7 +320,7 @@ class LiveSonicAnalysisService {
     const analyzing = this.rememberState(track, {
       ...decision,
       status: SONIC_STATUS.ANALYZING_BEATPORT_PREVIEW,
-      reason: "high-confidence Beatport preview queued for live sonic analysis"
+      reason: fallbackEligible ? "Beatport-first source lookup; exact Bandcamp fallback requires TIDAL/Roon availability" : "high-confidence Beatport preview queued for live sonic analysis"
     });
     this.activeAnalyses += 1;
     try {
@@ -330,16 +340,18 @@ class LiveSonicAnalysisService {
           id: decision.beatportTrackId
         }
       });
+      const sourceIsBandcamp = result.sourceProvider === "bandcamp";
+      const completedStatus = sourceIsBandcamp ? SONIC_STATUS.ANALYZED_BANDCAMP_STREAM : SONIC_STATUS.ANALYZED_BEATPORT_PREVIEW;
       const request = this.rememberState(track, {
         ...decision,
-        status: SONIC_STATUS.ANALYZED_BEATPORT_PREVIEW,
-        sourceAudioType: "beatport_preview",
+        status: completedStatus,
+        sourceAudioType: sourceIsBandcamp ? "bandcamp_stream" : "beatport_preview",
         sourceMatchType: result.match?.relation || "HIGH_CONFIDENCE",
-        reason: "live Beatport preview analyzed and embedding persisted",
+        reason: sourceIsBandcamp ? "exact Bandcamp recording analyzed under verified TIDAL identity" : "live Beatport preview analyzed and embedding persisted",
         fulfilledAt: new Date(Number(this.clock())).toISOString(),
         rawJson: result
       });
-      return { ...decision, status: SONIC_STATUS.ANALYZED_BEATPORT_PREVIEW, analyzed: true, result, request };
+      return { ...decision, status: completedStatus, analyzed: true, result, request };
     } catch (error) {
       this.logger?.warn?.(`Live sonic analysis failed for ${trackLabel(track)}: ${error.message}`);
       const deterministicRejection = isDeterministicBeatportRejection(error);

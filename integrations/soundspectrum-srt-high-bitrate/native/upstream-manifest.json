@@ -1,0 +1,71 @@
+{
+  "files": [
+    {
+      "file": "gstsrt.c",
+      "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/1.26.11/subprojects/gst-plugins-bad/ext/srt/gstsrt.c",
+      "sha256": "92b0a6d0dfc21fe14cb29e54850f585816452d3daefc084aa23cb0acee8c0c82"
+    },
+    {
+      "file": "gstsrtelement.c",
+      "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/1.26.11/subprojects/gst-plugins-bad/ext/srt/gstsrtelement.c",
+      "sha256": "62ef611c6fe5a27fc4652802f7553cef5a0c10bd230f4cb868d6eae7d049bc39"
+    },
+    {
+      "file": "gstsrtplugin.c",
+      "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/1.26.11/subprojects/gst-plugins-bad/ext/srt/gstsrtplugin.c",
+      "sha256": "449c5d8ef67ede5e83fa88c60dbd28d34bfda426d8b13b1cdd7b639fa5130214"
+    },
+    {
+      "file": "gstsrtobject.c",
+      "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/1.26.11/subprojects/gst-plugins-bad/ext/srt/gstsrtobject.c",
+      "sha256": "657d60e2c48c4fc35fe7a745abbe18c244a53caf59ecdf6da6bdda91b7a7603a"
+    },
+    {
+      "file": "gstsrtsink.c",
+      "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/1.26.11/subprojects/gst-plugins-bad/ext/srt/gstsrtsink.c",
+      "sha256": "85b9da6413e51da1a08c8cd9a820f306b78c3497f4d9614e2ebf31301d5b43f2"
+    },
+    {
+      "file": "gstsrtsrc.c",
+      "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/1.26.11/subprojects/gst-plugins-bad/ext/srt/gstsrtsrc.c",
+      "sha256": "84f52fa07c06f4bb96d1b7160301652c9a681bdb0acbd83ab2a27bbbc36fdef7"
+    },
+    {
+      "file": "gstsrtelements.h",
+      "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/1.26.11/subprojects/gst-plugins-bad/ext/srt/gstsrtelements.h",
+      "sha256": "52a117537b02a2ba1251a03d32b251006e0feb4f8a679f8c3c1c812052bb70eb"
+    },
+    {
+      "file": "gstsrtsrc.h",
+      "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/1.26.11/subprojects/gst-plugins-bad/ext/srt/gstsrtsrc.h",
+      "sha256": "bd0451d09d1d1437a9d4951c91e834b54ccdcf1297934c1fec19596cb2b58cc5"
+    },
+    {
+      "file": "gstsrtsink.h",
+      "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/1.26.11/subprojects/gst-plugins-bad/ext/srt/gstsrtsink.h",
+      "sha256": "cbe8a4335dd4c54e13c1189cdbfeb9e1657865f3ea42fd662495ea1880b48a3d"
+    },
+    {
+      "file": "gstsrtobject.h",
+      "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/1.26.11/subprojects/gst-plugins-bad/ext/srt/gstsrtobject.h",
+      "sha256": "1e956566b877a38289b00c5a476bc1ccd8b5ca154ab62c9498f0bcb72928114b"
+    },
+    {
+      "file": "gstsrt-enums.h",
+      "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/1.26.11/subprojects/gst-plugins-bad/ext/srt/gstsrt-enums.h",
+      "sha256": "3a515851327317ea873c8b85f00d556b0b5f8d3574504a083c3e385f06cfce03"
+    },
+    {
+      "file": "meson.build",
+      "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/1.26.11/subprojects/gst-plugins-bad/ext/srt/meson.build",
+      "sha256": "066acc4137eba6824919bfd180e4670a1639d17743ce16f2a2ab94402c925f78"
+    },
+    {
+      "file": "COPYING",
+      "url": "https://raw.githubusercontent.com/GStreamer/gstreamer/1.26.11/subprojects/gst-plugins-bad/COPYING",
+      "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+    }
+  ],
+  "project": "GStreamer",
+  "version": "1.26.11"
+}

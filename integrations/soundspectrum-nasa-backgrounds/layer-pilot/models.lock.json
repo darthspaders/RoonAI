@@ -1,0 +1,42 @@
+{
+  "models/da3.safetensors": {
+    "url": "https://huggingface.co/depth-anything/DA3MONO-LARGE/resolve/f465978e618db8cc79c83b8bbf24964857db1875/model.safetensors",
+    "bytes": 1336734448,
+    "sha256": "7a799a7f95eb8d4c404c2ca8be3dc3276b350a417ddc4420db72ba850cc0e960"
+  },
+  "models/sam2.1_hiera_base_plus.pt": {
+    "url": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt",
+    "bytes": 323606802,
+    "sha256": "a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5"
+  },
+  "models/big-lama.pt": {
+    "url": "https://github.com/enesmsahin/simple-lama-inpainting/releases/download/v0.1.0/big-lama.pt",
+    "bytes": 205803670,
+    "sha256": "7ba7aa7ac37a4d41fdbbeba3a2af7ead18058552997e3a3cd1a3b2210c9e6b4c"
+  },
+  "nox/nox.exe": {
+    "url": "https://github.com/charvey2718/nox/releases/download/v1.1.0/nox.exe",
+    "bytes": 40540204,
+    "sha256": "3a1669c535927312c51e91c807eae3436cab2613e55cf5485e6475203ea7f0f1"
+  },
+  "nox/noxGeneratorColor.pb": {
+    "url": "https://github.com/charvey2718/nox/releases/download/v1.1.0/noxGeneratorColor.pb",
+    "bytes": 217783208,
+    "sha256": "d54bdca728d1d6db0b3eef41d4187d327909d1ec5cd2a71485bfa9d7924ba546"
+  },
+  "nox/tensorflow.dll": {
+    "url": "https://github.com/charvey2718/nox/releases/download/v1.1.0/tensorflow.dll",
+    "bytes": 229392384,
+    "sha256": "6c7527427bab32e2684540e681524a129904f34b7380cbdb912b45064314a16f"
+  },
+  "nox/libwinpthread-1.dll": {
+    "url": "https://github.com/charvey2718/nox/releases/download/v1.1.0/libwinpthread-1.dll",
+    "bytes": 93781,
+    "sha256": "e877bb7eb223a6e7693de4c3e38b7127fd48c77d5adf2f4804f9bf6cec1ffc81"
+  },
+  "nox/LICENSE": {
+    "url": "https://raw.githubusercontent.com/charvey2718/nox/5b63bc6/LICENSE",
+    "bytes": 1274,
+    "sha256": "d5d337a7e3102427ff06fc69a51e96ea0e22fce2f1dc8a049b62a103841bbbd4"
+  }
+}

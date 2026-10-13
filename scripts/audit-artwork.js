@@ -1,4 +1,6 @@
 "use strict";
+const bridgeOrigin = process.env.ALBUM_ART_PUBLIC_BASE_URL ? new URL(process.env.ALBUM_ART_PUBLIC_BASE_URL).origin : "http://127.0.0.1:3780";
+const bridgeHost = new URL(bridgeOrigin).hostname;
 const fs=require('node:fs');
 const path=require('node:path');
 const {DatabaseSync}=require('node:sqlite');
@@ -30,7 +32,7 @@ function audit(db) {
       urlHealth:'UNCHECKED',releaseAssociations:latest.map(e=>({provider:e.provider,providerTrackId:e.provider_track_id,providerReleaseId:e.release_id,releaseTitle:e.release_title,snapshotId:e.id,confidence:e.confidence})),
       hasRoonImageKey:observations.has(r.id), historicalArtSnapshots:historyArt.map(e=>({id:e.id,provider:e.provider,releaseId:e.release_id,releaseTitle:e.release_title,url:artwork(e.raw,e.provider)})),
       legacyAlias:aliases.get(r.id)||null,
-      flags:{providerReleaseIdMissing:latest.some(e=>!e.release_id),sourceReleaseTitleDiffers:latest.some(e=>e.release_title&&r.album&&e.release_title.toLowerCase().trim()!==r.album.toLowerCase().trim()),malformedArtworkField:latest.some(e=>[e.raw.imageUrl,e.raw.sourceImageUrl,e.raw.coverUrl,e.raw.artworkUrl].some(u=>u&&!safeImage(u))),cachedImageWithoutOriginal:latest.some(e=>String(e.raw.imageUrl||'').includes('art.darthspader.com')&&!e.raw.sourceImageUrl)},
+      flags:{providerReleaseIdMissing:latest.some(e=>!e.release_id),sourceReleaseTitleDiffers:latest.some(e=>e.release_title&&r.album&&e.release_title.toLowerCase().trim()!==r.album.toLowerCase().trim()),malformedArtworkField:latest.some(e=>[e.raw.imageUrl,e.raw.sourceImageUrl,e.raw.coverUrl,e.raw.artworkUrl].some(u=>u&&!safeImage(u))),cachedImageWithoutOriginal:latest.some(e=>String(e.raw.imageUrl||'').includes(bridgeHost)&&!e.raw.sourceImageUrl)},
       unresolvedRelease:!latest.some(e=>e.release_id)&&!r.albumKey.startsWith('beatport-album:')};
   });
   const groups=new Map();for(const row of rows.filter(r=>r.albumKey)){if(!groups.has(row.albumKey))groups.set(row.albumKey,[]);groups.get(row.albumKey).push(row);}
@@ -38,7 +40,7 @@ function audit(db) {
   return {at:new Date().toISOString(),readOnly:true,counts:{tracks:rows.length,artworkBefore:rows.filter(r=>r.chosenUrl&&!r.recovery).length,missingBefore:rows.filter(r=>!r.chosenUrl||r.recovery).length,repaired:rows.filter(r=>r.recovery).length,cachePrecedenceRepairs:rows.filter(r=>r.projection).length,artworkAfter:rows.filter(r=>r.chosenUrl).length,missingAfter:rows.filter(r=>!r.chosenUrl).length,missingReasons:tally(rows.filter(r=>!r.chosenUrl).map(r=>r.reason)),repairReasons:tally(rows.filter(r=>r.recovery).map(r=>r.reason)),releaseGroups:releases.length,releaseGroupsMissingArtwork:releases.filter(r=>r.missingArtwork).length},rows,releases};
 }
 async function probe(url) {
-  const allowed=['resources.tidal.com','geo-media.beatport.com','i.discogs.com','coverartarchive.org','archive.org','art.darthspader.com'];
+  const allowed=['resources.tidal.com','geo-media.beatport.com','i.discogs.com','coverartarchive.org','archive.org',bridgeHost];
   const permitted=url=>{try{const u=new URL(url);return ['http:','https:'].includes(u.protocol)&&!u.username&&!u.password&&allowed.some(h=>u.hostname===h||u.hostname.endsWith('.'+h));}catch{return false;}};
   if(!permitted(url))return {url,health:'NOT_PROBED',reason:'outside-known-artwork-hosts'};
   let current=url;
@@ -62,7 +64,7 @@ async function main() {
   db.exec('BEGIN');const report=audit(db);db.exec('ROLLBACK');db.close();
   if(args.includes('--probe')) {
     const urls=new Set(report.rows.filter(r=>r.recovery).map(r=>r.chosenUrl));
-    if(args.includes('--probe-bridge'))for(const row of report.rows)if(row.chosenUrl.includes('art.darthspader.com'))urls.add(row.chosenUrl);
+    if(args.includes('--probe-bridge'))for(const row of report.rows)if(row.chosenUrl.includes(bridgeHost))urls.add(row.chosenUrl);
     if(args.includes('--probe-changed'))for(const row of report.rows)if(row.projection){urls.add(row.chosenUrl);urls.add(row.projection.originalUrl);}
     const byHost={};for(const r of report.rows.filter(r=>r.chosenUrl)){const host=new URL(r.chosenUrl).hostname;byHost[host]??=new Set();if(byHost[host].size<12)byHost[host].add(r.chosenUrl);}
     for(const group of Object.values(byHost))for(const url of group)urls.add(url);

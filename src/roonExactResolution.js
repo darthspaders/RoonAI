@@ -40,6 +40,7 @@ function deadline(promise, signal) {
 
 async function resolveOne(row, input, roon, logger) {
   const track = row.track;
+  const actionMode = input.mode === "next" ? "next" : "queue";
   const zoneId = input.zoneId || row.roon?.zoneId || "";
   if (!zoneId) {
     row.status = "ROON_NOT_FOUND";
@@ -56,10 +57,10 @@ async function resolveOne(row, input, roon, logger) {
     const startedAt = new Date().toISOString(), started = Date.now();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    logger({ event: "roon_search_start", tidalTrackId: row.tidalTrackId, title: track.title, startedAt, retryCount, query });
+    logger({ event: "roon_search_start", tidalTrackId: row.tidalTrackId, title: track.title, startedAt, retryCount, query, requestedMode: input.mode || "append", effectiveMode: actionMode === "next" ? "next" : "append" });
     try {
       check = await deadline(roon.canQueueTrack({ ...track, exactVerification: true }, zoneId, {
-        exactVerification: true, exactResolution: true, query, signal: controller.signal, preferExtendedMixes: false
+        exactVerification: true, exactResolution: true, query, signal: controller.signal, preferExtendedMixes: false, mode: actionMode, requireNextAction: input.requireNextAction === true
       }), controller.signal);
     } catch (error) {
       check = { success: false, failureType: controller.signal.aborted || error.code === "ETIMEDOUT" ? "timeout" : "error", reason: error.message };
@@ -73,11 +74,12 @@ async function resolveOne(row, input, roon, logger) {
   const success = Boolean(check?.success);
   // A timeout leaves an unresolved possibility; it must not turn into a definitive miss.
   const failureType = success ? "" : attempts.some(a => a.failureType === "timeout") ? "timeout"
+    : attempts.some(a => a.failureType === "next_action_unavailable") ? "next_action_unavailable"
     : attempts.some(a => a.exactMatchFound) ? "no_queue_action" : attempts.some(a => a.failureType === "version_mismatch") ? "version_mismatch" : check?.failureType || "not_found";
   row.status = success ? "ROON_QUEUEABLE" : failureType === "timeout" ? "ROON_TIMEOUT"
     : failureType === "version_mismatch" ? "ROON_VERSION_MISMATCH" : "ROON_NOT_FOUND";
   row.queueable = success ? true : failureType === "timeout" ? null : false;
-  row.roon = { checked: true, roonResolved: success, queueable: row.queueable, queueToken: check?.queueToken || "", zoneId,
+  row.roon = { checked: true, roonResolved: success, queueable: row.queueable, queueToken: check?.queueToken || "", zoneId, mode: actionMode,
     match: check?.match || null, identityEvidence: check?.identityEvidence || null, failureType,
     resolutionMethod: check?.resolutionMethod || '', albumFallback: check?.albumFallback || null,
     reason: success ? "Exact Roon track and queue action resolved." : failureType === "timeout" ? "At least one bounded Roon lookup timed out; saved TIDAL identity remains retryable." : check?.reason || "No exact Roon match.",
@@ -88,9 +90,10 @@ async function resolveOne(row, input, roon, logger) {
 
 async function resolveVerifiedTracksForRoon(result, input = {}, { roon, logger = () => {}, save = () => {}, bridge }) {
   if (!result?.tracks) throw Object.assign(new Error("No saved exact verification result."), { statusCode: 400 });
+  const actionMode = input.mode === "next" ? "next" : "queue";
   const selectedIds = Array.isArray(input.trackIds) ? new Set(input.trackIds.map(String)) : null;
   const selectRows = () => result.tracks.filter(row => row.tidal?.verified && row.usable && !row.queuedAt && !row.queueAttemptedAt && (!selectedIds || selectedIds.has(String(row.tidalTrackId))) &&
-    !(row.queueable && row.roon?.queueToken && (!input.zoneId || input.zoneId === row.roon.zoneId) && roon.hasVerifiedQueueAction?.(row.roon.queueToken)));
+    !(row.queueable && row.roon?.queueToken && (!input.zoneId || input.zoneId === row.roon.zoneId) && (row.roon.mode || "queue") === actionMode && roon.hasVerifiedQueueAction?.(row.roon.queueToken, { zoneId: input.zoneId || row.roon.zoneId, mode: actionMode, requireNextAction: input.requireNextAction === true })));
   const work = (tails.get(roon) || Promise.resolve()).catch(() => {}).then(async () => {
     const rows = selectRows();
     // Per-track deadlines start here, after waiting for previous resolution work.
@@ -99,12 +102,13 @@ async function resolveVerifiedTracksForRoon(result, input = {}, { roon, logger =
       save(result);
       await resolveOne(row, input, roon, logger);
       if (!row.queueable && input.allowBridge !== false && bridge) {
+        logger({ event: "roon_bridge_start", tidalTrackId: row.tidalTrackId, requestedMode: input.mode || "append", effectiveMode: actionMode === "next" ? "next" : "append" });
         try {
-          const resolved = await bridge.resolve(row, input);
+          const resolved = await bridge.resolve(row, { ...input, mode: actionMode });
           row.bridge = { available: true, state: "TIDAL_VERIFIED_BRIDGE_AVAILABLE", playlistId: resolved.playlistId, title: resolved.title, sync: resolved.sync || null };
           row.status = "TIDAL_VERIFIED_BRIDGE_AVAILABLE";
           row.queueable = true;
-          row.roon = { ...row.roon, directFailureType: row.roon.failureType, failureType: "", queueable: true, roonResolved: true, queueToken: resolved.queueToken, match: resolved.match, reason: "Exact verified bridge track and Roon queue action resolved." };
+          row.roon = { ...row.roon, mode: actionMode, directFailureType: row.roon.failureType, failureType: "", queueable: true, roonResolved: true, queueToken: resolved.queueToken, match: resolved.match, reason: "Exact verified bridge track and Roon queue action resolved." };
         } catch (error) {
           row.status = "TIDAL_VERIFIED_BRIDGE_UNAVAILABLE";
           row.bridge = {
@@ -115,7 +119,7 @@ async function resolveVerifiedTracksForRoon(result, input = {}, { roon, logger =
             requiresManualRefresh: Boolean(error.bridgeSync?.requiresManualRefresh)
           };
         }
-        logger({ event: "roon_bridge_final", tidalTrackId: row.tidalTrackId, finalState: row.status, reason: row.bridge.reason || "", queueTokenCreated: Boolean(row.queueable) });
+        logger({ event: "roon_bridge_final", tidalTrackId: row.tidalTrackId, finalState: row.status, reason: row.bridge.reason || "", queueTokenCreated: Boolean(row.queueable), requestedMode: input.mode || "append", effectiveMode: actionMode === "next" ? "next" : "append" });
       }
       result.roonQueueableCount = result.tracks.filter(row => row.queueable === true).length; save(result);
     }

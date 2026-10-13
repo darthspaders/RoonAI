@@ -95,7 +95,7 @@ test("regular navigation groups Playback, Discover, and Memory views and keeps s
   assert.match(app, /querySelector\("\.appHeader"\)/);
   assert.match(html, /data-nav-item="sonic-review" data-view="sonicReview"/);
   assert.match(html, /id="sonicReviewView" class="view sonicReviewView"/);
-  assert.match(html, /id="sonicReviewView"/);
+  assert.match(app, /sonicReviewProfileDetails/);
   assert.match(app, /function sonicProfileEditorHtml\(/);
   assert.match(app, /function captureSonicReviewDraft\(/);
   assert.match(app, /function restoreSonicReviewDraft\(/);
@@ -106,7 +106,7 @@ test("regular navigation groups Playback, Discover, and Memory views and keeps s
   assert.match(app, /Available Genre\/Subgenre metadata is prefilled below/);
   assert.match(app, /metadataEnrichment: localTrack\.metadataEnrichment \|\| fallback\.metadataEnrichment \|\| null/);
   assert.match(app, /queuePolicy: "strict"/);
-  assert.match(app, /strict TIDAL and Roon verification/);
+  assert.match(app, /strict TIDAL → Roon verification/);
 });
 
 test("Synapse Memory keeps its existing route and identifies its Memory destination", () => {

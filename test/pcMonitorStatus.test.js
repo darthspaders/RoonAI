@@ -68,6 +68,63 @@ test("PC monitor snapshot reports disabled state without fetching", async () => 
   assert.equal(snapshot.error, "PC monitor disabled");
 });
 
+test("PC monitor numeric readings distinguish unavailable values from valid zero", () => {
+  const monitor = createPcMonitorStatus({
+    config: { pcMonitor: { enabled: true, baseUrl: "http://pc.local", timeoutMs: 1000 } },
+    fetchJsonWithTimeout: async () => ({ response: { ok: true }, body: {} })
+  });
+
+  for (const value of [null, undefined, "", " \t\n", "unavailable", Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(monitor.pcMonitorNumber(value), null);
+    assert.equal(monitor.pcMonitorNumber(value, 1), null);
+  }
+  for (const value of [0, "0", " 0 "]) {
+    assert.equal(monitor.pcMonitorNumber(value), 0);
+    assert.equal(monitor.pcMonitorNumber(value, 1), 0);
+  }
+  assert.equal(monitor.pcMonitorNumber(-5.2), -5);
+});
+
+test("PC monitor normalizers preserve unavailable metrics across CPU and GPU", () => {
+  const monitor = createPcMonitorStatus({
+    config: { pcMonitor: { enabled: true, baseUrl: "http://pc.local", timeoutMs: 1000 } },
+    fetchJsonWithTimeout: async () => ({ response: { ok: true }, body: {} })
+  });
+
+  for (const normalize of [monitor.normalizePcCpu, monitor.normalizePcGpu]) {
+    const fields = Object.keys(normalize()).filter((name) => name !== "source" && name !== "name");
+    for (const unavailable of [null, undefined, "", "  "]) {
+      const result = normalize(Object.fromEntries(fields.map((field) => [field, unavailable])));
+      for (const field of fields) assert.equal(result[field], null, field);
+    }
+  }
+});
+
+test("PC monitor snapshot preserves an unavailable GPU hotspot and usable zero readings", async () => {
+  const monitor = createPcMonitorStatus({
+    config: { pcMonitor: { enabled: true, baseUrl: "http://pc.local", timeoutMs: 1000 } },
+    fetchJsonWithTimeout: async (url) => ({
+      response: { ok: true },
+      body: url.endsWith("/api/cpu")
+        ? { source: "corsair-cpuid-service", name: "CPU", temperatureC: "59.8", usagePercent: 0, packagePowerW: "25.44", fanRpm: " " }
+        : { source: "librehardwaremonitor", name: "GPU", temperatureC: "40.2", hotspotTemperatureC: null, usagePercent: 0, powerW: 0, fanRpm: 0, fanPercent: 0 }
+    })
+  });
+
+  const snapshot = await monitor.pcMonitorSnapshot();
+  assert.equal(snapshot.connected, true);
+  assert.equal(snapshot.error, "");
+  assert.equal(snapshot.cpu.temperatureC, 60);
+  assert.equal(snapshot.cpu.packagePowerW, 25.4);
+  assert.equal(snapshot.cpu.fanRpm, null);
+  assert.equal(snapshot.cpu.clockMhz, null);
+  assert.equal(snapshot.gpu.temperatureC, 40);
+  assert.equal(snapshot.gpu.hotspotTemperatureC, null);
+  for (const metric of ["usagePercent", "powerW", "fanRpm", "fanPercent"]) {
+    assert.equal(snapshot.gpu[metric], 0, metric);
+  }
+});
+
 test("PC monitor snapshot keeps partial data and reports failed endpoint", async () => {
   const monitor = createPcMonitorStatus({
     config: { pcMonitor: { enabled: true, baseUrl: "http://pc.local/base/", timeoutMs: 100 } },

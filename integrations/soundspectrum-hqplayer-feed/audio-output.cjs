@@ -5,7 +5,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { resolveGStreamer, captureEnvironment } = require('../../scripts/soundspectrum-capture.cjs');
+const { resolveGStreamer } = require('../../scripts/soundspectrum-capture.cjs');
+const { prepareAudioRuntime } = require('./audio-runtime.cjs');
 
 const execFileAsync = promisify(execFile);
 const INPUT_ID = 'feed:hqplayer-analysis';
@@ -18,6 +19,7 @@ const GUID = '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
 const RENDER_ID = new RegExp(`^\\{0\\.0\\.0\\.00000000\\}\\.\\{${GUID}\\}$`, 'i');
 const CAPTURE_ID = new RegExp(`^\\{0\\.0\\.1\\.00000000\\}\\.\\{${GUID}\\}$`, 'i');
 const verifiedProbes = new WeakSet();
+const probeRuntimes = new WeakMap();
 const runtimeChecks = new Map();
 
 async function runDeviceProbe(route = {}) {
@@ -55,24 +57,32 @@ function verifyPair(render, capture) {
 }
 
 async function probeRuntime(options) {
-  if (options.probeRuntime) return options.probeRuntime();
   const env = options.env || process.env;
-  const executable = resolveGStreamer(env);
+  // Test hooks bypass subprocess inspection, never the private audio-runtime
+  // preparation. Production must isolate plugins before ANY GStreamer launch.
+  const injected = typeof options.probeRuntime === 'function';
+  const executable = injected ? (await options.probeRuntime())?.executable : (options.resolveGStreamer || resolveGStreamer)(env);
   if (!executable) throw new Error('runtime-missing');
-  if (!runtimeChecks.has(executable)) {
+  const prepared = await (options.prepareAudioRuntime || prepareAudioRuntime)(executable, env);
+  if (!prepared || typeof prepared.executable !== 'string' || !path.isAbsolute(prepared.executable) ||
+      !/^[a-f0-9]{64}$/.test(prepared.identity || '') || !prepared.env || typeof prepared.env !== 'object') throw new Error('runtime-unavailable');
+  const runtime = Object.freeze({ executable: prepared.executable, identity: prepared.identity, env: Object.freeze({ ...prepared.env }) });
+  if (injected) return runtime;
+  if (!runtimeChecks.has(runtime.identity)) {
     const promise = (async () => {
-      const runtimeEnv = captureEnvironment(executable, env);
-      const checks = await Promise.allSettled(['fdsrc', 'rawaudioparse', 'queue', 'audioconvert', 'audioresample', 'wasapisink'].map(async element => {
-        const result = await execFileAsync(path.join(path.dirname(executable), 'gst-inspect-1.0.exe'), [element], { env: runtimeEnv, windowsHide: true, timeout: 8000, maxBuffer: 256 * 1024, encoding: 'utf8' });
+      for (const element of ['fdsrc', 'rawaudioparse', 'queue', 'audioconvert', 'audioresample', 'wasapisink']) {
+        const result = await (options.runRuntimeInspection || execFileAsync)(path.join(path.dirname(runtime.executable), 'gst-inspect-1.0.exe'), [element], { env: runtime.env, windowsHide: true, timeout: 8000, maxBuffer: 256 * 1024, encoding: 'utf8' });
         if (element === 'wasapisink' && (!/\bdevice\s*:/.test(result.stdout) || !/\bexclusive\s*:/.test(result.stdout))) throw new Error('shared-wasapi-unavailable');
-      }));
-      if (checks.some(result => result.status === 'rejected')) throw new Error('runtime-unavailable');
-      return { executable };
+      }
     })();
-    runtimeChecks.set(executable, promise);
-    promise.catch(() => runtimeChecks.delete(executable));
+    runtimeChecks.set(runtime.identity, promise);
+    promise.catch(() => { if (runtimeChecks.get(runtime.identity) === promise) runtimeChecks.delete(runtime.identity); });
   }
-  return runtimeChecks.get(executable);
+  try { await runtimeChecks.get(runtime.identity); }
+  catch (error) { throw new Error(error.message === 'shared-wasapi-unavailable' ? error.message : 'runtime-unavailable'); }
+  // Re-preparation checks directory membership/content even with warm element
+  // checks, and each new probe retains its own current isolated environment.
+  return runtime;
 }
 
 function unavailable(reason) { return { available: false, reason, inputId: INPUT_ID, kind: 'music-feed' }; }
@@ -108,6 +118,7 @@ async function probeOutput(options = {}) {
     if (!runtime?.executable) return unavailable('runtime-missing');
     const result = Object.freeze({ available: true, inputId: INPUT_ID, kind: 'music-feed', captureName: CAPTURE_NAME, route: Object.freeze(route), executable: runtime.executable, checkedAt: Date.now() });
     verifiedProbes.add(result);
+    probeRuntimes.set(result, runtime);
     return result;
   } catch (error) {
     if (error.code === 'ENOENT') return unavailable('disabled');
@@ -116,8 +127,9 @@ async function probeOutput(options = {}) {
   }
 }
 
-function buildOutputCommand({ probe, env = process.env } = {}) {
-  if (!probe?.available || !verifiedProbes.has(probe) || Date.now() - probe.checkedAt > 5000) throw new Error('A fresh verified SoundSpectrum audio route is required.');
+function buildOutputCommand({ probe } = {}) {
+  const runtime = probe && probeRuntimes.get(probe);
+  if (!probe?.available || !verifiedProbes.has(probe) || !runtime || Date.now() - probe.checkedAt > 5000) throw new Error('A fresh verified SoundSpectrum audio route is required.');
   // Only raw 44.1 kHz stereo S16LE from the isolated decoder enters stdin.
   // Shared WASAPI targets this cable by exact ID; there is no default fallback.
   // The supervisor already paces and rebases this disposable live copy. Raw
@@ -132,7 +144,7 @@ function buildOutputCommand({ probe, env = process.env } = {}) {
     '!', 'audio/x-raw,format=F32LE,rate=44100,channels=2,layout=interleaved',
     '!', 'wasapisink', `device=${probe.route.renderId}`, 'exclusive=false', 'sync=false', 'provide-clock=false', 'buffer-time=100000', 'latency-time=20000'
   ];
-  return { command: probe.executable, args, env: captureEnvironment(probe.executable, env), inputFormat: { format: 'S16LE', sampleRate: 44100, channels: 2 } };
+  return { command: runtime.executable, args, env: runtime.env, inputFormat: { format: 'S16LE', sampleRate: 44100, channels: 2 } };
 }
 
 async function validateOutput(probe, options = {}) {

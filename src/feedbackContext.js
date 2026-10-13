@@ -1,5 +1,7 @@
 "use strict";
 
+const { captureRetrospectiveInput } = require("./retrospectiveReviewInput");
+
 function cleanRadioText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
@@ -54,10 +56,18 @@ function feedbackTrackWithSessionContext(track = {}, rating = "", { sessionStore
   };
 }
 
-function feedbackCalibrationContext(track = {}, request = {}) {
+function feedbackCalibrationContext(track = {}, request = {}, { sessionStore, trackKey } = {}) {
   const modelReview = track.modelReview || {};
   const llmReview = track.scoreBreakdown?.llmReview || track.llmReview || {};
+  const session = sessionStore?.read?.() || {};
+  const identity = trackKey?.(track);
+  const matched = Boolean(identity && [
+    ...(session.result?.tracks || []),
+    ...(session.result?.alternates || []),
+    ...(session.result?.discarded || [])
+  ].some(candidate => trackKey(candidate) === identity));
   return {
+    reviewInput: captureRetrospectiveInput(track, matched ? session.options || {} : {}),
     modelReview,
     modelAction: modelReview.action || "",
     beforeScore: modelReview.before,
