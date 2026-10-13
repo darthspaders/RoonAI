@@ -6087,6 +6087,26 @@ function identityCorrectnessReasonFor(track = {}, options = {}, profile = buildD
   return requestedArtistMismatchReason(track, profile);
 }
 
+// A bare descriptor search ("introspective") returns tracks titled or
+// credited with that word. Those match the keyword, not the sound, so on a
+// search that names no artist or label, a title that is the term or an artist
+// that is or starts with it is rejected. Terms the listener typed and theme
+// searches, where a title naming the theme is the point, are left alone.
+function searchTermEchoReason(track = {}, options = {}, profile = buildDiscoveryProfile(options)) {
+  const term = normalize(track.query);
+  if (!term) return "";
+  const plan = options.llmSearchPlan && typeof options.llmSearchPlan === "object" ? options.llmSearchPlan : {};
+  if (normalize(plan.intentRoute) === "theme") return "";
+  if (queryTargetArtist(track.query, profile) || queryStartsWithKnownLabel(track.query, profile)) return "";
+  if (` ${normalize(requestText(options))} `.includes(` ${term} `)) return "";
+  const title = normalize(cleanText(track.title).replace(/\s*[([].*$/, ""));
+  const artist = normalize(track.artist);
+  if (title === term || artist === term || artist.startsWith(`${term} `)) {
+    return `Title or artist only echoes the search term "${term}", not the requested sound.`;
+  }
+  return "";
+}
+
 function sceneCorroboratesArtistDrift(track = {}, options = {}, profile = buildDiscoveryProfile(options)) {
   if (profile.scoringMode === "pure" || !profile.targetGenres?.length) return false;
   const query = cleanText(track.query);
@@ -6112,6 +6132,8 @@ function rejectReason(track = {}, options = {}, profile = buildDiscoveryProfile(
   );
   const identityReason = identityCorrectnessReasonFor(track, options, profile);
   if (identityReason) return identityReason;
+  const echoReason = searchTermEchoReason(track, options, profile);
+  if (echoReason) return echoReason;
   if (yearRange?.dateSpecific && !track.releaseDate) return `No TIDAL release date for ${yearRange.label}.`;
   if (yearRange?.dateSpecific && !hasCanonicalReleaseForRange(track, yearRange)) return `No canonical TIDAL album/track release date for ${yearRange.label}.`;
   if (yearRange?.dateSpecific && !yearFits(track.year, yearRange, track.releaseDate)) return `TIDAL release date ${track.releaseDate || track.year || "unknown"} is outside ${yearRange.label}.`;
