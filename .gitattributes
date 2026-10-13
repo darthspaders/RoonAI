@@ -12,3 +12,7 @@
 *.py text eol=lf
 *.pm text eol=lf
 *.pl text eol=lf
+
+# Generated fixtures are compared byte-for-byte with the portable generator.
+integrations/soundspectrum-darthspader/RabbitHole.Darthspader.package/**/*.txt text eol=lf
+integrations/soundspectrum-darthspader/preview/*.svg text eol=lf

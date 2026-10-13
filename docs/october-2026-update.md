@@ -25,6 +25,8 @@ Publication validation: clean npm ci --ignore-scripts passed; npm run check pass
 
 Run npm ci, npm run check and npm test from a clean checkout. Python-backed stub tests accept RH_TEST_PYTHON pointing to a Python 3 executable. Eleven bridge integration tests require reviewed installed HQPlayerBridge original sources plus Perl; they report explicit skips when those external prerequisites are unavailable. Native capture/probe commands are deliberately separate from automatic unit-test discovery.
 
+A subsequent fresh Windows checkout exposed Git auto-CRLF conversion of generated Darthspader text/SVG fixtures. Their paths now explicitly use LF in .gitattributes, preserving byte-for-byte generator reproducibility across checkouts. This changes repository checkout policy, not installed visualizer content.
+
 The release integration retained current TIDAL collection-search and opaque-cursor semantics, updated stale fixtures to the MERT model, repaired extracted UI-test boundaries, and removed one test of a private one-off data-folder helper from the public snapshot. Databases, model/audio/image caches, credentials, native vendor binaries, local browser profiles and private handoff histories are excluded.
 
 ## Continuation
