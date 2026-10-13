@@ -401,9 +401,12 @@ function queryStartsWithKnownLabel(query = "", profile = {}) {
 function queryTargetArtist(query, profile = {}) {
   const normalizedQuery = normalize(query);
   if (queryStartsWithKnownLabel(query, profile)) return "";
-  const artists = profile.isProgressiveTranceTarget
-    ? uniqueValues([...TRANCE_FORWARD_ARTISTS, ...PROGRESSIVE_ARTISTS])
-    : PROGRESSIVE_ARTISTS;
+  const artists = uniqueValues([
+    ...(profile.requestedArtists || []),
+    ...(profile.seedArtists || []),
+    ...(profile.isProgressiveTranceTarget ? TRANCE_FORWARD_ARTISTS : []),
+    ...PROGRESSIVE_ARTISTS
+  ]);
   return artists.find((artist) => {
     const normalizedArtist = normalize(artist);
     if (normalizedQuery !== normalizedArtist && !normalizedQuery.startsWith(`${normalizedArtist} `)) return false;
@@ -5506,7 +5509,7 @@ function seoSpamReason(track = {}, options = {}, profile = buildDiscoveryProfile
   const shortGenreYearTitle = hasTargetGenreInTitle && embeddedMarketingYear && normalize(rawTitle).split(/\s+/).length <= 5;
   const distributorLabel = /^\d+\s+records\s+dk$/i.test(rawLabel);
   const labelAsArtist = normalize(rawArtist) && normalize(rawArtist) === normalize(rawLabel) && /\brecords?\b/i.test(rawArtist);
-  const obviousCoverOrKaraoke = /\b(?:karaoke|tribute to|cover version|covers?|as made famous by|originally performed by)\b/i.test(raw);
+  const obviousCoverOrKaraoke = /\b(?:karaoke|tribute to|cover version|covers?|(?:as )?made famous by|originally performed by)\b/i.test(raw);
   const longGenericAlbum = hasTargetGenreInTitle && embeddedMarketingYear && normalize(rawAlbum).split(/\s+/).length >= 6;
   const audiobookChapter = /\bchapter\s+\d+\b/i.test(rawTitle) &&
     /\b(?:unabridged|audiobook|audio\s*book|book|novel|story|escapist|romance|tale)\b/i.test(`${rawAlbum} ${rawLabel}`);
