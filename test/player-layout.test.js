@@ -407,8 +407,8 @@ test('regular player keeps its text hierarchy purple without changing fullscreen
   assert.match(html, /styles\.css\?v=[a-z0-9-]+/);
 });
 
-test('all player modes reserve an eight-row metadata window', () => {
-  assert.match(css, /Static metadata window:[\s\S]*?\.player:is\(\.player--regular, \.player--maximized, \.player--fullscreen\) \.nowInfo \.nowSourceFormat[\s\S]*?display: grid;[\s\S]*?\.nowSourceFormat\[hidden\][\s\S]*?display: grid !important;[\s\S]*?min-height: calc\(8 \* 1\.3em \+ 7 \* 7px\);/);
+test('maximized and full-window players reserve an eight-row metadata window, and every mode packs its rows at the top', () => {
+  assert.match(css, /Metadata window:[\s\S]*?\.player:is\(\.player--regular, \.player--maximized, \.player--fullscreen\) \.nowInfo \.nowSourceFormat \{[^}]*display: grid;[^}]*align-content: start;[\s\S]*?\.nowSourceFormat\[hidden\][\s\S]*?display: grid !important;/);
   assert.match(css, /body\.playerMaximized[\s\S]*?\.nowInfo \.nowSourceFormat \{\s+min-height: calc\(8 \* 1\.2em \+ 7 \* 4px\);/);
   assert.match(css, /body\.playerFullWindow[\s\S]*?\.nowInfo \.nowSourceFormat,[\s\S]*?\.player--fullscreen:fullscreen \.nowInfo \.nowSourceFormat,[\s\S]*?min-height: calc\(8 \* 1\.3em \+ 7 \* 5px\);/);
 });
