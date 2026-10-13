@@ -77,14 +77,22 @@ function ensureConnectionDiagnostics(client) {
   return client.connectionDiagnostics;
 }
 
+const ROON_RPC_TIMEOUT_MS = 15000;
+
+function awaitRoonReply(register) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(Object.assign(new Error("Roon did not answer within 15 seconds."), { code: "ETIMEDOUT" })), ROON_RPC_TIMEOUT_MS);
+    const settle = (settler) => (value) => { clearTimeout(timer); settler(value); };
+    try { register(settle(resolve), settle(reject)); } catch (error) { clearTimeout(timer); reject(error); }
+  });
+}
+
 function callRoon(fn) {
   if (roonLookupContext.getStore()) return exactRoonRpc(fn, roonLookupContext.getStore());
-  return new Promise((resolve, reject) => {
-    fn((error, body) => {
-      if (error) reject(new Error(String(error)));
-      else resolve(body);
-    });
-  });
+  return awaitRoonReply((resolve, reject) => fn((error, body) => {
+    if (error) reject(new Error(String(error)));
+    else resolve(body);
+  }));
 }
 
 function exactRoonRpc(fn, signal) {
@@ -1887,18 +1895,14 @@ class RoonClient extends EventEmitter {
       throw new Error("This Roon transport does not expose Play from here.");
     }
 
-    return new Promise((resolve, reject) => {
-      try {
-        this.transport.play_from_here(this.controlTargetFor(zone), item.id ?? requestedId, (msg, body) => {
-          if (msg?.name === "Success" || msg === false) {
-            resolve(body || null);
-            return;
-          }
-          reject(new Error(msg?.name || msg || "Roon did not accept Play from here."));
-        });
-      } catch (error) {
-        reject(error);
-      }
+    return awaitRoonReply((resolve, reject) => {
+      this.transport.play_from_here(this.controlTargetFor(zone), item.id ?? requestedId, (msg, body) => {
+        if (msg?.name === "Success" || msg === false) {
+          resolve(body || null);
+          return;
+        }
+        reject(new Error(msg?.name || msg || "Roon did not accept Play from here."));
+      });
     });
   }
 

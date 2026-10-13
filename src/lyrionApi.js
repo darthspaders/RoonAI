@@ -28,7 +28,9 @@ function createLyrionApi({ roon, readJson, sendJson, catalogue=null, client = ne
     if (target === "lyrion") {
       // Only pause playing zones: never modify Roon pairing, queue, or configuration.
       for (const zone of roon.getState().zones || []) {
-        if (zone.state === "playing") await roon.control(zone.zone_id, "pause");
+        if (zone.state !== "playing") continue;
+        try { await roon.control(zone.zone_id, "pause"); }
+        catch (error) { throw new Error(`Could not pause Roon zone "${zone.display_name || zone.zone_id}" before playing on Lyrion: ${error.message}`); }
       }
     } else {
       let players;
