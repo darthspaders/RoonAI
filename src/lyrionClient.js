@@ -80,7 +80,8 @@ class LyrionClient {
     if (!(await this.players()).some(p => p.id === id && p.connected)) throw new Error("Choose a connected Lyrion player first.");
   }
   artwork(track) {
-    const value = track.artwork_url || (track.coverid ? `/music/${encodeURIComponent(track.coverid)}/cover.jpg` : Number(track.coverart) && track.id ? `/music/${encodeURIComponent(track.id)}/cover.jpg` : "");
+    const cover = track.coverid || track.artwork_track_id;
+    const value = track.artwork_url || (cover ? `/music/${encodeURIComponent(cover)}/cover.jpg` : Number(track.coverart) && track.id ? `/music/${encodeURIComponent(track.id)}/cover.jpg` : "");
     if (!value) return "";
     if (value.startsWith("/api/lyrion/artwork?")) return value;
     const url = new URL(value, this.baseUrl);
